@@ -1,31 +1,19 @@
-// Node.cpp
+/*
+ * Copyright 2007, Ingo Weinhold, ingo_weinhold@gmx.de.
+ * All rights reserved. Distributed under the terms of the MIT license.
+ */
+
+#include "Node.h"
+
+#include <util/AutoLock.h>
 
 #include "AllocationInfo.h"
 #include "DebugSupport.h"
 #include "EntryIterator.h"
 #include "LastModifiedIndex.h"
-#include "Node.h"
 #include "Volume.h"
 
-// is_user_in_group
-inline static
-bool
-is_user_in_group(gid_t gid)
-{
-// Either I miss something, or we don't have getgroups() in the kernel. :-(
-/*
-	gid_t groups[NGROUPS_MAX];
-	int groupCount = getgroups(NGROUPS_MAX, groups);
-	for (int i = 0; i < groupCount; i++) {
-		if (gid == groups[i])
-			return true;
-	}
-*/
-	return (gid == getegid());
-}
 
-
-// constructor
 Node::Node(Volume *volume, uint8 type)
 	: fVolume(volume),
 	  fID(fVolume->NextNodeID()),
@@ -39,9 +27,7 @@ Node::Node(Volume *volume, uint8 type)
 	  fCrTime(0),
 	  fModified(0),
 	  fIsKnownToVFS(false),
-	  // attribute management
 	  fAttributes(),
-	  // referrers
 	  fReferrers()
 {
 	// set file type
@@ -60,27 +46,29 @@ Node::Node(Volume *volume, uint8 type)
 	fATime = fMTime = fCTime = fCrTime = time(NULL);
 }
 
-// destructor
+
 Node::~Node()
 {
+	ASSERT(fRefCount == 0);
+
 	// delete all attributes
 	while (Attribute *attribute = fAttributes.First()) {
 		status_t error = DeleteAttribute(attribute);
 		if (error != B_OK) {
-			FATAL(("Node::~Node(): Failed to delete attribute!\n"));
+			FATAL("Node::~Node(): Failed to delete attribute!\n");
 			break;
 		}
 	}
 }
 
-// InitCheck
+
 status_t
 Node::InitCheck() const
 {
 	return (fVolume && fID >= 0 ? B_OK : B_NO_INIT);
 }
 
-// AddReference
+
 status_t
 Node::AddReference()
 {
@@ -97,21 +85,22 @@ Node::AddReference()
 	return B_OK;
 }
 
-// RemoveReference
+
 void
 Node::RemoveReference()
 {
+	ASSERT(fRefCount > 0);
 	if (--fRefCount == 0) {
 		GetVolume()->RemoveVNode(this);
-		fRefCount++;
+			// RemoveVNode can potentially delete us immediately!
 	}
 }
 
-// Link
+
 status_t
 Node::Link(Entry *entry)
 {
-PRINT(("Node[%Ld]::Link(): %ld ->...\n", fID, fRefCount));
+PRINT("Node[%" B_PRIdINO "]::Link(): %" B_PRId32 " ->...\n", fID, fRefCount);
 	fReferrers.Insert(entry);
 
 	status_t error = AddReference();
@@ -121,18 +110,18 @@ PRINT(("Node[%Ld]::Link(): %ld ->...\n", fID, fRefCount));
 	return error;
 }
 
-// Unlink
+
 status_t
 Node::Unlink(Entry *entry)
 {
-PRINT(("Node[%Ld]::Unlink(): %ld ->...\n", fID, fRefCount));
-	RemoveReference();
+PRINT("Node[%" B_PRIdINO "]::Unlink(): %" B_PRId32 " ->...\n", fID, fRefCount);
 	fReferrers.Remove(entry);
 
+	RemoveReference();
 	return B_OK;
 }
 
-// SetMTime
+
 void
 Node::SetMTime(time_t mTime)
 {
@@ -144,36 +133,14 @@ Node::SetMTime(time_t mTime)
 	}
 }
 
-// CheckPermissions
+
 status_t
 Node::CheckPermissions(int mode) const
 {
-	int userPermissions = (fMode & S_IRWXU) >> 6;
-	int groupPermissions = (fMode & S_IRWXG) >> 3;
-	int otherPermissions = fMode & S_IRWXO;
-	// get the permissions for this uid/gid
-	int permissions = 0;
-	uid_t uid = geteuid();
-	// user is root
-	if (uid == 0) {
-		// root has always read/write permission, but at least one of the
-		// X bits must be set for execute permission
-		permissions = userPermissions | groupPermissions | otherPermissions
-			| ACCESS_R | ACCESS_W;
-	// user is node owner
-	} else if (uid == fUID)
-		permissions = userPermissions;
-	// user is in owning group
-	else if (is_user_in_group(fGID))
-		permissions = groupPermissions;
-	// user is one of the others
-	else
-		permissions = otherPermissions;
-	// do the check
-	return ((mode & ~permissions) ? B_NOT_ALLOWED : B_OK);
+	return check_access_permissions(mode, fMode, fGID, fUID);
 }
 
-// CreateAttribute
+
 status_t
 Node::CreateAttribute(const char *name, Attribute **_attribute)
 {
@@ -197,7 +164,7 @@ Node::CreateAttribute(const char *name, Attribute **_attribute)
 	return error;
 }
 
-// DeleteAttribute
+
 status_t
 Node::DeleteAttribute(Attribute *attribute)
 {
@@ -207,7 +174,7 @@ Node::DeleteAttribute(Attribute *attribute)
 	return error;
 }
 
-// AddAttribute
+
 status_t
 Node::AddAttribute(Attribute *attribute)
 {
@@ -223,55 +190,53 @@ Node::AddAttribute(Attribute *attribute)
 	return error;
 }
 
-// RemoveAttribute
+
 status_t
 Node::RemoveAttribute(Attribute *attribute)
 {
-	status_t error = (attribute && attribute->GetNode() == this
-					  ? B_OK : B_BAD_VALUE);
+	if (attribute == NULL || attribute->GetNode() != this)
+		return B_BAD_VALUE;
+
+	RecursiveLocker locker(GetVolume()->AttributeIteratorLocker());
+	if (!locker.IsLocked())
+		return B_ERROR;
+
+	// move all iterators pointing to the attribute to the next attribute
+	Attribute *nextAttr = fAttributes.GetNext(attribute);
+	DoublyLinkedList<AttributeIterator> *iterators
+		= attribute->GetAttributeIteratorList();
+	for (AttributeIterator *iterator = iterators->First();
+			iterator != NULL; iterator = iterators->GetNext(iterator)) {
+		iterator->SetCurrent(nextAttr, true);
+	}
+
+	// Move the iterators from one list to the other, or just remove
+	// them, if there is no next attribute.
+	if (nextAttr != NULL) {
+		DoublyLinkedList<AttributeIterator> *nextIterators
+			= nextAttr->GetAttributeIteratorList();
+		nextIterators->MoveFrom(iterators);
+	} else
+		iterators->RemoveAll();
+
+	locker.Unlock();
+
+	// remove the attribute
+	status_t error = GetVolume()->NodeAttributeRemoved(GetID(), attribute);
 	if (error == B_OK) {
-		// move all iterators pointing to the attribute to the next attribute
-		if (GetVolume()->IteratorLock()) {
-			// set the iterators' current entry
-			Attribute *nextAttr = fAttributes.GetNext(attribute);
-			DoublyLinkedList<AttributeIterator> *iterators
-				= attribute->GetAttributeIteratorList();
-			for (AttributeIterator *iterator = iterators->First();
-				 iterator;
-				 iterator = iterators->GetNext(iterator)) {
-				iterator->SetCurrent(nextAttr, true);
-			}
-			// Move the iterators from one list to the other, or just remove
-			// them, if there is no next attribute.
-			if (nextAttr) {
-				DoublyLinkedList<AttributeIterator> *nextIterators
-					= nextAttr->GetAttributeIteratorList();
-				nextIterators->MoveFrom(iterators);
-			} else
-				iterators->RemoveAll();
-			GetVolume()->IteratorUnlock();
-		} else
-			error = B_ERROR;
-		// remove the attribute
-		if (error == B_OK) {
-			error = GetVolume()->NodeAttributeRemoved(GetID(), attribute);
-			if (error == B_OK) {
-				fAttributes.Remove(attribute);
-				attribute->SetNode(NULL);
-				MarkModified(B_STAT_MODIFICATION_TIME);
-			}
-		}
+		fAttributes.Remove(attribute);
+		attribute->SetNode(NULL);
+		MarkModified(B_STAT_MODIFICATION_TIME);
 	}
 	return error;
 }
 
-// FindAttribute
+
 status_t
 Node::FindAttribute(const char *name, Attribute **_attribute) const
 {
 	status_t error = (name && _attribute ? B_OK : B_BAD_VALUE);
 	if (error == B_OK) {
-/*
 		Attribute *attribute = NULL;
 		while (GetNextAttribute(&attribute) == B_OK) {
 			if (!strcmp(attribute->GetName(), name)) {
@@ -280,13 +245,11 @@ Node::FindAttribute(const char *name, Attribute **_attribute) const
 			}
 		}
 		error = B_ENTRY_NOT_FOUND;
-*/
-		error = GetVolume()->FindNodeAttribute(GetID(), name, _attribute);
 	}
 	return error;
 }
 
-// GetPreviousAttribute
+
 status_t
 Node::GetPreviousAttribute(Attribute **attribute) const
 {
@@ -304,7 +267,7 @@ Node::GetPreviousAttribute(Attribute **attribute) const
 	return error;
 }
 
-// GetNextAttribute
+
 status_t
 Node::GetNextAttribute(Attribute **attribute) const
 {
@@ -322,35 +285,35 @@ Node::GetNextAttribute(Attribute **attribute) const
 	return error;
 }
 
-// GetFirstReferrer
+
 Entry *
 Node::GetFirstReferrer() const
 {
 	return fReferrers.First();
 }
 
-// GetLastReferrer
+
 Entry *
 Node::GetLastReferrer() const
 {
 	return fReferrers.Last();
 }
 
-// GetPreviousReferrer
+
 Entry *
 Node::GetPreviousReferrer(Entry *entry) const
 {
 	return (entry ? fReferrers.GetPrevious(entry) : NULL );
 }
 
-// GetNextReferrer
+
 Entry *
 Node::GetNextReferrer(Entry *entry) const
 {
 	return (entry ? fReferrers.GetNext(entry) : NULL );
 }
 
-// GetAllocationInfo
+
 void
 Node::GetAllocationInfo(AllocationInfo &info)
 {
@@ -358,4 +321,3 @@ Node::GetAllocationInfo(AllocationInfo &info)
 	while (GetNextAttribute(&attribute) == B_OK)
 		attribute->GetAllocationInfo(info);
 }
-

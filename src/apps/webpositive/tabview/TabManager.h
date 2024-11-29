@@ -1,6 +1,5 @@
 /*
  * Copyright (C) 2010 Stephan Aßmus <superstippi@gmx.de>
- *
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
@@ -11,29 +10,33 @@
 #include <TabView.h>
 
 enum {
-    TAB_CHANGED = 'tcha',
-    CLOSE_TAB = 'cltb'
+	TAB_CHANGED = 'tcha',
+	CLOSE_TAB = 'cltb'
 };
 
 class BBitmap;
 class BCardLayout;
 class BGroupView;
+class BGroupLayout;
 class BMenu;
 class TabContainerGroup;
 class TabContainerView;
 class TabManagerController;
 
+#define INTEGRATE_MENU_INTO_TAB_BAR 0
+
+
 class TabManager {
 public:
-    							TabManager(const BMessenger& target,
-    								BMessage* newTabMessage);
+								TabManager(const BMessenger& target,
+									BMessage* newTabMessage);
 	virtual						~TabManager();
 
 			void				SetTarget(const BMessenger& target);
 			const BMessenger&	Target() const;
 
 #if INTEGRATE_MENU_INTO_TAB_BAR
-			BMenu*				Menu() const;
+			BGroupLayout*		MenuContainerLayout() const;
 #endif
 
 			BView*				TabGroup() const;
@@ -62,7 +65,7 @@ public:
 
 private:
 #if INTEGRATE_MENU_INTO_TAB_BAR
-			BMenu*				fMenu;
+			BGroupView*			fMenuContainer;
 #endif
 			TabContainerGroup*	fTabContainerGroup;
 			TabContainerView*	fTabContainerView;

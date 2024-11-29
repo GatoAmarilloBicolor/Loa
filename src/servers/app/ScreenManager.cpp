@@ -68,8 +68,15 @@ ScreenChangeListener::ScreenChanged(HWInterface* interface)
 ScreenManager::ScreenManager()
 	:
 	BLooper("screen manager"),
-	fScreenList(4)
+	fScreenList(4, true)
 {
+#ifdef HAIKU_TARGET_PLATFORM_LIBBE_TEST
+#	if defined(USE_DIRECT_WINDOW_TEST_MODE)
+	_AddHWInterface(new DWindowHWInterface());
+#	else
+	_AddHWInterface(new ViewHWInterface());
+#	endif
+#else
 	_ScanDrivers();
 
 	// turn on node monitoring the graphics driver directory
@@ -77,18 +84,12 @@ ScreenManager::ScreenManager()
 	node_ref nodeRef;
 	if (entry.InitCheck() == B_OK && entry.GetNodeRef(&nodeRef) == B_OK)
 		watch_node(&nodeRef, B_WATCH_DIRECTORY, this);
+#endif
 }
 
 
 ScreenManager::~ScreenManager()
 {
-	for (int32 i = 0; i < fScreenList.CountItems(); i++) {
-		screen_item* item = fScreenList.ItemAt(i);
-
-		delete item->screen;
-		delete item->listener;
-		delete item;
-	}
 }
 
 
@@ -100,7 +101,7 @@ ScreenManager::ScreenAt(int32 index) const
 
 	screen_item* item = fScreenList.ItemAt(index);
 	if (item != NULL)
-		return item->screen;
+		return item->screen.Get();
 
 	return NULL;
 }
@@ -128,31 +129,30 @@ ScreenManager::AcquireScreens(ScreenOwner* owner, int32* wishList,
 	for (int32 i = 0; i < fScreenList.CountItems(); i++) {
 		screen_item* item = fScreenList.ItemAt(i);
 
-		if (item->owner == NULL && list.AddItem(item->screen)) {
+		if (item->owner == NULL && list.AddItem(item->screen.Get())) {
 			item->owner = owner;
 			added++;
 		}
 	}
 
-#if TEST_MODE == 0
 	if (added == 0 && target != NULL) {
 		// there's a specific target screen we want to initialize
 		// TODO: right now we only support remote screens, but we could
 		// also target specific accelerants to support other graphics cards
 		HWInterface* interface;
-		/*if (strncmp(target, "vnc:", 4) == 0)
-			interface = new(nothrow) VNCHWInterface(target);
-		else*/
-			interface = new(nothrow) RemoteHWInterface(target);
+#ifdef HAIKU_TARGET_PLATFORM_LIBBE_TEST
+		interface = new(nothrow) ViewHWInterface();
+#else
+		interface = new(nothrow) RemoteHWInterface(target);
+#endif
 		if (interface != NULL) {
 			screen_item* item = _AddHWInterface(interface);
-			if (item != NULL && list.AddItem(item->screen)) {
+			if (item != NULL && list.AddItem(item->screen.Get())) {
 				item->owner = owner;
 				added++;
 			}
 		}
 	}
-#endif // TEST_MODE == 0
 
 	return added > 0 ? B_OK : B_ENTRY_NOT_FOUND;
 }
@@ -169,7 +169,7 @@ ScreenManager::ReleaseScreens(ScreenList& list)
 		for (int32 j = 0; j < list.CountItems(); j++) {
 			Screen* screen = list.ItemAt(j);
 
-			if (item->screen == screen)
+			if (item->screen.Get() == screen)
 				item->owner = NULL;
 		}
 	}
@@ -183,7 +183,7 @@ ScreenManager::ScreenChanged(Screen* screen)
 
 	for (int32 i = 0; i < fScreenList.CountItems(); i++) {
 		screen_item* item = fScreenList.ItemAt(i);
-		if (item->screen == screen)
+		if (item->screen.Get() == screen)
 			item->owner->ScreenChanged(screen);
 	}
 }
@@ -201,28 +201,24 @@ ScreenManager::_ScanDrivers()
 	// ToDo: to make monitoring the driver directory useful, we need more
 	//	power and data here, and should do the scanning on our own
 
+#ifndef HAIKU_TARGET_PLATFORM_LIBBE_TEST
 	bool initDrivers = true;
 	while (initDrivers) {
-
-#ifndef HAIKU_TARGET_PLATFORM_LIBBE_TEST
-		  interface = new AccelerantHWInterface();
-#elif defined(USE_DIRECT_WINDOW_TEST_MODE)
-		  interface = new DWindowHWInterface();
-#else
-		  interface = new ViewHWInterface();
-#endif
+		interface = new AccelerantHWInterface();
 
 		_AddHWInterface(interface);
 		initDrivers = false;
 	}
+#endif
 }
 
 
 ScreenManager::screen_item*
 ScreenManager::_AddHWInterface(HWInterface* interface)
 {
-	Screen* screen = new(nothrow) Screen(interface, fScreenList.CountItems());
-	if (screen == NULL) {
+	ObjectDeleter<Screen> screen(
+		new(nothrow) Screen(interface, fScreenList.CountItems()));
+	if (!screen.IsSet()) {
 		delete interface;
 		return NULL;
 	}
@@ -233,23 +229,22 @@ ScreenManager::_AddHWInterface(HWInterface* interface)
 		screen_item* item = new(nothrow) screen_item;
 
 		if (item != NULL) {
-			item->screen = screen;
+			item->screen.SetTo(screen.Detach());
 			item->owner = NULL;
-			item->listener = new(nothrow) ScreenChangeListener(*this, screen);
-			if (item->listener != NULL
-				&& interface->AddListener(item->listener)) {
+			item->listener.SetTo(
+				new(nothrow) ScreenChangeListener(*this, item->screen.Get()));
+			if (item->listener.IsSet()
+				&& interface->AddListener(item->listener.Get())) {
 				if (fScreenList.AddItem(item))
 					return item;
 
-				interface->RemoveListener(item->listener);
+				interface->RemoveListener(item->listener.Get());
 			}
 
-			delete item->listener;
 			delete item;
 		}
 	}
 
-	delete screen;
 	return NULL;
 }
 
@@ -266,4 +261,3 @@ ScreenManager::MessageReceived(BMessage* message)
 			BHandler::MessageReceived(message);
 	}
 }
-

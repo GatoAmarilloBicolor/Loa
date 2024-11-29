@@ -1,9 +1,6 @@
 /*
  * Copyright 2004-2005, Axel Dörfler, axeld@pinc-software.de. All rights reserved.
  * Distributed under the terms of the MIT License.
- *
- * calculate_cpu_conversion_factor() was written by Travis Geiselbrecht and
- * licensed under the NewOS license.
  */
 
 
@@ -129,7 +126,7 @@ enumerate_cpus(void)
 		}
 		gKernelArgs.arch_args.bus_frequency = busFrequency;
 	}
-	TRACE(("  bus clock frequency: %Ld\n",
+	TRACE(("  bus clock frequency: %lld\n",
 		gKernelArgs.arch_args.bus_frequency));
 
 #if 0
@@ -260,7 +257,7 @@ check_cpu_features()
 
 
 extern "C" void
-arch_spin(bigtime_t microseconds)
+spin(bigtime_t microseconds)
 {
 	for(bigtime_t i=0;i<microseconds;i=i+1)
 	{

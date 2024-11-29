@@ -26,6 +26,7 @@
 #include <thread.h>
 #include <user_debugger.h>
 #include <util/AutoLock.h>
+#include <util/ThreadAutoLock.h>
 #include <util/DoublyLinkedList.h>
 #include <vm/vm.h>
 #include <vm/VMArea.h>
@@ -776,6 +777,11 @@ struct CoreDumper {
 
 	status_t Dump(const char* path, bool killTeam)
 	{
+		// gcc thinks fTeam may be null in atomic_or
+        // and warn which causes error on some configs
+		if (fTeam == NULL)
+			return B_ERROR;
+
 		// the path must be absolute
 		if (path[0] != '/')
 			return B_BAD_VALUE;
@@ -1125,6 +1131,12 @@ private:
 		header.e_machine = EM_MIPS;
 #elif defined(__HAIKU_ARCH_ARM)
 		header.e_machine = EM_ARM;
+#elif defined(__HAIKU_ARCH_ARM64)
+		header.e_machine = EM_AARCH64;
+#elif defined(__HAIKU_ARCH_SPARC)
+		header.e_machine = EM_SPARCV9;
+#elif defined(__HAIKU_ARCH_RISCV64)
+		header.e_machine = EM_RISCV;
 #else
 #	error Unsupported architecture!
 #endif

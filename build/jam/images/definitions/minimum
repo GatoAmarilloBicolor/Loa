@@ -1,55 +1,159 @@
 # This file defines the content of the minimum Haiku image.
 
 SYSTEM_BIN = [ FFilterByBuildFeatures
-	addattr alert arp autologin
-	beep bfsinfo
-	catattr checkfs checkitout chop clear collectcatkeys copyattr
-	desklink df diskimage draggers
-	driveinfo dstcheck dumpcatalog
-	eject error
-	fdinfo ffm filepanel finddir findpaths fortune fstrim
-	ftp@libedit ftpd
-	getarch groupadd groupdel groupmod
-	hd hey
-	ifconfig iroster isvolume
-	kernel_debugger keymap keystore
-	launch_roster linkcatkeys listarea listattr listimage listdev listfont
-	listport listres listsem listusb locale logger login lsindex
-	makebootable message mimeset mkfs mkindex
-	modifiers mount mountvolume
-	netstat notify
+	addattr
+	alert
+	arp
+	autologin
+	beep
+	bfsinfo
+	catattr
+	checkfs
+	checkitout
+	chop
+	clear
+	collectcatkeys
+	copyattr
+	desklink
+	df
+	diskimage
+	draggers
+	driveinfo
+	dstcheck
+	dumpcatalog
+	eject
+	error
+	fdinfo
+	ffm
+	filepanel
+	finddir
+	findpaths
+	fortune
+	fstrim
+	ftpd
+	getarch
+	groupadd
+	groupdel
+	groupmod
+	hd
+	hey
+	ifconfig
+	iroster
+	isvolume
+	kernel_debugger
+	keymap
+	keystore
+	launch_roster
+	linkcatkeys
+	listarea
+	listattr
+	listimage
+	listdev
+	listfont
+	listport
+	listres
+	listsem
+	listusb
+	locale
+	logger
+	login
+	lsindex
+	makebootable
+	message
+	mimeset
+	mkfs
+	mkindex
+	modifiers
+	mount
+	mountvolume
+	netstat
+	notify
 	open
-	package package_repo passwd pc ping ping6 pkgman prio profile ps
-	query quit
-	ramdisk rc reindex release renice resattr rmattr rmindex roster route
-	safemode screen_blanker screeninfo screenmode setarch setmime settype
-	setversion setvolume shutdown
-	strace su sysinfo system_time
-	tcptester telnet telnetd top
-	traceroute trash
-	unchop unmount
-	uptime urlwrapper useradd userdel
-	version vmstat
-	waitfor watch writembr@x86,x86_64 xres
+	package
+	package_repo
+	passwd
+	pc
+	ping
+	pkgman
+	prio
+	profile
+	ps
+	query
+	quit
+	ramdisk
+	rc
+	reindex
+	release
+	renice
+	resattr
+	resizefs
+	rmattr
+	rmindex
+	roster
+	route
+	safemode
+	screen_blanker
+	screeninfo
+	screenmode
+	setarch
+	setmime
+	settype
+	setversion
+	setvolume
+	shutdown
+	strace
+	su
+	sysinfo
+	system_time
+	tcptester
+	telnet
+	telnetd
+	top
+	traceroute
+	trash
+	unchop
+	unmount
+	urlwrapper
+	useradd
+	userdel
+	version
+	vmstat
+	waitfor
+	watch
+	writembr@x86,x86_64
+	xres
 ] ;
 
 SYSTEM_APPS = [ FFilterByBuildFeatures
 	AboutSystem
 	BootManager@x86,x86_64
 	CharacterMap
-	Debugger@libedit DeskCalc Devices DiskProbe DiskUsage DriveSetup
+	Debugger@libedit
+	DeskCalc
+	Devices
+	DiskProbe
+	DiskUsage
+	DriveSetup
 	Expander
+	Installer
 	NetworkStatus
 	ProcessController
-	ShowImage StyledEdit
-	Terminal TextSearch
+	ShowImage
+	StyledEdit
+	Terminal
+	TextSearch
 	Workspaces
 ] ;
 
 DESKBAR_APPLICATIONS =
 	CharacterMap
-	DeskCalc Devices DiskProbe DiskUsage DriveSetup
+	DeskCalc
+	Devices
+	DiskProbe
+	DiskUsage
+	DriveSetup
 	Expander
+	Installer
 	StyledEdit
 	Terminal
 ;
@@ -65,12 +169,15 @@ SYSTEM_PREFERENCES = [ FFilterByBuildFeatures
 	Backgrounds
 	<preference>Deskbar
 	FileTypes
-	Keyboard Keymap
+	Input
+	Keymap
 	Locale
-	Mouse
-	Network Notifications
-	Screen Shortcuts
-	Time Touchpad <preference>Tracker
+	Network
+	Notifications
+	Screen
+	Shortcuts
+	Time
+	<preference>Tracker
 	VirtualMemory
 ] ;
 
@@ -85,14 +192,18 @@ rule HaikuImageGetSystemLibs
 		[ Libstdc++ForImage ]
 		# libs with standard grist
 		[ MultiArchDefaultGristFiles [ FFilterByBuildFeatures
-			libbe.so libbsd.so libbnetapi.so
+			libbe.so
+			libbsd.so
+			libbnetapi.so
 			libdebug.so
 			libdebugger.so@primary
 			libdevice.so
 			libgnu.so
 			libnetwork.so
 			libpackage.so
-			libtextencoding.so libtracker.so libtranslation.so
+			libtextencoding.so
+			libtracker.so
+			libtranslation.so
 		] ]
 		;
 }
@@ -110,13 +221,16 @@ rule HaikuImageGetPrivateSystemLibs
 
 SYSTEM_SERVERS = [ FFilterByBuildFeatures
 	app_server
-	debug_server dns_resolver_server
+	debug_server
+	dns_resolver_server
 	input_server
 	keystore_server
 	launch_daemon
 	mount_server
-	net_server notification_server
-	package_daemon power_daemon
+	net_server
+	notification_server
+	package_daemon
+	power_daemon
 	registrar
 	syslog_daemon
 ] ;
@@ -124,6 +238,7 @@ SYSTEM_SERVERS = [ FFilterByBuildFeatures
 SYSTEM_NETWORK_DEVICES =
 	ethernet
 	loopback
+	tunnel
 ;
 
 SYSTEM_NETWORK_DATALINK_PROTOCOLS =
@@ -136,15 +251,25 @@ SYSTEM_NETWORK_DATALINK_PROTOCOLS =
 #SYSTEM_NETWORK_PPP = ipcp modem pap pppoe KPPPManager ;
 
 SYSTEM_NETWORK_PROTOCOLS =
-	icmp icmp6 ipv4 ipv6
+	icmp
+	icmp6
+	ipv4
+	ipv6
 	tcp
-	udp unix
+	udp
+	unix
 ;
 
 SYSTEM_ADD_ONS_ACCELERANTS = [ FFilterByBuildFeatures
+	framebuffer.accelerant
 	x86,x86_64 @{
 		vesa.accelerant
 	}@ # x86,x86_64
+	riscv64 @{
+		# ati for qemu, radeon_hd for unmatched
+		ati.accelerant
+		radeon_hd.accelerant
+	}@ # riscv64
 ] ;
 
 SYSTEM_ADD_ONS_TRANSLATORS =
@@ -170,57 +295,75 @@ SYSTEM_ADD_ONS_DRIVERS_AUDIO = ;
 SYSTEM_ADD_ONS_DRIVERS_AUDIO_OLD = ;
 
 SYSTEM_ADD_ONS_DRIVERS_GRAPHICS = [ FFilterByBuildFeatures
+	framebuffer
 	x86,x86_64 @{
 		vesa
 	}@ # x86,x86_64
+	riscv64 @{
+		# ati for qemu, radeon_hd for unmatched
+		ati
+		radeon_hd
+	}@ # riscv64
 ] ;
 
 SYSTEM_ADD_ONS_DRIVERS_MIDI = ;
 
 SYSTEM_ADD_ONS_DRIVERS_NET = [ FFilterByBuildFeatures
-	x86,x86_64 @{
+	x86,x86_64,riscv64 @{
 		3com
-		atheros813x ar81xx attansic_l1 attansic_l2
-		broadcom440x broadcom570x
+		atheros813x
+		atheros81xx
+		attansic_l1
+		attansic_l2
+		broadcom440x
+		broadcom570x
 		dec21xxx
-		ipro100 ipro1000
+		ipro100
+		ipro1000
+		intel22x
 		jmicron2x0
 		marvell_yukon
 		nforce
 		pcnet
-		rtl8139 rtl81xx
-		sis19x syskonnect
-		via_rhine vt612x
-	}@ # x86,x86_64
+		rtl8125
+		rtl8139
+		rtl81xx
+		sis19x
+		sis900
+		syskonnect
+		via_rhine
+		vmxnet
+		vt612x
+	}@ # x86,x86_64,riscv64
 
 	etherpci
 	pegasus
-	sis900
-	usb_asix usb_davicom usb_ecm
+	usb_asix
+	usb_davicom
+	usb_rndis
 	wb840
-
-	# WLAN drivers
-	x86,x86_64 @{
-		aironetwifi atheroswifi
-		broadcom43xx
-		iprowifi2100 iprowifi2200 iprowifi3945 iprowifi4965
-		idualwifi7260
-		marvell88w8363 marvell88w8335
-		ralinkwifi realtekwifi
-		wavelanwifi
-	}@ # x86,x86_64
 ] ;
 
 SYSTEM_ADD_ONS_DRIVERS_POWER = [ FFilterByBuildFeatures
 	acpi_button@x86,x86_64
 ] ;
 
+SYSTEM_ADD_ONS_DRIVERS_SENSOR = [ FFilterByBuildFeatures
+	acpi_als@x86,x86_64
+] ;
+
+
 SYSTEM_ADD_ONS_BUS_MANAGERS = [ FFilterByBuildFeatures
-	acpi@x86,x86_64	agp_gart@x86,x86_64 ata@ata
-	config_manager
-	firewire@x86
-	scsi isa@x86,x86_64
-	pci ps2@x86,x86_64
+	acpi@x86,x86_64,arm64
+	agp_gart@x86,x86_64
+	ata
+	i2c@x86,x86_64
+	isa@x86,x86_64
+	mmc
+	scsi
+	pci
+	ps2@x86,x86_64
+	fdt@riscv64,arm,arm64
 	random
 	usb
 	virtio
@@ -228,13 +371,17 @@ SYSTEM_ADD_ONS_BUS_MANAGERS = [ FFilterByBuildFeatures
 
 SYSTEM_ADD_ONS_FILE_SYSTEMS =
 	attribute_overlay
-	bfs bindfs btrfs
-	exfat ext2
+	bfs
+	bindfs
+	btrfs
+	exfat
+	ext2
 	fat
 	iso9660
 	log_overlay
 	ntfs
 	packagefs
+	ramfs
 	reiserfs
 	udf
 	write_overlay
@@ -259,7 +406,6 @@ local etcDir = [ FDirName $(HAIKU_TOP) data etc ] ;
 local etcFiles = inputrc profile ;
 etcFiles = $(etcFiles:G=etc) ;
 SEARCH on $(etcFiles) = $(etcDir) ;
-etcFiles += <etc>termcap ;
 AddFilesToHaikuImage system settings etc : $(etcFiles) ;
 
 local profileFiles = [ Glob $(etcDir)/profile.d : *.sh ] ;
@@ -280,7 +426,16 @@ SEARCH on $(networkSettingsFiles)
 	= [ FDirName $(HAIKU_TOP) data settings network ] ;
 AddFilesToHaikuImage system settings network : $(networkSettingsFiles) ;
 
-# fresh install indicator file for the post install scripts
-SEARCH on <post-install>fresh_install
-	= [ FDirName $(HAIKU_TOP) data system settings ] ;
-AddFilesToHaikuImage system settings : <post-install>fresh_install ;
+# repository config and cache files
+local repository ;
+for repository in $(HAIKU_REPOSITORIES) {
+	local config = [ on $(repository) return $(HAIKU_REPOSITORY_CONFIG_FILE) ] ;
+	local cache = [ on $(repository) return $(HAIKU_REPOSITORY_CACHE_FILE) ] ;
+	if $(HAIKU_UPDATE_ALL_PACKAGES) {
+		HAIKU_INCLUDE_IN_IMAGE on $(config) $(cache) = 1 ;
+	}
+	AddFilesToHaikuImage system settings package-repositories
+		: $(config) : $(repository:G=) ;
+	AddFilesToHaikuImage system cache package-repositories
+		: $(cache) : $(repository:G=) ;
+}

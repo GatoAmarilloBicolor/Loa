@@ -6,6 +6,7 @@
 #define _STRING_H_
 
 
+#include <locale_t.h>
 #include <sys/types.h>
 
 
@@ -21,8 +22,10 @@ extern void		*memcpy(void *dest, const void *source, size_t length);
 extern void		*memccpy(void *dest, const void *source, int stopByte, size_t length);
 extern void		*memmove(void *dest, const void *source, size_t length);
 extern void		*memset(void *dest, int value, size_t length);
+extern void 	*memmem(const void *source, size_t sourceLength,
+	const void *search, size_t searchLength);
 
-#ifdef _GNU_SOURCE
+#ifdef _DEFAULT_SOURCE
 extern void		*memrchr(const void *source, int value, size_t length);
 #endif
 
@@ -40,7 +43,7 @@ extern char		*strchr(const char *string, int character);
 extern char		*strrchr(const char *string, int character);
 extern char		*strstr(const char *string, const char *searchString);
 
-#ifdef _GNU_SOURCE
+#ifdef _DEFAULT_SOURCE
 extern char		*strchrnul(const char *string, int character);
 #endif
 
@@ -61,6 +64,7 @@ extern char		*strcasestr(const char *string, const char *searchString);
 extern char		*strdup(const char *string);
 extern char		*strndup(const char* string, size_t size);
 extern char		*stpcpy(char *dest, const char *source);
+extern char		*stpncpy(char *dest, const char *source, size_t size);
 
 extern size_t	strlcat(char *dest, const char *source, size_t length);
 extern size_t	strlcpy(char *dest, const char *source, size_t length);
@@ -73,6 +77,11 @@ extern char		*strupr(char *string);
 /* extern char		*strsep(char **stringPointer, const char *delimiter); */
 
 extern const char	*strsignal(int signum);
+
+/* locale versions of string functions */
+extern int		strcoll_l(const char *string1, const char *string2, locale_t locale);
+extern char		*strerror_l(int errorCode, locale_t locale);
+extern size_t	strxfrm_l(char *string1, const char *string2, size_t length, locale_t locale);
 
 /* for compatibility, pull in functions declared in strings.h */
 #include <strings.h>

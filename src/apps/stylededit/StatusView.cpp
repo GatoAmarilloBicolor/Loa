@@ -9,6 +9,7 @@
 
 
 #include "StatusView.h"
+#include <StatusView.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,7 +64,7 @@ void
 StatusView::AttachedToWindow()
 {
 	SetFont(be_plain_font);
-	SetFontSize(10.);
+	BPrivate::AdoptScrollBarFontSize(this);
 
 	BMessage message(UPDATE_STATUS);
 	message.AddInt32("line", 1);
@@ -127,7 +128,6 @@ StatusView::Draw(BRect updateRect)
 	}
 
 	BRect bounds(Bounds());
-	rgb_color highColor = HighColor();
 	SetHighColor(tint_color(ViewColor(), B_DARKEN_2_TINT));
 	StrokeLine(bounds.LeftTop(), bounds.RightTop());
 
@@ -138,7 +138,7 @@ StatusView::Draw(BRect updateRect)
 	}
 
 	SetLowColor(ViewColor());
-	SetHighColor(highColor);
+	SetHighColor(ui_color(B_PANEL_TEXT_COLOR));
 
 	font_height fontHeight;
 	GetFontHeight(&fontHeight);
@@ -197,8 +197,7 @@ StatusView::SetStatus(BMessage* message)
 		&& B_OK == message->FindInt32("column", &column))
 	{
 		char info[256];
-		snprintf(info, sizeof(info),
-				B_TRANSLATE("line %d, column %d"), line, column);
+		snprintf(info, sizeof(info), B_TRANSLATE("line %d, column %d"), (int)line, (int)column);
 		fCellText[kPositionCell].SetTo(info);
 	}
 

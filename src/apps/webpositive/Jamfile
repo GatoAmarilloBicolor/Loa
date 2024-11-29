@@ -18,10 +18,8 @@ local sources =
 
 	# support
 	BaseURL.cpp
-	BitmapButton.cpp
 	BookmarkBar.cpp
 	FontSelectionView.cpp
-	SettingsMessage.cpp
 
 	# tabview
 	TabContainerView.cpp
@@ -66,16 +64,16 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 
 		# private OS headers
 		UseLibraryHeaders icon ;
-		UsePrivateHeaders interface shared tracker ;
+		UsePrivateHeaders interface netservices shared tracker ;
 		SubDirHdrs $(HAIKU_TOP) src kits tracker ;
 
 		Application WebPositive :
 			$(sources)
 			:
+			bnetapi [ MultiArchDefaultGristFiles libnetservices.a libcolumnlistview.a ]
 			[ BuildFeatureAttribute webkit : libraries ]
 			[ TargetLibstdc++ ] localestub shared
-			[ MultiArchDefaultGristFiles libcolumnlistview.a ]
-			be network bnetapi tracker translation
+			be network tracker translation
 			:
 			WebPositive.rdef
 			;

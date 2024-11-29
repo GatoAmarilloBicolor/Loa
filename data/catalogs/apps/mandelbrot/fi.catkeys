@@ -1,23 +1,28 @@
-1	finnish	x-vnd.Haiku-Mandelbrot	1781779654
-About	MandelbrotWindow		Ohjelmasta
-Julia	MandelbrotWindow		Julia
+1	finnish	x-vnd.Haiku-Mandelbrot	2302392624
 Grassland	MandelbrotWindow		Grassland
-Spring	MandelbrotWindow		Kevät
-High contrast	MandelbrotWindow		Korkea kontrasti
-Fire	MandelbrotWindow		Tuli
-Royal	MandelbrotWindow		Kuninkaallinen
-File	MandelbrotWindow		Tiedosto
-Lightning	MandelbrotWindow		Salamointi
-Midnight	MandelbrotWindow		Keskiyö
-Palette	MandelbrotWindow		Paletti
-Mandelbrot	MandelbrotWindow		Mandelbrot
-Burning Ship	MandelbrotWindow		Palava laiva
-Quit	MandelbrotWindow		Poistu
-Frost	MandelbrotWindow		Pakkanen
-Set	MandelbrotWindow		Aseta
-Iterations	MandelbrotWindow		Kertaukset
-Mandelbrot	System name		Mandelbrot
-Deepfrost	MandelbrotWindow		Syväjäätynyt
 Tricorn	MandelbrotWindow		Kolmijyväinen
-Multibrot	MandelbrotWindow		Multibrot
 Orbit Trap	MandelbrotWindow		Kehäansa
+Deepfrost	MandelbrotWindow		Syväjäätynyt
+1 (none)	MandelbrotWindow		1 (ei mitään)
+Quit	MandelbrotWindow		Poistu
+Save as image…	MandelbrotWindow		Tallenna kuvana…
+Fire	MandelbrotWindow		Tuli
+High contrast	MandelbrotWindow		Korkea kontrasti
+Full screen	MandelbrotWindow		Kokoruutunäyttö
+Midnight	MandelbrotWindow		Keskiyö
+Burning Ship	MandelbrotWindow		Palava laiva
+Lightning	MandelbrotWindow		Salamointi
+About	MandelbrotWindow		Ohjelmasta
+Palette	MandelbrotWindow		Paletti
+Set	MandelbrotWindow		Aseta
+Royal	MandelbrotWindow		Kuninkaallinen
+Subsampling	MandelbrotWindow		Alinäyte
+File	MandelbrotWindow		Tiedosto
+Julia	MandelbrotWindow		Julia
+Frost	MandelbrotWindow		Pakkanen
+View	MandelbrotWindow		Näkymä
+Mandelbrot	System name		Mandelbrot
+Multibrot	MandelbrotWindow		Multibrot
+Iterations	MandelbrotWindow		Kertaukset
+Spring	MandelbrotWindow		Kevät
+Mandelbrot	MandelbrotWindow		Mandelbrot

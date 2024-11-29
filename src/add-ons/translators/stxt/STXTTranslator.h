@@ -1,6 +1,6 @@
 /*****************************************************************************/
 // STXTTranslator
-// Written by Michael Wilber, OBOS Translation Kit Team
+// Written by Michael Wilber, Haiku Translation Kit Team
 //
 // STXTTranslator.h
 //
@@ -8,7 +8,7 @@
 // StyledEdit (STXT) files.
 //
 //
-// Copyright (c) 2002 OpenBeOS Project
+// Copyright (c) 2002 Haiku Project
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
 // copy of this software and associated documentation files (the "Software"),
@@ -37,7 +37,6 @@
 #include <TranslationDefs.h>
 #include <GraphicsDefs.h>
 #include <InterfaceDefs.h>
-#include <DataIO.h>
 #include <File.h>
 #include <ByteOrder.h>
 #include <fs_attr.h>

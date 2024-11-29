@@ -22,9 +22,8 @@
 #define UHCI_DEBUG_QUEUE					4
 
 struct pci_info;
-struct pci_module_info;
-struct pci_x86_module_info;
-
+struct pci_device_module_info;
+struct pci_device;
 class UHCIRootHub;
 
 
@@ -94,7 +93,8 @@ typedef struct isochronous_transfer_data {
 
 class UHCI : public BusManager {
 public:
-									UHCI(pci_info *info, Stack *stack);
+									UHCI(pci_info *info, pci_device_module_info* pci,
+										pci_device* device, Stack *stack, device_node* node);
 									~UHCI();
 
 		status_t					Start();
@@ -108,8 +108,6 @@ virtual	status_t					CancelQueuedTransfers(Pipe *pipe, bool force);
 		status_t					CancelQueuedIsochronousTransfers(Pipe *pipe, bool force);
 		status_t					SubmitRequest(Transfer *transfer);
 		status_t					SubmitIsochronous(Transfer *transfer);
-
-static	status_t					AddTo(Stack *stack);
 
 		// Port operations
 		status_t					GetPortStatus(uint8 index, usb_port_status *status);
@@ -186,19 +184,19 @@ static int32						FinishIsochronousThread(void *data);
 										uhci_td *second);
 
 		size_t						WriteDescriptorChain(uhci_td *topDescriptor,
-										iovec *vector, size_t vectorCount);
+										generic_io_vec *vector, size_t vectorCount, bool physical);
 		size_t						ReadDescriptorChain(uhci_td *topDescriptor,
-										iovec *vector, size_t vectorCount,
+										generic_io_vec *vector, size_t vectorCount, bool physical,
 										uint8 *lastDataToggle);
 		size_t						ReadActualLength(uhci_td *topDescriptor,
 										uint8 *lastDataToggle);
 		void						WriteIsochronousDescriptorChain(
 										uhci_td **isoRequest,
 										uint32 packetCount,
-										iovec *vector);
+										generic_io_vec *vector);
 		void						ReadIsochronousDescriptorChain(
 										isochronous_transfer_data *transfer,
-										iovec *vector);
+										generic_io_vec *vector);
 
 		// Register functions
 inline	void						WriteReg8(uint32 reg, uint8 value);
@@ -208,11 +206,10 @@ inline	uint8						ReadReg8(uint32 reg);
 inline	uint16						ReadReg16(uint32 reg);
 inline	uint32						ReadReg32(uint32 reg);
 
-static	pci_module_info *			sPCIModule;
-static	pci_x86_module_info *		sPCIx86Module;
-
 		uint32						fRegisterBase;
 		pci_info *					fPCIInfo;
+		pci_device_module_info*		fPci;
+		pci_device*					fDevice;
 		Stack *						fStack;
 		uint32						fEnabledInterrupts;
 
@@ -259,7 +256,7 @@ static	pci_x86_module_info *		sPCIx86Module;
 		uint8						fRootHubAddress;
 		uint8						fPortResetChange;
 
-		uint8						fIRQ;
+		uint32						fIRQ;
 		bool						fUseMSI;
 };
 

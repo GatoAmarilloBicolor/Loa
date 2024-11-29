@@ -101,17 +101,19 @@ struct net_protocol_module_info {
 	status_t	(*add_ancillary_data)(net_protocol* self,
 					ancillary_data_container* container, const cmsghdr* header);
 	ssize_t		(*process_ancillary_data)(net_protocol* self,
-					const ancillary_data_header* header, const void* data,
+					const ancillary_data_container* container,
 					void* buffer, size_t bufferSize);
 	ssize_t		(*process_ancillary_data_no_container)(net_protocol* self,
 					net_buffer* buffer, void* data, size_t bufferSize);
 
 	ssize_t		(*send_data_no_buffer)(net_protocol* self, const iovec* vecs,
 					size_t vecCount, ancillary_data_container* ancillaryData,
-					const struct sockaddr* address, socklen_t addressLength);
+					const struct sockaddr* address, socklen_t addressLength,
+					int flags);
 	ssize_t		(*read_data_no_buffer)(net_protocol* self, const iovec* vecs,
 					size_t vecCount, ancillary_data_container** _ancillaryData,
-					struct sockaddr* _address, socklen_t* _addressLength);
+					struct sockaddr* _address, socklen_t* _addressLength,
+					int flags);
 };
 
 

@@ -12,12 +12,12 @@
 #include <KernelExport.h>
 #include <Drivers.h>
 #include <PCI.h>
-#include <PCI_x86.h>
+#include <debug.h>
 
 #include <string.h>
 #include <stdlib.h>
 
-#define DEVFS_PATH_FORMAT	"audio/hmulti/hda/%lu"
+#define DEVFS_PATH_FORMAT	"audio/hmulti/hda/%" B_PRIu32
 #include <hmulti_audio.h>
 
 #include "hda_controller_defs.h"
@@ -63,6 +63,7 @@ struct hda_controller {
 	uint32			irq;
 	bool			msi;
 	bool			dma_snooping;
+	bool			is_64_bit;
 
 	uint16			codec_status;
 	uint32			num_input_streams;
@@ -291,6 +292,7 @@ struct hda_audio_group {
 struct hda_codec {
 	uint16		vendor_id;
 	uint16		product_id;
+	uint32		subsystem_id;
 	uint8		major;
 	uint8		minor;
 	uint8		revision;
@@ -350,7 +352,6 @@ struct hda_multi {
 /* driver.c */
 extern device_hooks gDriverHooks;
 extern pci_module_info* gPci;
-extern pci_x86_module_info* gPCIx86Module;
 extern hda_controller gCards[MAX_CARDS];
 extern uint32 gNumCards;
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2012 Haiku, Inc. All rights reserved.
+ * Copyright 2001-2020 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  */
 #ifndef _LIBC_LIMITS_H_
@@ -10,6 +10,9 @@
 #include <config/types.h>
 
 #include <float.h>		/* for DBL_DIG, FLT_DIG, etc */
+
+#include __HAIKU_ARCH_HEADER(limits.h)
+
 
 #define LONGLONG_MIN    (-9223372036854775807LL - 1)  /* these are Be specific */
 #define LONGLONG_MAX    (9223372036854775807LL)
@@ -24,7 +27,7 @@
 #define OFF_MAX			LLONG_MAX
 #define OFF_MIN			LLONG_MIN
 
-#define ARG_MAX			 		(32768)
+#define ARG_MAX			 		(128 * 1024)
 #define ATEXIT_MAX			 	(32)
 #define CHILD_MAX				(1024)
 #define IOV_MAX					(1024)
@@ -38,19 +41,19 @@
 #define NAME_MAX				(256)
 #define NGROUPS_MAX		 		(32)
 #define OPEN_MAX				(128)
-#define PAGESIZE				(4096)
 #define PATH_MAX				(1024)
 #define PIPE_BUF				(4 * 1024)
 #define PIPE_MAX				(512)
-#define PTHREAD_KEYS_MAX		256
+#define PTHREAD_KEYS_MAX		(256)
 #define PTHREAD_STACK_MIN		(2 * PAGESIZE)
+#define PTHREAD_DESTRUCTOR_ITERATIONS	(4)
 #define SSIZE_MAX		  		__HAIKU_SADDR_MAX
 #define TTY_NAME_MAX			(256)
 #define TZNAME_MAX		  		(32)
 #define	SYMLINK_MAX				(1024)
 #define	SYMLOOP_MAX				(16)
 
-#define _POSIX_ARG_MAX	  		(32768)
+#define _POSIX_ARG_MAX	  		(128 * 1024)
 #define _POSIX_CHILD_MAX		(1024)
 #define _POSIX_HOST_NAME_MAX	(255)
 #define _POSIX_LINK_MAX	 		(1)
@@ -76,11 +79,29 @@
 
 #define _POSIX2_LINE_MAX		(2048)
 
+#define	BC_BASE_MAX				(99)
+#define BC_DIM_MAX				(2048)
+#define BC_SCALE_MAX			(99)
+#define BC_STRING_MAX			(1000)
+
+
+#define COLL_WEIGHTS_MAX		(10)
+#define	EXPR_NEST_MAX			(32)
+#define	LINE_MAX				(2048)
+
+#define MQ_OPEN_MAX				(0) /* MSG */
+#define MQ_PRIO_MAX				(0) /* MSG */
+
+#define	RE_DUP_MAX				(0x7fff)
+
+#ifdef _XOPEN_SOURCE
 /* The XSI name for PAGESIZE, with extra underscore included. Only define if
  * _XOPEN_SOURCE was requested, otherwise it could conflict with the application.
  */
-#ifdef _XOPEN_SOURCE
 #define PAGE_SIZE				PAGESIZE
+/* XSI extension: Default process priority. This is used by the implementation
+ * of getpriority(), setpriority() and nice(). */
+#define NZERO					20
 #endif
 
 /* _GCC_LIMITS_H_ is defined by GCC's internal limits.h to avoid

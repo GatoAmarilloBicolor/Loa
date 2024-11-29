@@ -1,9 +1,10 @@
 SubDir HAIKU_TOP src kits media ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
+AddResources libmedia.so : libmedia.rdef ;
 
-UsePrivateHeaders app media shared ;
+UsePrivateHeaders app media kernel shared ;
 UsePrivateHeaders [ FDirName media experimental ] ;
+UsePrivateHeaders [ FDirName interface ] ;
 
 if $(CHECK_MALLOC) {
 	SubDirC++Flags -D_NO_INLINE_ASM -fcheck-memory-usage ;
@@ -65,10 +66,10 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			FormatManager.cpp
 			MediaRecorderNode.cpp
 			Notifications.cpp
+			PortPool.cpp
 			request_data.cpp
 			SharedBufferList.cpp
 			TrackReader.cpp
-			TimedEventQueuePrivate.cpp
 			TimeSourceObject.cpp
 			TimeSourceObjectManager.cpp
 			SoundPlayNode.cpp
@@ -103,3 +104,9 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			;
 	}
 }
+
+DoCatalogs libmedia.so
+	: x-vnd.Haiku-libmedia
+	:
+	MediaDefs.cpp
+	;

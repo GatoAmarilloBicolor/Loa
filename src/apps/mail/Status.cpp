@@ -37,6 +37,7 @@ All rights reserved.
 #include <Directory.h>
 #include <FindDirectory.h>
 #include <fs_index.h>
+#include <LayoutBuilder.h>
 #include <Node.h>
 #include <NodeInfo.h>
 #include <Path.h>
@@ -54,26 +55,9 @@ All rights reserved.
 #include "Messages.h"
 
 
-#define STATUS_TEXT			"Status:"
-#define STATUS_FIELD_H		 10
-#define STATUS_FIELD_V		  8
-#define STATUS_FIELD_WIDTH	(STATUS_WIDTH - STATUS_FIELD_H)
-#define STATUS_FIELD_HEIGHT	 16
+#undef B_TRANSLATION_CONTEXT
+#define B_TRANSLATION_CONTEXT "Mail"
 
-#define BUTTON_WIDTH		 70
-#define BUTTON_HEIGHT		 20
-
-#define S_OK_BUTTON_X1		(STATUS_WIDTH - BUTTON_WIDTH - 6)
-#define S_OK_BUTTON_Y1		(STATUS_HEIGHT - (BUTTON_HEIGHT + 10))
-#define S_OK_BUTTON_X2		(S_OK_BUTTON_X1 + BUTTON_WIDTH)
-#define S_OK_BUTTON_Y2		(S_OK_BUTTON_Y1 + BUTTON_HEIGHT)
-#define S_OK_BUTTON_TEXT	"OK"
-
-#define S_CANCEL_BUTTON_X1	(S_OK_BUTTON_X1 - (BUTTON_WIDTH + 10))
-#define S_CANCEL_BUTTON_Y1	S_OK_BUTTON_Y1
-#define S_CANCEL_BUTTON_X2	(S_CANCEL_BUTTON_X1 + BUTTON_WIDTH)
-#define S_CANCEL_BUTTON_Y2	S_OK_BUTTON_Y2
-#define S_CANCEL_BUTTON_TEXT	"Cancel"
 
 enum status_messages {
 	STATUS = 128,
@@ -82,32 +66,31 @@ enum status_messages {
 };
 
 
-TStatusWindow::TStatusWindow(BRect rect, BMessenger target, const char* status)
-	: BWindow(rect, "", B_MODAL_WINDOW, B_NOT_RESIZABLE),
+TStatusWindow::TStatusWindow(BRect frame, BMessenger target, const char* status)
+	: BWindow(BRect(), "", B_MODAL_WINDOW, B_NOT_RESIZABLE | B_AUTO_UPDATE_SIZE_LIMITS),
 	fTarget(target)
 {
-	BView* view = new BView(Bounds(), "", B_FOLLOW_ALL, B_WILL_DRAW);
-	view->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
-	AddChild(view);
+	fStatus = new BTextControl("status",  B_TRANSLATE("Status:"), status,
+		new BMessage(STATUS));
 
-	BRect r(STATUS_FIELD_H, STATUS_FIELD_V,
-		STATUS_FIELD_WIDTH, STATUS_FIELD_V + STATUS_FIELD_HEIGHT);
+	BButton *ok = new BButton("ok", B_TRANSLATE("OK"), new BMessage(OK));
+	ok->MakeDefault(true);
 
-	fStatus = new BTextControl(r, "", STATUS_TEXT, status, new BMessage(STATUS));
-	view->AddChild(fStatus);
+	BButton *cancel = new BButton("cancel", B_TRANSLATE("Cancel"), new BMessage(CANCEL));
 
-	fStatus->SetDivider(fStatus->StringWidth(STATUS_TEXT) + 6);
+	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
+		.SetInsets(B_USE_DEFAULT_SPACING)
+		.AddGroup(B_HORIZONTAL, 0)
+			.Add(fStatus)
+		.End()
+		.AddStrut(B_USE_SMALL_SPACING)
+		.AddGroup(B_HORIZONTAL, B_USE_SMALL_SPACING, 0)
+			.AddStrut(B_USE_SMALL_SPACING)
+			.Add(cancel)
+			.Add(ok);
+
 	fStatus->BTextControl::MakeFocus(true);
-
-	r.Set(S_OK_BUTTON_X1, S_OK_BUTTON_Y1, S_OK_BUTTON_X2, S_OK_BUTTON_Y2);
-	BButton *button = new BButton(r, "", S_OK_BUTTON_TEXT, new BMessage(OK));
-	view->AddChild(button);
-	button->MakeDefault(true);
-
-	r.Set(S_CANCEL_BUTTON_X1, S_CANCEL_BUTTON_Y1, S_CANCEL_BUTTON_X2, S_CANCEL_BUTTON_Y2);
-	button = new BButton(r, "", S_CANCEL_BUTTON_TEXT, new BMessage(CANCEL));
-	view->AddChild(button);
-
+	CenterIn(frame);
 	Show();
 }
 
@@ -165,7 +148,8 @@ TStatusWindow::MessageReceived(BMessage* msg)
 							break;
 						if (result != EEXIST)
 							goto err_exit;
-						sprintf(newName, "%s_%" B_PRId32, name, index++);
+						snprintf(newName, B_FILE_NAME_LENGTH, "%s_%" B_PRId32,
+							name, index++);
 					}
 					dir.FindEntry(newName, &entry);
 					node = new BNodeInfo(&file);
@@ -211,4 +195,3 @@ TStatusWindow::_Exists(const char* status)
 
 	return false;
 }
-

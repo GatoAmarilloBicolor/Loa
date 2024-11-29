@@ -1,7 +1,8 @@
 /*
- * Copyright 2017-2018, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2017-2021, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
+
 
 #include "ServerHelper.h"
 
@@ -14,6 +15,7 @@
 #include <NetworkInterface.h>
 #include <NetworkRoster.h>
 
+#include "Logger.h"
 #include "HaikuDepotConstants.h"
 #include "ServerSettings.h"
 #include "WebAppInterface.h"
@@ -21,33 +23,35 @@
 
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "ServerHelper"
+
 #define KEY_MSG_MINIMUM_VERSION "minimumVersion"
 #define KEY_HEADER_MINIMUM_VERSION "X-Desktop-Application-Minimum-Version"
 
 
-/*! This method will cause an alert to be shown to the user regarding a
+/*! \brief This method will cause an alert to be shown to the user regarding a
     JSON-RPC error that has been sent from the application server.  It will
     send a message to the application looper which will then relay the message
     to the looper and then onto the user to see.
+    \param responsePayload The top level payload returned from the server.
 */
 
-void
-ServerHelper::NotifyServerJsonRpcError(BMessage& error)
+/*static*/ void
+ServerHelper::NotifyServerJsonRpcError(BMessage& responsePayload)
 {
 	BMessage message(MSG_SERVER_ERROR);
-	message.AddMessage("error", &error);
+	message.AddMessage("error", &responsePayload);
 	be_app->PostMessage(&message);
 }
 
 
-void
-ServerHelper::AlertServerJsonRpcError(BMessage* message)
+/*static*/ void
+ServerHelper::AlertServerJsonRpcError(BMessage* responseEnvelopeMessage)
 {
-	BMessage error;
+	BMessage errorMessage;
 	int32 errorCode = 0;
 
-	if (message->FindMessage("error", &error) == B_OK)
-		errorCode = WebAppInterface::ErrorCodeFromResponse(error);
+	if (responseEnvelopeMessage->FindMessage("error", &errorMessage) == B_OK)
+		errorCode = WebAppInterface::ErrorCodeFromResponse(errorMessage);
 
 	BString alertText;
 
@@ -61,21 +65,25 @@ ServerHelper::AlertServerJsonRpcError(BMessage* message)
 				" in the request was not found on the server.");
 			break;
 		case ERROR_CODE_CAPTCHABADRESPONSE:
-			alertText = B_TRANSLATE("The response to the captcha was incorrect.");
+			alertText = B_TRANSLATE("The response to the captcha was"
+				" incorrect.");
 			break;
 		case ERROR_CODE_AUTHORIZATIONFAILURE:
 		case ERROR_CODE_AUTHORIZATIONRULECONFLICT:
-			alertText = B_TRANSLATE("Authorization or security issue");
+			alertText = B_TRANSLATE("Authorization or security issue. Logout"
+				" and log back in again to check that your password is correct"
+				" and also check that you have agreed to the latest usage"
+				" conditions.");
 			break;
 		default:
 			alertText.SetToFormat(
 				B_TRANSLATE("An unexpected error has been sent from the"
-					" HaikuDepot server [%" B_PRIi32 "]"), errorCode);
+					" server [%" B_PRIi32 "]"), errorCode);
 			break;
 	}
 
 	BAlert* alert = new BAlert(
-		B_TRANSLATE("Server Error"),
+		B_TRANSLATE("Server error"),
 		alertText,
 		B_TRANSLATE("OK"));
 
@@ -84,7 +92,7 @@ ServerHelper::AlertServerJsonRpcError(BMessage* message)
 }
 
 
-void
+/*static*/ void
 ServerHelper::NotifyTransportError(status_t error)
 {
 	switch (error) {
@@ -105,32 +113,32 @@ ServerHelper::NotifyTransportError(status_t error)
 }
 
 
-void
+/*static*/ void
 ServerHelper::AlertTransportError(BMessage* message)
 {
-	status_t errno = B_OK;
+	status_t error = B_OK;
 	int64 errnoInt64;
 	message->FindInt64("errno", &errnoInt64);
-	errno = (status_t) errnoInt64;
+	error = (status_t) errnoInt64;
 
 	BString errorDescription("?");
 	BString alertText;
 
-	switch (errno) {
+	switch (error) {
 		case HD_NETWORK_INACCESSIBLE:
-			errorDescription = B_TRANSLATE("Network Error");
+			errorDescription = B_TRANSLATE("Network error");
 			break;
 		default:
-			errorDescription.SetTo(strerror(errno));
+			errorDescription.SetTo(strerror(error));
 			break;
 	}
 
 	alertText.SetToFormat(B_TRANSLATE("A network transport error has arisen"
-		" communicating with the HaikuDepot server system: %s"),
+		" communicating with the server system: %s"),
 		errorDescription.String());
 
 	BAlert* alert = new BAlert(
-		B_TRANSLATE("Network Transport Error"),
+		B_TRANSLATE("Network transport error"),
 		alertText,
 		B_TRANSLATE("OK"));
 
@@ -139,7 +147,7 @@ ServerHelper::AlertTransportError(BMessage* message)
 }
 
 
-void
+/*static*/ void
 ServerHelper::NotifyClientTooOld(const BHttpHeaders& responseHeaders)
 {
 	if (!ServerSettings::IsClientTooOld()) {
@@ -157,7 +165,7 @@ ServerHelper::NotifyClientTooOld(const BHttpHeaders& responseHeaders)
 }
 
 
-void
+/*static*/ void
 ServerHelper::AlertClientTooOld(BMessage* message)
 {
 	BString minimumVersion;
@@ -167,13 +175,13 @@ ServerHelper::AlertClientTooOld(BMessage* message)
 		minimumVersion = "???";
 
 	alertText.SetToFormat(
-		B_TRANSLATE("This application is too old to communicate with the "
-			" HaikuDepot server system.  Obtain a newer version of HaikuDepot "
-			" by updating your Haiku system.  The minimum version of "
-			" HaikuDepot required is \"%s\"."), minimumVersion.String());
+		B_TRANSLATE("This application is too old to communicate with the"
+			" server system. Obtain a newer version of this application"
+			" by updating your system. The minimum required version of this"
+			" application is \"%s\"."), minimumVersion.String());
 
 	BAlert* alert = new BAlert(
-		B_TRANSLATE("client_version_too_old"),
+		B_TRANSLATE("Client version too old"),
 		alertText,
 		B_TRANSLATE("OK"));
 
@@ -182,14 +190,14 @@ ServerHelper::AlertClientTooOld(BMessage* message)
 }
 
 
-bool
+/*static*/ bool
 ServerHelper::IsNetworkAvailable()
 {
 	return !ServerSettings::ForceNoNetwork() && IsPlatformNetworkAvailable();
 }
 
 
-bool
+/*static*/ bool
 ServerHelper::IsPlatformNetworkAvailable()
 {
 	BNetworkRoster& roster = BNetworkRoster::Default();
@@ -204,4 +212,63 @@ ServerHelper::IsPlatformNetworkAvailable()
 	}
 
 	return false;
+}
+
+
+/*! If the response is an error and the error is a validation failure then
+ * various validation errors may be carried in the error data.  These are
+ * copied into the supplied failures.  An abridged example input JSON structure
+ * would be;
+ *
+ * \code
+ * {
+ *   ...
+ *   "error": {
+ *     "code": -32800,
+ *     "data": { "nickname": "required" }
+       },
+       ...
+ *   }
+ * }
+ * \endcode
+ *
+ * \param failures is the object into which the validation failures are to be
+ *   written.
+ * \param responseEnvelopeMessage is a representation of the entire
+ *   response sent back from the server when the error occurred.
+ *
+ */
+
+/*static*/ void
+ServerHelper::GetFailuresFromJsonRpcError(
+	ValidationFailures& failures, BMessage& responseEnvelopeMessage)
+{
+	BMessage errorMessage;
+
+	if (responseEnvelopeMessage.FindMessage("error", &errorMessage) == B_OK) {
+		BMessage dataMessage;
+
+		if (errorMessage.FindMessage("data", &dataMessage) == B_OK) {
+
+			// the names and values (strings) are key-value pairs indicating
+			// the error.
+
+			int32 i = 0;
+			BMessage dataItemMessage;
+
+			while (dataMessage.FindMessage(BString() << i, &dataItemMessage)
+					== B_OK) {
+				BString key;
+				BString value;
+				if (dataItemMessage.FindString("key", &key) == B_OK
+					&& dataItemMessage.FindString("value", &value) == B_OK) {
+					failures.AddFailure(key, value);
+				} else {
+					HDERROR("possibly corrupt validation message missing key "
+						"or value");
+				}
+				i++;
+			}
+		}
+	}
 }

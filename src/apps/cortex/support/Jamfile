@@ -4,10 +4,7 @@ SubDirHdrs [ FDirName $(SUBDIR) $(DOTDOT) ] ;
 
 SubDirCcFlags -DCORTEX_NAMESPACE=cortex ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
-
 StaticLibrary cortex_support.a :
-	debug_tools.cpp
 	MediaIcon.cpp
 	MediaString.cpp
 	MouseTrackingHelpers.cpp
@@ -17,4 +14,10 @@ StaticLibrary cortex_support.a :
 	observe.cpp
 	SoundUtils.cpp
 	TextControlFloater.cpp
+;
+
+DoCatalogs cortex_support.a :
+	x-vnd.Cortex.support
+	:
+	MediaString.cpp
 ;

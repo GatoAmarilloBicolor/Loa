@@ -1,5 +1,5 @@
 /*
- * Copyright 2010, Haiku, Inc. All rights reserved.
+ * Copyright 2010-2023, Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT license.
  *
  * Authors:
@@ -16,9 +16,9 @@
 #include <Window.h>
 
 
-#define	TITLE_BAR_HEIGHT	 25
+#define	TITLE_BAR_HEIGHT	 32
 #define	WIND_WIDTH			420
-#define WIND_HEIGHT			340
+#define WIND_HEIGHT			600
 
 
 class PersonView;
@@ -42,6 +42,7 @@ public:
 
 			void				AddAttribute(const char* label,
 									const char* attribute);
+			void				SetInitialValues(BMessage* message);
 
 			void				SaveAs();
 

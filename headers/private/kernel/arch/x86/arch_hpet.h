@@ -5,7 +5,7 @@
 #ifndef _KERNEL_ARCH_x86_HPET_H
 #define _KERNEL_ARCH_x86_HPET_H
 
-#include <arch/x86/arch_acpi.h>
+#include <acpi.h>
 
 /* All masks are 32 bits wide to represent relative bit locations */
 /* Doing it this way is Required since the HPET only supports 32/64-bit aligned reads. */
@@ -95,21 +95,24 @@ struct hpet_regs {
 };
 
 
+typedef struct acpi_hpet_addr {
+	uint8	address_space;
+	uint8	register_width;
+	uint8	register_offset;
+	uint8	reserved;
+	uint64	address;
+} _PACKED acpi_hpet_addr;
+
+
 typedef struct acpi_hpet {
 	acpi_descriptor_header	header;	/* "HPET" signature and acpi header */
-	uint16	vendor_id;
-	uint8	legacy_capable : 1;
-	uint8	reserved1 : 1;
-	uint8	countersize : 1;
-	uint8	comparators : 5;
 	uint8	hw_revision;
-	struct hpet_addr {
-		uint8	address_space;
-		uint8	register_width;
-		uint8	register_offset;
-		uint8	reserved;
-		uint64	address;
-	} hpet_address;
+	uint8	comparators : 5;
+	uint8	countersize : 1;
+	uint8	reserved1 : 1;
+	uint8	legacy_capable : 1;
+	uint16	vendor_id;
+	acpi_hpet_addr hpet_address;
 	uint8	number;
 	uint16	min_tick;
 } _PACKED acpi_hpet;

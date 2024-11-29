@@ -13,6 +13,7 @@
 
 #include <Alert.h>
 #include <Clipboard.h>
+#include <ControlLook.h>
 #include <Looper.h>
 #include <PopUpMenu.h>
 #include <ToolTip.h>
@@ -41,7 +42,6 @@
 #include "StackTrace.h"
 #include "StackFrame.h"
 #include "StackFrameValues.h"
-#include "StringUtils.h"
 #include "StringValue.h"
 #include "SyntheticPrimitiveType.h"
 #include "TableCellValueEditor.h"
@@ -244,7 +244,7 @@ protected:
 	virtual	uint32 ComputeHashValue() const
 	{
 		uint32 hash = reinterpret_cast<addr_t>(fInfo);
-		hash = hash * 19 + StringUtils::HashValue(fInfo->Expression());
+		hash = hash * 19 + fInfo->Expression().HashValue();
 
 		return hash;
 	}
@@ -2554,15 +2554,20 @@ void
 VariablesView::_Init(ValueNodeManager* manager)
 {
 	fVariableTable = new TreeTable("variable list", 0, B_FANCY_BORDER);
+	fVariableTable->SetFont(B_FONT_ROW, be_fixed_font);
 	AddChild(fVariableTable->ToView());
 	fVariableTable->SetSortingEnabled(false);
 
 	// columns
-	fVariableTable->AddColumn(new StringTableColumn(0, "Variable", 80, 40, 1000,
+	const float padding = be_control_look->DefaultLabelSpacing();
+	fVariableTable->AddColumn(new StringTableColumn(0, "Variable",
+		be_fixed_font->StringWidth("VariableName") + padding, 40, 1000,
 		B_TRUNCATE_END, B_ALIGN_LEFT));
-	fVariableTable->AddColumn(new VariableValueColumn(1, "Value", 80, 40, 1000,
+	fVariableTable->AddColumn(new VariableValueColumn(1, "Value",
+		be_fixed_font->StringWidth("0xffffffff00000000") + padding, 40, 1000,
 		B_TRUNCATE_END, B_ALIGN_RIGHT));
-	fVariableTable->AddColumn(new StringTableColumn(2, "Type", 80, 40, 1000,
+	fVariableTable->AddColumn(new StringTableColumn(2, "Type",
+		be_fixed_font->StringWidth("std::vector<int32_t>") + padding, 40, 1000,
 		B_TRUNCATE_END, B_ALIGN_LEFT));
 
 	fVariableTableModel = new VariableTableModel(manager);

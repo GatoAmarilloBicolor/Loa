@@ -15,6 +15,7 @@
 #include <Locale.h>
 #include <MediaFile.h>
 #include <MediaTrack.h>
+#include <NumberFormat.h>
 #include <Mime.h>
 #include <Path.h>
 #include <String.h>
@@ -89,6 +90,7 @@ MediaConverterApp::MessageReceived(BMessage *msg)
 
 		default:
 			BApplication::MessageReceived(msg);
+			break;
 	}
 }
 
@@ -377,6 +379,9 @@ MediaConverterApp::_ConvertFile(BMediaFile* inFile, BMediaFile* outFile,
 	int64 audioFrameCount = 0;
 
 	status_t ret = B_OK;
+	bool multiTrack = false;
+
+	BNumberFormat fNumberFormat;
 
 	int32 tracks = inFile->CountTracks();
 	for (int32 i = 0; i < tracks && (!outAudTrack || !outVidTrack); i++) {
@@ -384,6 +389,10 @@ MediaConverterApp::_ConvertFile(BMediaFile* inFile, BMediaFile* outFile,
 		inFormat.Clear();
 		inTrack->EncodedFormat(&inFormat);
 		if (inFormat.IsAudio() && (audioCodec != NULL)) {
+			if (outAudTrack != NULL) {
+				multiTrack = true;
+				continue;
+			}
 			inAudTrack = inTrack;
 			outAudFormat.Clear();
 			outAudFormat.type = B_MEDIA_RAW_AUDIO;
@@ -411,6 +420,10 @@ MediaConverterApp::_ConvertFile(BMediaFile* inFile, BMediaFile* outFile,
 			}
 
 		} else if (inFormat.IsVideo() && (videoCodec != NULL)) {
+			if (outVidTrack != NULL) {
+				multiTrack = true;
+				continue;
+			}
 			inVidTrack = inTrack;
 			width = (int32)inFormat.Width();
 			height = (int32)inFormat.Height();
@@ -498,6 +511,14 @@ MediaConverterApp::_ConvertFile(BMediaFile* inFile, BMediaFile* outFile,
 		ret = B_ERROR;
 	}
 
+	if (multiTrack) {
+		BAlert* alert = new BAlert(B_TRANSLATE("Multi-track file detected"),
+		B_TRANSLATE("The file has multiple audio or video tracks, only the first one of each will "
+			"be converted."),
+		B_TRANSLATE("Understood"), NULL, NULL, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+		alert->Go();
+	}
+
 	if (fCancel) {
 		// don't have any video or audio tracks here, or cancelled
 		printf("MediaConverterApp::_ConvertFile()"
@@ -547,11 +568,8 @@ MediaConverterApp::_ConvertFile(BMediaFile* inFile, BMediaFile* outFile,
 		for (int64 i = start; (i < end) && !fCancel; i += framesRead) {
 			if ((ret = inVidTrack->ReadFrames(videoBuffer, &framesRead,
 					&mh)) != B_OK) {
-				fprintf(stderr, "Error reading video frame %" B_PRId64 ": %s\n",
-					i, strerror(ret));
-				snprintf(status.LockBuffer(128), 128,
-						B_TRANSLATE("Error read video frame %" B_PRId64), i);
-				status.UnlockBuffer();
+				fprintf(stderr, "Error reading video frame %" B_PRId64 ": %s\n", i, strerror(ret));
+				status.SetToFormat(B_TRANSLATE("Error read video frame %" B_PRId64), i);
 				SetStatusMessage(status.String());
 
 				break;
@@ -559,11 +577,8 @@ MediaConverterApp::_ConvertFile(BMediaFile* inFile, BMediaFile* outFile,
 
 			if ((ret = outVidTrack->WriteFrames(videoBuffer, framesRead,
 					mh.u.encoded_video.field_flags)) != B_OK) {
-				fprintf(stderr, "Error writing video frame %" B_PRId64 ": %s\n",
-					i, strerror(ret));
-				snprintf(status.LockBuffer(128), 128,
-						B_TRANSLATE("Error writing video frame %" B_PRId64), i);
-				status.UnlockBuffer();
+				fprintf(stderr, "Error writing video frame %" B_PRId64 ": %s\n", i, strerror(ret));
+				status.SetToFormat(B_TRANSLATE("Error writing video frame %" B_PRId64), i);
 				SetStatusMessage(status.String());
 
 				break;
@@ -572,12 +587,15 @@ MediaConverterApp::_ConvertFile(BMediaFile* inFile, BMediaFile* outFile,
 			currPercent = (int32)completePercent;
 			if (currPercent > lastPercent) {
 				lastPercent = currPercent;
-				snprintf(status.LockBuffer(128), 128,
-					B_TRANSLATE("Writing video track: %" B_PRId32 "%% complete"),
-					currPercent);
-				status.UnlockBuffer();
-				SetStatusMessage(status.String());
+				BString data;
+				double percentValue = (double)currPercent;
 
+				if (fNumberFormat.FormatPercent(data, percentValue / 100) != B_OK) {
+					data.SetToFormat("%" B_PRId32 "%%", currPercent);
+				}
+
+				status.SetToFormat(B_TRANSLATE("Writing video track: %s complete"), data.String());
+				SetStatusMessage(status.String());
 			}
 		}
 		outVidTrack->Flush();
@@ -608,9 +626,7 @@ MediaConverterApp::_ConvertFile(BMediaFile* inFile, BMediaFile* outFile,
 			if ((ret = inAudTrack->ReadFrames(audioBuffer, &framesRead,
 				&mh)) != B_OK) {
 				fprintf(stderr, "Error reading audio frames: %s\n", strerror(ret));
-				snprintf(status.LockBuffer(128), 128,
-					B_TRANSLATE("Error read audio frame %" B_PRId64), i);
-				status.UnlockBuffer();
+				status.SetToFormat(B_TRANSLATE("Error read audio frame %" B_PRId64), i);
 				SetStatusMessage(status.String());
 
 				break;
@@ -619,9 +635,7 @@ MediaConverterApp::_ConvertFile(BMediaFile* inFile, BMediaFile* outFile,
 			if ((ret = outAudTrack->WriteFrames(audioBuffer,
 				framesRead)) != B_OK) {
 				fprintf(stderr, "Error writing audio frames: %s\n",	strerror(ret));
-				snprintf(status.LockBuffer(128), 128,
-					B_TRANSLATE("Error writing audio frame %" B_PRId64), i);
-				status.UnlockBuffer();
+				status.SetToFormat(B_TRANSLATE("Error writing audio frame %" B_PRId64), i);
 				SetStatusMessage(status.String());
 
 				break;
@@ -630,10 +644,14 @@ MediaConverterApp::_ConvertFile(BMediaFile* inFile, BMediaFile* outFile,
 			currPercent = (int32)completePercent;
 			if (currPercent > lastPercent) {
 				lastPercent = currPercent;
-				snprintf(status.LockBuffer(128), 128,
-					B_TRANSLATE("Writing audio track: %" B_PRId32 "%% complete"),
-					currPercent);
-				status.UnlockBuffer();
+				BString data;
+				double percentValue = (double)currPercent;
+
+				if (fNumberFormat.FormatPercent(data, percentValue / 100) != B_OK) {
+					data.SetToFormat("%" B_PRId32 "%%", currPercent);
+				}
+
+				status.SetToFormat(B_TRANSLATE("Writing audio track: %s complete"), data.String());
 				SetStatusMessage(status.String());
 			}
 		}

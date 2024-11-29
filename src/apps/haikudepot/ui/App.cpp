@@ -1,6 +1,6 @@
 /*
  * Copyright 2013, Stephan Aßmus <superstippi@gmx.de>.
- * Copyright 2017-2018, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2017-2024, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
@@ -13,7 +13,9 @@
 #include <Catalog.h>
 #include <Entry.h>
 #include <Message.h>
+#include <package/PackageDefs.h>
 #include <package/PackageInfo.h>
+#include <package/PackageRoster.h>
 #include <Path.h>
 #include <Roster.h>
 #include <Screen.h>
@@ -21,12 +23,14 @@
 
 #include "support.h"
 
-#include "FeaturedPackagesView.h"
+#include "AppUtils.h"
 #include "Logger.h"
 #include "MainWindow.h"
+#include "PackageUtils.h"
 #include "ServerHelper.h"
 #include "ServerSettings.h"
-#include "ScreenshotWindow.h"
+#include "SharedIcons.h"
+#include "StorageUtils.h"
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -40,7 +44,9 @@ App::App()
 	fWindowCount(0),
 	fSettingsRead(false)
 {
+	srand((unsigned int) time(NULL));
 	_CheckPackageDaemonRuns();
+	fIsFirstRun = _CheckIsFirstRun();
 }
 
 
@@ -49,9 +55,7 @@ App::~App()
 	// We cannot let global destructors cleanup static BitmapRef objects,
 	// since calling BBitmap destructors needs a valid BApplication still
 	// around. That's why we do it here.
-	PackageInfo::CleanupDefaultIcon();
-	FeaturedPackagesView::CleanupIcons();
-	ScreenshotWindow::CleanupIcons();
+	SharedIcons::UnsetAllIcons();
 }
 
 
@@ -68,7 +72,7 @@ App::QuitRequested()
 		_StoreSettings(windowSettings);
 	}
 
-	return true;
+	return BApplication::QuitRequested();
 }
 
 
@@ -81,8 +85,22 @@ App::ReadyToRun()
 	BMessage settings;
 	_LoadSettings(settings);
 
+	if (!_CheckTestFile()) {
+		Quit();
+		return;
+	}
+
+	_ClearCacheOnVersionChange();
+
 	fMainWindow = new MainWindow(settings);
 	_ShowWindow(fMainWindow);
+}
+
+
+bool
+App::IsFirstRun()
+{
+	return fIsFirstRun;
 }
 
 
@@ -93,7 +111,7 @@ App::MessageReceived(BMessage* message)
 		case MSG_MAIN_WINDOW_CLOSED:
 		{
 			BMessage windowSettings;
-			if (message->FindMessage("window settings",
+			if (message->FindMessage(KEY_WINDOW_SETTINGS,
 					&windowSettings) == B_OK) {
 				_StoreSettings(windowSettings);
 			}
@@ -114,6 +132,10 @@ App::MessageReceived(BMessage* message)
 
 		case MSG_SERVER_ERROR:
 			ServerHelper::AlertServerJsonRpcError(message);
+			break;
+
+		case MSG_ALERT_SIMPLE_ERROR:
+			_AlertSimpleError(message);
 			break;
 
 		case MSG_SERVER_DATA_CHANGED:
@@ -308,6 +330,34 @@ App::ArgvReceived(int32 argc, char* argv[])
 }
 
 
+/*! This method will display an alert based on a message.  This message arrives
+    from a number of possible background threads / processes in the application.
+*/
+
+void
+App::_AlertSimpleError(BMessage* message)
+{
+	BString alertTitle;
+	BString alertText;
+	int32 typeInt;
+
+	if (message->FindString(KEY_ALERT_TEXT, &alertText) != B_OK)
+		alertText = "?";
+
+	if (message->FindString(KEY_ALERT_TITLE, &alertTitle) != B_OK)
+		alertTitle = B_TRANSLATE("Error");
+
+	if (message->FindInt32(KEY_ALERT_TYPE, &typeInt) != B_OK)
+		typeInt = B_INFO_ALERT;
+
+	BAlert* alert = new BAlert(alertTitle, alertText, B_TRANSLATE("OK"),
+		NULL, NULL, B_WIDTH_AS_USUAL, static_cast<alert_type>(typeInt));
+
+	alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+	alert->Go();
+}
+
+
 // #pragma mark - private
 
 
@@ -331,12 +381,43 @@ App::_Open(const BEntry& entry)
 
 	// Transfer information into PackageInfo
 	PackageInfoRef package(new(std::nothrow) PackageInfo(info), true);
-	if (package.Get() == NULL) {
+	if (!package.IsSet()) {
 		fprintf(stderr, "Could not allocate PackageInfo\n");
 		return;
 	}
 
-	package->SetLocalFilePath(path.Path());
+	PackageLocalInfoRef localInfo = PackageUtils::NewLocalInfo(package);
+	localInfo->SetLocalFilePath(path.Path());
+
+	// Set if the package is active
+	//
+	// TODO(leavengood): It is very awkward having to check these two locations
+	// here, and in many other places in HaikuDepot. Why do clients of the
+	// package kit have to know about these locations?
+	bool active = false;
+	BPackageKit::BPackageRoster roster;
+	status = roster.IsPackageActive(
+		BPackageKit::B_PACKAGE_INSTALLATION_LOCATION_SYSTEM, info, &active);
+	if (status != B_OK) {
+		fprintf(stderr, "Could not check if package was active in system: %s\n",
+			strerror(status));
+		return;
+	}
+	if (!active) {
+		status = roster.IsPackageActive(
+			BPackageKit::B_PACKAGE_INSTALLATION_LOCATION_HOME, info, &active);
+		if (status != B_OK) {
+			fprintf(stderr,
+				"Could not check if package was active in home: %s\n",
+				strerror(status));
+			return;
+		}
+	}
+
+	if (active)
+		localInfo->SetState(ACTIVATED);
+
+	package->SetLocalInfo(localInfo);
 
 	BMessage settings;
 	_LoadSettings(settings);
@@ -358,8 +439,8 @@ bool
 App::_LoadSettings(BMessage& settings)
 {
 	if (!fSettingsRead) {
-		fSettings = true;
-		if (load_settings(&fSettings, "main_settings", "HaikuDepot") != B_OK)
+		fSettingsRead = true;
+		if (load_settings(&fSettings, KEY_MAIN_SETTINGS, "HaikuDepot") != B_OK)
 			fSettings.MakeEmpty();
 	}
 	settings = fSettings;
@@ -390,7 +471,7 @@ App::_StoreSettings(const BMessage& settings)
 		}
 	}
 
-	save_settings(&fSettings, "main_settings", "HaikuDepot");
+	save_settings(&fSettings, KEY_MAIN_SETTINGS, "HaikuDepot");
 }
 
 
@@ -415,7 +496,7 @@ App::_CheckPackageDaemonRuns()
 		alert->SetShortcut(0, B_ESCAPE);
 
 		if (alert->Go() == 0)
-			exit(1);
+			HDFATAL("unable to start without the package daemon running");
 
 		if (!_LaunchPackageDaemon())
 			break;
@@ -448,3 +529,121 @@ App::_LaunchPackageDaemon()
 	return true;
 }
 
+
+/*static*/ bool
+App::_CheckIsFirstRun()
+{
+	BPath testFilePath;
+	bool exists = false;
+	status_t status = StorageUtils::LocalWorkingFilesPath("testfile.txt",
+		testFilePath, false);
+	if (status != B_OK) {
+		HDERROR("unable to establish the location of the test file");
+	}
+	else
+		status = StorageUtils::ExistsObject(testFilePath, &exists, NULL, NULL);
+	return !exists;
+}
+
+
+/*! \brief Checks to ensure that a working file is able to be written.
+    \return false if the startup should be stopped and the application should
+            quit.
+*/
+
+bool
+App::_CheckTestFile()
+{
+	BPath testFilePath;
+	BString pathDescription = "???";
+	status_t result = StorageUtils::LocalWorkingFilesPath("testfile.txt",
+		testFilePath, false);
+
+	if (result == B_OK) {
+		pathDescription = testFilePath.Path();
+		result = StorageUtils::CheckCanWriteTo(testFilePath);
+	}
+
+	if (result != B_OK) {
+		StorageUtils::SetWorkingFilesUnavailable();
+
+		BString msg = B_TRANSLATE("This application writes and reads some"
+			" working files on your computer in order to function. It appears"
+			" that there are problems writing a test file at [%TestFilePath%]."
+			" Check that there are no issues with your local disk or"
+			" permissions that might prevent this application from writing"
+			" files into that directory location. You may choose to acknowledge"
+			" this problem and continue, but some functionality may be"
+			" disabled.");
+		msg.ReplaceAll("%TestFilePath%", pathDescription);
+
+		BAlert* alert = new(std::nothrow) BAlert(
+			B_TRANSLATE("Problem with working files"),
+			msg,
+			B_TRANSLATE("Quit"), B_TRANSLATE("Continue"));
+
+		if (alert->Go() == 0)
+			return false;
+	}
+
+	return true;
+}
+
+
+/*!	This method will check to see if the version of the application has changed.
+	If it has changed then it will delete all of the contents of the cache
+	directory.  This will mean that when application logic changes, it need not
+	bother to migrate the cached files.  Also any old cached files will be
+	cleared out that no longer serve any purpose.
+
+	Errors arising in this logic need not prevent the application from failing
+	to start as this is just a clean-up.
+*/
+
+void
+App::_ClearCacheOnVersionChange()
+{
+	BString version;
+
+	if (AppUtils::GetAppVersionString(version) != B_OK) {
+		HDERROR("clear cache; unable to get the application version");
+		return;
+	}
+
+	BPath lastVersionPath;
+	if (StorageUtils::LocalWorkingFilesPath(
+			"version.txt", lastVersionPath) != B_OK) {
+		HDERROR("clear cache; unable to get version file path");
+		return;
+	}
+
+	bool exists;
+	off_t size;
+
+	if (StorageUtils::ExistsObject(
+		lastVersionPath, &exists, NULL, &size) != B_OK) {
+		HDERROR("clear cache; unable to check version file exists");
+		return;
+	}
+
+	BString lastVersion;
+
+	if (exists && StorageUtils::AppendToString(lastVersionPath, lastVersion)
+			!= B_OK) {
+		HDERROR("clear cache; unable to read the version from [%s]",
+			lastVersionPath.Path());
+		return;
+	}
+
+	if (lastVersion != version) {
+		HDINFO("last version [%s] and current version [%s] do not match"
+			" -> will flush cache", lastVersion.String(), version.String());
+		StorageUtils::RemoveWorkingDirectoryContents();
+		HDINFO("will write version [%s] to [%s]",
+			version.String(), lastVersionPath.Path());
+		StorageUtils::AppendToFile(version, lastVersionPath);
+	} else {
+		HDINFO("last version [%s] and current version [%s] match"
+		 	" -> cache retained", lastVersion.String(), version.String());
+	}
+}

@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2006 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5211/ar5211_attach.c 272292 2014-09-30 03:19:29Z adrian $
  */
 #include "opt_ah.h"
 
@@ -135,6 +135,7 @@ static const struct ath_hal_private ar5211hal = {{
 	.ah_getCTSTimeout		= ar5211GetCTSTimeout,
 	.ah_setDecompMask		= ar5211SetDecompMask,
 	.ah_setCoverageClass		= ar5211SetCoverageClass,
+	.ah_setQuiet			= ar5211SetQuiet,
 	.ah_get11nExtBusy		= ar5211Get11nExtBusy,
 	.ah_getMibCycleCounts		= ar5211GetMibCycleCounts,
 	.ah_setChainMasks		= ar5211SetChainMasks,
@@ -142,6 +143,8 @@ static const struct ath_hal_private ar5211hal = {{
 	.ah_getDfsThresh		= ar5211GetDfsThresh,
 	/* XXX procRadarEvent */
 	/* XXX isFastClockEnabled */
+	.ah_setNav			= ar5211SetNav,
+	.ah_getNav			= ar5211GetNav,
 
 	/* Key Cache Functions */
 	.ah_getKeyCacheSize		= ar5211GetKeyCacheSize,
@@ -520,7 +523,8 @@ ar5211FillCapabilityInfo(struct ath_hal *ah)
 		pCap->halRfSilentSupport = AH_TRUE;
 	}
 
-	pCap->halTstampPrecision = 13;
+	pCap->halRxTstampPrecision = 13;
+	pCap->halTxTstampPrecision = 16;
 	pCap->halIntrMask = HAL_INT_COMMON
 			| HAL_INT_RX
 			| HAL_INT_TX

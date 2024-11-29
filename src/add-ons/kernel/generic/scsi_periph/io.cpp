@@ -15,6 +15,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include <AutoDeleter.h>
 #include <kernel.h>
 #include <syscall_restart.h>
 
@@ -45,63 +46,66 @@ inquiry(scsi_periph_device_info *device, scsi_inquiry *inquiry)
 
 
 static status_t
-vpd_page_inquiry(scsi_periph_device_info *device, uint8 page, void* data,
-	uint16 length)
+vpd_page_inquiry(scsi_periph_device_info* device, scsi_ccb* ccb,
+	uint8 page, void* data, uint16 length)
 {
 	SHOW_FLOW0(0, "");
 
-	scsi_ccb* ccb = device->scsi->alloc_ccb(device->scsi_device);
-	if (ccb == NULL)
-		return B_NO_MEMORY;
-
-	scsi_cmd_inquiry *cmd = (scsi_cmd_inquiry *)ccb->cdb;
+	scsi_cmd_inquiry* cmd = (scsi_cmd_inquiry*)ccb->cdb;
 	memset(cmd, 0, sizeof(scsi_cmd_inquiry));
 	cmd->opcode = SCSI_OP_INQUIRY;
 	cmd->lun = ccb->target_lun;
 	cmd->evpd = 1;
 	cmd->page_code = page;
+	// the scsi_cmd_inquiry structure follows an older SCSI standard
+	// which uses only 8 bits for allocation_length
+	if (length > UINT8_MAX)
+		return EINVAL;
 	cmd->allocation_length = length;
 
 	ccb->flags = SCSI_DIR_IN;
 	ccb->cdb_length = sizeof(scsi_cmd_inquiry);
-
 	ccb->sort = -1;
 	ccb->timeout = device->std_timeout;
 
 	ccb->data = (uint8*)data;
-	ccb->sg_list = NULL;
 	ccb->data_length = length;
+	ccb->sg_list = NULL;
 
-	status_t status = periph_safe_exec(device, ccb);
-
-	device->scsi->free_ccb(ccb);
-
-	return status;
+	return periph_safe_exec(device, ccb);
 }
 
 
 status_t
-vpd_page_get(scsi_periph_device_info *device, uint8 page, void* data,
-	uint16 length)
+vpd_page_get(scsi_periph_device_info* device, scsi_ccb* request,
+	uint8 page, void* data, uint16 length)
 {
 	SHOW_FLOW0(0, "");
 
-	status_t status = vpd_page_inquiry(device, 0, data, length);
+	if (page == SCSI_PAGE_SUPPORTED_VPD)
+		return vpd_page_inquiry(device, request, page, data, length);
+
+	const uint16 bufferLength = 252;
+		// maximum word-aligned value that fits in a byte,
+		// theoretical maximum is offsetof(scsi_page_list, pages) + UINT8_MAX;
+	uint8 buffer[bufferLength];
+	scsi_page_list* vpdPage = (scsi_page_list*)buffer;
+	memset(vpdPage, 0, bufferLength);
+
+	status_t status = vpd_page_inquiry(device, request,
+		SCSI_PAGE_SUPPORTED_VPD, vpdPage, bufferLength);
 	if (status != B_OK)
-		return status; // or B_BAD_VALUE
+		return status;
 
-	if (page == 0)
-		return B_OK;
+	if (vpdPage->page_code != SCSI_PAGE_SUPPORTED_VPD)
+		return B_ERROR;
 
-	scsi_page_list *list_data = (scsi_page_list*)data;
-	int page_length = min_c(list_data->page_length, length -
-		offsetof(scsi_page_list, pages));
-	for (int i = 0; i < page_length; i++) {
-		if (list_data->pages[i] == page)
-			return vpd_page_inquiry(device, page, data, length);
+	uint16 pageLength = min_c(vpdPage->page_length,
+		bufferLength - offsetof(scsi_page_list, pages));
+	for (uint16 i = 0; i < pageLength; i++) {
+		if (vpdPage->pages[i] == page)
+			return vpd_page_inquiry(device, request, page, data, length);
 	}
-
-	// TODO buffer might be not big enough
 
 	return B_BAD_VALUE;
 }
@@ -137,15 +141,37 @@ raw_command(scsi_periph_device_info *device, raw_device_command *cmd)
 		return B_NO_MEMORY;
 
 	request->flags = 0;
+	bool dataIn = (cmd->flags & B_RAW_DEVICE_DATA_IN) != 0;
+	bool dataOut = !dataIn && cmd->data_length != 0;
 
-	if (cmd->flags & B_RAW_DEVICE_DATA_IN)
+	void* buffer = cmd->data;
+	MemoryDeleter bufferDeleter;
+	if (buffer != NULL) {
+		if (IS_USER_ADDRESS(buffer)) {
+			buffer = malloc(cmd->data_length);
+			if (buffer == NULL) {
+				device->scsi->free_ccb(request);
+				return B_NO_MEMORY;
+			}
+			bufferDeleter.SetTo(buffer);
+			if (dataOut
+				&& user_memcpy(buffer, cmd->data, cmd->data_length) != B_OK) {
+				goto bad_address;
+			}
+		} else {
+			if (is_called_via_syscall())
+				goto bad_address;
+		}
+	}
+
+	if (dataIn)
 		request->flags |= SCSI_DIR_IN;
-	else if (cmd->data_length)
+	else if (dataOut)
 		request->flags |= SCSI_DIR_OUT;
 	else
 		request->flags |= SCSI_DIR_NONE;
 
-	request->data = (uint8*)cmd->data;
+	request->data = (uint8*)buffer;
 	request->sg_list = NULL;
 	request->data_length = cmd->data_length;
 	request->sort = -1;
@@ -162,10 +188,22 @@ raw_command(scsi_periph_device_info *device, raw_device_command *cmd)
 	cmd->cam_status = request->subsys_status;
 	cmd->scsi_status = request->device_status;
 
-	if ((request->subsys_status & SCSI_AUTOSNS_VALID) != 0 && cmd->sense_data) {
-		memcpy(cmd->sense_data, request->sense, min_c(cmd->sense_data_length,
-			(size_t)SCSI_MAX_SENSE_SIZE - request->sense_resid));
+	if ((request->subsys_status & SCSI_AUTOSNS_VALID) != 0
+		&& cmd->sense_data != NULL) {
+		size_t length = min_c(cmd->sense_data_length,
+			(size_t)SCSI_MAX_SENSE_SIZE - request->sense_resid);
+		if (IS_USER_ADDRESS(cmd->sense_data)) {
+			if (user_memcpy(cmd->sense_data, request->sense, length) != B_OK)
+				goto bad_address;
+		} else if (is_called_via_syscall()) {
+			goto bad_address;
+		} else {
+			memcpy(cmd->sense_data, request->sense, length);
+		}
 	}
+
+	if (dataIn && user_memcpy(cmd->data, buffer, cmd->data_length) != B_OK)
+		goto bad_address;
 
 	if ((cmd->flags & B_RAW_DEVICE_REPORT_RESIDUAL) != 0) {
 		// this is a bit strange, see Be's sample code where I pinched this from;
@@ -178,6 +216,11 @@ raw_command(scsi_periph_device_info *device, raw_device_command *cmd)
 	device->scsi->free_ccb(request);
 
 	return B_OK;
+
+bad_address:
+	device->scsi->free_ccb(request);
+
+	return B_BAD_ADDRESS;
 }
 
 
@@ -299,9 +342,12 @@ read_write(scsi_periph_device_info *device, scsi_ccb *request,
 		//if (status != B_OK)
 		//	return status;
 
+		ConditionVariableEntry entry;
+		request->completion_cond.Add(&entry);
+
 		device->scsi->async_io(request);
 
-		acquire_sem(request->completion_sem);
+		entry.Wait();
 
 		// ask generic peripheral layer what to do now
 		res = periph_check_error(device, request);
@@ -352,6 +398,8 @@ periph_ioctl(scsi_periph_handle_info *handle, int op, void *buffer,
 		case B_GET_MEDIA_STATUS:
 		{
 			status_t status = B_OK;
+			if (length < sizeof(status))
+				return B_BUFFER_OVERFLOW;
 
 			if (handle->device->removable)
 				status = periph_get_media_status(handle);
@@ -400,10 +448,14 @@ periph_ioctl(scsi_periph_handle_info *handle, int op, void *buffer,
 		}
 
 		case B_SCSI_INQUIRY:
+			if (length < sizeof(scsi_inquiry))
+				return B_BUFFER_OVERFLOW;
 			return inquiry(handle->device, (scsi_inquiry *)buffer);
 
 		case B_SCSI_PREVENT_ALLOW:
 			bool result;
+			if (length < sizeof(result))
+				return B_BUFFER_OVERFLOW;
 			if (IS_USER_ADDRESS(buffer)) {
 				if (user_memcpy(&result, buffer, sizeof(result)) != B_OK)
 					return B_BAD_ADDRESS;
@@ -415,8 +467,27 @@ periph_ioctl(scsi_periph_handle_info *handle, int op, void *buffer,
 			return prevent_allow(handle->device, result);
 
 		case B_RAW_DEVICE_COMMAND:
-			return raw_command(handle->device, (raw_device_command*)buffer);
-
+		{
+			raw_device_command command;
+			raw_device_command* commandBuffer;
+			if (length < sizeof(command))
+				return B_BUFFER_OVERFLOW;
+			if (IS_USER_ADDRESS(buffer)) {
+				if (user_memcpy(&command, buffer, sizeof(command)) != B_OK)
+					return B_BAD_ADDRESS;
+				commandBuffer = &command;
+			} else if (is_called_via_syscall()) {
+				return B_BAD_ADDRESS;
+			} else {
+				commandBuffer = (raw_device_command*)buffer;
+			}
+			status_t status = raw_command(handle->device, commandBuffer);
+			if (status == B_OK && commandBuffer == &command) {
+				if (user_memcpy(buffer, &command, sizeof(command)) != B_OK)
+					status = B_BAD_ADDRESS;
+			}
+			return status;
+		}
 		default:
 			if (handle->device->scsi->ioctl != NULL) {
 				return handle->device->scsi->ioctl(handle->device->scsi_device,

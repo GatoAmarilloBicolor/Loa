@@ -3,12 +3,10 @@
  * Copyright 2013-2014, Stephan Aßmus <superstippi@gmx.de>.
  * Copyright 2013, Rene Gollent, rene@gollent.com.
  * Copyright 2013, Ingo Weinhold, ingo_weinhold@gmx.de.
- * Copyright 2016-2018, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2016-2024, Andrew Lindesay <apl@lindesay.co.nz>.
  * Copyright 2017, Julian Harnath <julian.harnath@rwth-aachen.de>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
-
-
 #include "MainWindow.h"
 
 #include <map>
@@ -24,6 +22,7 @@
 #include <LayoutBuilder.h>
 #include <MenuBar.h>
 #include <MenuItem.h>
+#include <MessageRunner.h>
 #include <Messenger.h>
 #include <Roster.h>
 #include <Screen.h>
@@ -32,34 +31,30 @@
 #include <StringView.h>
 #include <TabView.h>
 
-#include <package/Context.h>
-#include <package/manager/Exceptions.h>
-#include <package/manager/RepositoryBuilder.h>
-#include <package/RefreshRepositoryRequest.h>
-#include <package/PackageRoster.h>
-#include "package/RepositoryCache.h"
-#include <package/solver/SolverPackage.h>
-#include <package/solver/SolverProblem.h>
-#include <package/solver/SolverProblemSolution.h>
-#include <package/solver/SolverRepository.h>
-#include <package/solver/SolverResult.h>
-
+#include "AppUtils.h"
 #include "AutoDeleter.h"
 #include "AutoLocker.h"
 #include "DecisionProvider.h"
 #include "FeaturedPackagesView.h"
 #include "FilterView.h"
-#include "JobStateListener.h"
+#include "LocaleUtils.h"
 #include "Logger.h"
 #include "PackageInfoView.h"
 #include "PackageListView.h"
 #include "PackageManager.h"
+#include "PackageUtils.h"
+#include "ProcessCoordinator.h"
+#include "ProcessCoordinatorFactory.h"
 #include "RatePackageWindow.h"
-#include "RepositoryUrlUtils.h"
-#include "support.h"
+#include "RatingUtils.h"
 #include "ScreenshotWindow.h"
+#include "SettingsWindow.h"
+#include "ShuttingDownWindow.h"
+#include "ToLatestUserUsageConditionsWindow.h"
 #include "UserLoginWindow.h"
+#include "UserUsageConditionsWindow.h"
 #include "WorkStatusView.h"
+#include "support.h"
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -67,21 +62,33 @@
 
 
 enum {
-	MSG_MODEL_WORKER_DONE		= 'mmwd',
-	MSG_REFRESH_REPOS			= 'mrrp',
-	MSG_MANAGE_REPOS			= 'mmrp',
-	MSG_SOFTWARE_UPDATER		= 'mswu',
-	MSG_LOG_IN					= 'lgin',
-	MSG_LOG_OUT					= 'lgot',
-	MSG_AUTHORIZATION_CHANGED	= 'athc',
-	MSG_PACKAGE_CHANGED			= 'pchd',
+	MSG_REFRESH_REPOS						= 'mrrp',
+	MSG_MANAGE_REPOS						= 'mmrp',
+	MSG_SOFTWARE_UPDATER					= 'mswu',
+	MSG_SETTINGS							= 'stgs',
+	MSG_LOG_IN								= 'lgin',
+	MSG_AUTHORIZATION_CHANGED				= 'athc',
+	MSG_CATEGORIES_LIST_CHANGED				= 'clic',
+	MSG_PACKAGE_CHANGED						= 'pchd',
+	MSG_PROCESS_COORDINATOR_CHANGED			= 'pccd',
+	MSG_WORK_STATUS_CHANGE					= 'wsch',
+	MSG_WORK_STATUS_CLEAR					= 'wscl',
+	MSG_INCREMENT_VIEW_COUNTER				= 'icrv',
+	MSG_SCREENSHOT_CACHED					= 'ssca',
 
-	MSG_SHOW_AVAILABLE_PACKAGES	= 'savl',
-	MSG_SHOW_INSTALLED_PACKAGES	= 'sins',
-	MSG_SHOW_SOURCE_PACKAGES	= 'ssrc',
-	MSG_SHOW_DEVELOP_PACKAGES	= 'sdvl'
+	MSG_CHANGE_PACKAGE_LIST_VIEW_MODE		= 'cplm',
+	MSG_SHOW_AVAILABLE_PACKAGES				= 'savl',
+	MSG_SHOW_INSTALLED_PACKAGES				= 'sins',
+	MSG_SHOW_SOURCE_PACKAGES				= 'ssrc',
+	MSG_SHOW_DEVELOP_PACKAGES				= 'sdvl'
 };
 
+#define KEY_ERROR_STATUS				"errorStatus"
+
+const bigtime_t kIncrementViewCounterDelayMicros = 3 * 1000 * 1000;
+
+#define TAB_PROMINENT_PACKAGES	0
+#define TAB_ALL_PACKAGES		1
 
 using namespace BPackageKit;
 using namespace BPackageKit::BManager::BPrivate;
@@ -103,9 +110,9 @@ struct RefreshWorkerParameters {
 };
 
 
-class MessageModelListener : public ModelListener {
+class MainWindowModelListener : public ModelListener {
 public:
-	MessageModelListener(const BMessenger& messenger)
+	MainWindowModelListener(const BMessenger& messenger)
 		:
 		fMessenger(messenger)
 	{
@@ -117,8 +124,48 @@ public:
 			fMessenger.SendMessage(MSG_AUTHORIZATION_CHANGED);
 	}
 
+	virtual void CategoryListChanged()
+	{
+		if (fMessenger.IsValid())
+			fMessenger.SendMessage(MSG_CATEGORIES_LIST_CHANGED);
+	}
+
+	virtual void ScreenshotCached(const ScreenshotCoordinate& coordinate)
+	{
+		if (fMessenger.IsValid()) {
+			BMessage message(MSG_SCREENSHOT_CACHED);
+			if (coordinate.Archive(&message) != B_OK)
+				debugger("unable to serialize a screenshot coordinate");
+			fMessenger.SendMessage(&message);
+		}
+	}
+
 private:
 	BMessenger	fMessenger;
+};
+
+
+class MainWindowPackageInfoListener : public PackageInfoListener {
+public:
+	MainWindowPackageInfoListener(MainWindow* mainWindow)
+		:
+		fMainWindow(mainWindow)
+	{
+	}
+
+	~MainWindowPackageInfoListener()
+	{
+	}
+
+private:
+	// PackageInfoListener
+	virtual	void PackageChanged(const PackageInfoEvent& event)
+	{
+		fMainWindow->PackageChanged(event);
+	}
+
+private:
+	MainWindow*	fMainWindow;
 };
 
 
@@ -128,15 +175,25 @@ MainWindow::MainWindow(const BMessage& settings)
 		B_DOCUMENT_WINDOW_LOOK, B_NORMAL_WINDOW_FEEL,
 		B_ASYNCHRONOUS_CONTROLS | B_AUTO_UPDATE_SIZE_LIMITS),
 	fScreenshotWindow(NULL),
+	fShuttingDownWindow(NULL),
 	fUserMenu(NULL),
 	fLogInItem(NULL),
 	fLogOutItem(NULL),
-	fModelListener(new MessageModelListener(BMessenger(this)), true),
-	fBulkLoadStateMachine(&fModel),
-	fTerminating(false),
+	fUsersUserUsageConditionsMenuItem(NULL),
+	fModelListener(new MainWindowModelListener(BMessenger(this)), true),
+	fCoordinator(NULL),
+	fShouldCloseWhenNoProcessesToCoordinate(false),
 	fSinglePackageMode(false),
-	fModelWorker(B_BAD_THREAD_ID)
+	fIncrementViewCounterDelayedRunner(NULL)
 {
+	if ((fCoordinatorRunningSem = create_sem(1, "ProcessCoordinatorSem")) < B_OK)
+		debugger("unable to create the process coordinator semaphore");
+
+	_InitPreferredLanguage();
+
+	fPackageInfoListener = PackageInfoListenerRef(
+		new MainWindowPackageInfoListener(this), true);
+
 	BMenuBar* menuBar = new BMenuBar("Main Menu");
 	_BuildMenu(menuBar);
 
@@ -147,20 +204,19 @@ MainWindow::MainWindow(const BMessage& settings)
 		menuBar->MaxSize().height));
 
 	fFilterView = new FilterView();
-	fFeaturedPackagesView = new FeaturedPackagesView();
-	fPackageListView = new PackageListView(fModel.Lock());
-	fPackageInfoView = new PackageInfoView(fModel.Lock(), this);
+	fFeaturedPackagesView = new FeaturedPackagesView(fModel);
+	fPackageListView = new PackageListView(&fModel);
+	fPackageInfoView = new PackageInfoView(&fModel, this);
 
 	fSplitView = new BSplitView(B_VERTICAL, 5.0f);
 
 	fWorkStatusView = new WorkStatusView("work status");
 	fPackageListView->AttachWorkStatusView(fWorkStatusView);
 
-	BView* listArea = new BView("list area", 0);
-	fListLayout = new BCardLayout();
-	listArea->SetLayout(fListLayout);
-	listArea->AddChild(fFeaturedPackagesView);
-	listArea->AddChild(fPackageListView);
+	fListTabs = new TabView(BMessenger(this),
+		BMessage(MSG_CHANGE_PACKAGE_LIST_VIEW_MODE), "list tabs");
+	fListTabs->AddTab(fFeaturedPackagesView);
+	fListTabs->AddTab(fPackageListView);
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0.0f)
 		.AddGroup(B_HORIZONTAL, 0.0f)
@@ -170,7 +226,7 @@ MainWindow::MainWindow(const BMessage& settings)
 		.Add(fFilterView)
 		.AddSplit(fSplitView)
 			.AddGroup(B_VERTICAL)
-				.Add(listArea)
+				.Add(fListTabs)
 				.SetInsets(
 					B_USE_DEFAULT_SPACING, 0.0f,
 					B_USE_DEFAULT_SPACING, 0.0f)
@@ -185,116 +241,160 @@ MainWindow::MainWindow(const BMessage& settings)
 
 	fModel.AddListener(fModelListener);
 
-	// Restore settings
 	BMessage columnSettings;
 	if (settings.FindMessage("column settings", &columnSettings) == B_OK)
 		fPackageListView->LoadState(&columnSettings);
 
-	bool showOption;
-	if (settings.FindBool("show featured packages", &showOption) == B_OK)
-		fModel.SetShowFeaturedPackages(showOption);
-	if (settings.FindBool("show available packages", &showOption) == B_OK)
-		fModel.SetShowAvailablePackages(showOption);
-	if (settings.FindBool("show installed packages", &showOption) == B_OK)
-		fModel.SetShowInstalledPackages(showOption);
-	if (settings.FindBool("show develop packages", &showOption) == B_OK)
-		fModel.SetShowDevelopPackages(showOption);
-	if (settings.FindBool("show source packages", &showOption) == B_OK)
-		fModel.SetShowSourcePackages(showOption);
+	_RestoreModelSettings(settings);
+	_MaybePromptCanShareAnonymousUserData(settings);
 
-	if (fModel.ShowFeaturedPackages())
-		fListLayout->SetVisibleItem((int32)0);
+	if (fModel.PackageListViewMode() == PROMINENT)
+		fListTabs->Select(TAB_PROMINENT_PACKAGES);
 	else
-		fListLayout->SetVisibleItem(1);
+		fListTabs->Select(TAB_ALL_PACKAGES);
 
-	_RestoreUserName(settings);
+	_RestoreNickname(settings);
+	_UpdateAuthorization();
 	_RestoreWindowFrame(settings);
-
-	atomic_set(&fPackagesToShowListID, 0);
 
 	// start worker threads
 	BPackageRoster().StartWatching(this,
 		B_WATCH_PACKAGE_INSTALLATION_LOCATIONS);
 
-	_StartRefreshWorker();
-
-	_InitWorkerThreads();
+	_AdoptModel();
+	_StartBulkLoad();
 }
 
 
-MainWindow::MainWindow(const BMessage& settings, const PackageInfoRef& package)
+/*!	This constructor is used when the application is loaded for the purpose of
+	viewing an HPKG file.
+*/
+
+MainWindow::MainWindow(const BMessage& settings, PackageInfoRef& package)
 	:
 	BWindow(BRect(50, 50, 650, 350), B_TRANSLATE_SYSTEM_NAME("HaikuDepot"),
 		B_DOCUMENT_WINDOW_LOOK, B_NORMAL_WINDOW_FEEL,
 		B_ASYNCHRONOUS_CONTROLS | B_AUTO_UPDATE_SIZE_LIMITS),
+	fFeaturedPackagesView(NULL),
+	fPackageListView(NULL),
 	fWorkStatusView(NULL),
 	fScreenshotWindow(NULL),
+	fShuttingDownWindow(NULL),
 	fUserMenu(NULL),
 	fLogInItem(NULL),
 	fLogOutItem(NULL),
-	fModelListener(new MessageModelListener(BMessenger(this)), true),
-	fBulkLoadStateMachine(&fModel),
-	fTerminating(false),
+	fUsersUserUsageConditionsMenuItem(NULL),
+	fModelListener(new MainWindowModelListener(BMessenger(this)), true),
+	fCoordinator(NULL),
+	fShouldCloseWhenNoProcessesToCoordinate(false),
 	fSinglePackageMode(true),
-	fModelWorker(B_BAD_THREAD_ID)
+	fIncrementViewCounterDelayedRunner(NULL)
 {
+	BString title = B_TRANSLATE("HaikuDepot - %PackageName% %PackageVersion%");
+	title.ReplaceAll("%PackageName%", package->Name());
+	title.ReplaceAll("%PackageVersion%", package->Version().ToString());
+	SetTitle(title);
+
+	if ((fCoordinatorRunningSem = create_sem(1, "ProcessCoordinatorSem")) < B_OK)
+		debugger("unable to create the process coordinator semaphore");
+
+	_InitPreferredLanguage();
+
+	fPackageInfoListener = PackageInfoListenerRef(
+		new MainWindowPackageInfoListener(this), true);
+
 	fFilterView = new FilterView();
-	fPackageListView = new PackageListView(fModel.Lock());
-	fPackageInfoView = new PackageInfoView(fModel.Lock(), this);
+	fPackageInfoView = new PackageInfoView(&fModel, this);
+	fWorkStatusView = new WorkStatusView("work status");
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL)
 		.Add(fPackageInfoView)
+		.Add(fWorkStatusView)
 		.SetInsets(0, B_USE_WINDOW_INSETS, 0, 0)
 	;
 
 	fModel.AddListener(fModelListener);
 
+	// add the single package into the model so that any internal
+	// business logic is able to find the package.
+	DepotInfoRef depot(new DepotInfo("single-pkg-depot"), true);
+	depot->AddPackage(package);
+	fModel.MergeOrAddDepot(depot);
+
 	// Restore settings
-	_RestoreUserName(settings);
+	_RestoreNickname(settings);
+	_UpdateAuthorization();
 	_RestoreWindowFrame(settings);
 
 	fPackageInfoView->SetPackage(package);
 
-	_InitWorkerThreads();
+	// start worker threads
+	BPackageRoster().StartWatching(this,
+		B_WATCH_PACKAGE_INSTALLATION_LOCATIONS);
 }
 
 
 MainWindow::~MainWindow()
 {
+	_SpinUntilProcessCoordinatorComplete();
+	delete_sem(fCoordinatorRunningSem);
+	fCoordinatorRunningSem = 0;
+
 	BPackageRoster().StopWatching(this);
 
-	fTerminating = true;
-	if (fModelWorker >= 0)
-		wait_for_thread(fModelWorker, NULL);
+	if (fScreenshotWindow != NULL) {
+		if (fScreenshotWindow->Lock())
+			fScreenshotWindow->Quit();
+	}
 
-	delete_sem(fPendingActionsSem);
-	if (fPendingActionsWorker >= 0)
-		wait_for_thread(fPendingActionsWorker, NULL);
+	if (fShuttingDownWindow != NULL) {
+		if (fShuttingDownWindow->Lock())
+			fShuttingDownWindow->Quit();
+	}
 
-	delete_sem(fPackageToPopulateSem);
-	if (fPopulatePackageWorker >= 0)
-		wait_for_thread(fPopulatePackageWorker, NULL);
-
-	delete_sem(fNewPackagesToShowSem);
-	delete_sem(fShowPackagesAcknowledgeSem);
-	if (fShowPackagesWorker >= 0)
-		wait_for_thread(fShowPackagesWorker, NULL);
-
-	if (fScreenshotWindow != NULL && fScreenshotWindow->Lock())
-		fScreenshotWindow->Quit();
+	// We must clear the model early to release references.
+	fModel.Clear();
 }
 
 
 bool
 MainWindow::QuitRequested()
 {
+
+	_StopProcessCoordinators();
+
+	// If there are any processes in flight we need to be careful to make
+	// sure that they are cleanly completed before actually quitting.  By
+	// turning on the `fShouldCloseWhenNoProcessesToCoordinate` flag, when
+	// the process coordination has completed then it will detect this and
+	// quit again.
+
+	{
+		AutoLocker<BLocker> lock(&fCoordinatorLock);
+		fShouldCloseWhenNoProcessesToCoordinate = true;
+
+		if (fCoordinator != NULL) {
+			HDINFO("a coordinator is running --> will wait before quitting...");
+
+			if (fShuttingDownWindow == NULL)
+				fShuttingDownWindow = new ShuttingDownWindow(this);
+			fShuttingDownWindow->Show();
+
+			return false;
+		}
+	}
+
 	BMessage settings;
 	StoreSettings(settings);
-
 	BMessage message(MSG_MAIN_WINDOW_CLOSED);
-	message.AddMessage("window settings", &settings);
-
+	message.AddMessage(KEY_WINDOW_SETTINGS, &settings);
 	be_app->PostMessage(&message);
+
+	if (fShuttingDownWindow != NULL) {
+		if (fShuttingDownWindow->Lock())
+			fShuttingDownWindow->Quit();
+		fShuttingDownWindow = NULL;
+	}
 
 	return true;
 }
@@ -304,12 +404,13 @@ void
 MainWindow::MessageReceived(BMessage* message)
 {
 	switch (message->what) {
-		case MSG_MODEL_WORKER_DONE:
+		case MSG_BULK_LOAD_DONE:
 		{
-			fModelWorker = B_BAD_THREAD_ID;
-			_AdoptModel();
-			_UpdateAvailableRepositories();
-			fWorkStatusView->SetIdle();
+			int64 errorStatus64;
+			if (message->FindInt64(KEY_ERROR_STATUS, &errorStatus64) == B_OK)
+				_BulkLoadCompleteReceived((status_t) errorStatus64);
+			else
+				HDERROR("expected [%s] value in message", KEY_ERROR_STATUS);
 			break;
 		}
 		case B_SIMPLE_DATA:
@@ -318,13 +419,19 @@ MainWindow::MessageReceived(BMessage* message)
 			break;
 
 		case B_PACKAGE_UPDATE:
-			// TODO: We should do a more selective update depending on the
-			// "event", "location", and "change count" fields!
-			_StartRefreshWorker(false);
+			_HandleExternalPackageUpdateMessageReceived(message);
 			break;
 
 		case MSG_REFRESH_REPOS:
-			_StartRefreshWorker(true);
+			_StartBulkLoad(true);
+			break;
+
+		case MSG_WORK_STATUS_CLEAR:
+			_HandleWorkStatusClear();
+			break;
+
+		case MSG_WORK_STATUS_CHANGE:
+			_HandleWorkStatusChangeMessageReceived(message);
 			break;
 
 		case MSG_MANAGE_REPOS:
@@ -339,28 +446,44 @@ MainWindow::MessageReceived(BMessage* message)
 			_OpenLoginWindow(BMessage());
 			break;
 
+		case MSG_SETTINGS:
+			_OpenSettingsWindow();
+			break;
+
 		case MSG_LOG_OUT:
-			fModel.SetUsername("");
+			fModel.SetNickname("");
+			break;
+
+		case MSG_VIEW_LATEST_USER_USAGE_CONDITIONS:
+			_ViewUserUsageConditions(LATEST);
+			break;
+
+		case MSG_VIEW_USERS_USER_USAGE_CONDITIONS:
+			_ViewUserUsageConditions(USER);
 			break;
 
 		case MSG_AUTHORIZATION_CHANGED:
+			_StartUserVerify();
 			_UpdateAuthorization();
 			break;
 
-		case MSG_SHOW_FEATURED_PACKAGES:
-			{
-				BAutolock locker(fModel.Lock());
-				fModel.SetShowFeaturedPackages(
-					!fModel.ShowFeaturedPackages());
-			}
-			_AdoptModel();
+		case MSG_SCREENSHOT_CACHED:
+			_HandleScreenshotCached(message);
+			break;
+
+		case MSG_CATEGORIES_LIST_CHANGED:
+			fFilterView->AdoptModel(fModel);
+			break;
+
+		case MSG_CHANGE_PACKAGE_LIST_VIEW_MODE:
+			_HandleChangePackageListViewMode();
 			break;
 
 		case MSG_SHOW_AVAILABLE_PACKAGES:
 			{
 				BAutolock locker(fModel.Lock());
-				fModel.SetShowAvailablePackages(
-					!fModel.ShowAvailablePackages());
+				PackageFilterModel* filterModel = fModel.PackageFilter();
+				filterModel->SetShowAvailablePackages(!filterModel->ShowAvailablePackages());
 			}
 			_AdoptModel();
 			break;
@@ -368,8 +491,8 @@ MainWindow::MessageReceived(BMessage* message)
 		case MSG_SHOW_INSTALLED_PACKAGES:
 			{
 				BAutolock locker(fModel.Lock());
-				fModel.SetShowInstalledPackages(
-					!fModel.ShowInstalledPackages());
+				PackageFilterModel* filterModel = fModel.PackageFilter();
+				filterModel->SetShowInstalledPackages(!filterModel->ShowInstalledPackages());
 			}
 			_AdoptModel();
 			break;
@@ -377,7 +500,8 @@ MainWindow::MessageReceived(BMessage* message)
 		case MSG_SHOW_SOURCE_PACKAGES:
 			{
 				BAutolock locker(fModel.Lock());
-				fModel.SetShowSourcePackages(!fModel.ShowSourcePackages());
+				PackageFilterModel* filterModel = fModel.PackageFilter();
+				filterModel->SetShowSourcePackages(!filterModel->ShowSourcePackages());
 			}
 			_AdoptModel();
 			break;
@@ -385,7 +509,8 @@ MainWindow::MessageReceived(BMessage* message)
 		case MSG_SHOW_DEVELOP_PACKAGES:
 			{
 				BAutolock locker(fModel.Lock());
-				fModel.SetShowDevelopPackages(!fModel.ShowDevelopPackages());
+				PackageFilterModel* filterModel = fModel.PackageFilter();
+				filterModel->SetShowDevelopPackages(!filterModel->ShowDevelopPackages());
 			}
 			_AdoptModel();
 			break;
@@ -400,30 +525,32 @@ MainWindow::MessageReceived(BMessage* message)
 				if (fPackageInfoView->Package()->Name() == name) {
 					_PopulatePackageAsync(true);
 				} else {
-					if (Logger::IsDebugEnabled()) {
-						printf("pkg [%s] is updated on the server, but is "
-							"not selected so will not be updated.\n",
-							name.String());
-					}
+					HDDEBUG("pkg [%s] is updated on the server, but is "
+						"not selected so will not be updated.",
+						name.String());
 				}
 			}
-        	break;
-        }
+			break;
+		}
+
+		case MSG_INCREMENT_VIEW_COUNTER:
+			_HandleIncrementViewCounter(message);
+			break;
 
 		case MSG_PACKAGE_SELECTED:
 		{
 			BString name;
 			if (message->FindString("name", &name) == B_OK) {
-				BAutolock locker(fModel.Lock());
-				int count = fVisiblePackages.CountItems();
-				for (int i = 0; i < count; i++) {
-					const PackageInfoRef& package
-						= fVisiblePackages.ItemAtFast(i);
-					if (package.Get() != NULL && package->Name() == name) {
-						locker.Unlock();
-						_AdoptPackage(package);
-						break;
-					}
+				PackageInfoRef package;
+				{
+					BAutolock locker(fModel.Lock());
+					package = fModel.PackageForName(name);
+				}
+				if (!package.IsSet() || name != package->Name())
+					debugger("unable to find the named package");
+				else {
+					_AdoptPackage(package);
+					_SetupDelayedIncrementViewCounter(package);
 				}
 			} else {
 				_ClearPackage();
@@ -433,12 +560,12 @@ MainWindow::MessageReceived(BMessage* message)
 
 		case MSG_CATEGORY_SELECTED:
 		{
-			BString name;
-			if (message->FindString("name", &name) != B_OK)
-				name = "";
+			BString code;
+			if (message->FindString("code", &code) != B_OK)
+				code = "";
 			{
 				BAutolock locker(fModel.Lock());
-				fModel.SetCategory(name);
+				fModel.PackageFilter()->SetCategory(code);
 			}
 			_AdoptModel();
 			break;
@@ -451,7 +578,7 @@ MainWindow::MessageReceived(BMessage* message)
 				name = "";
 			{
 				BAutolock locker(fModel.Lock());
-				fModel.SetDepot(name);
+				fModel.PackageFilter()->SetDepotName(name);
 			}
 			_AdoptModel();
 			_UpdateAvailableRepositories();
@@ -466,7 +593,7 @@ MainWindow::MessageReceived(BMessage* message)
 				searchTerms = "";
 			{
 				BAutolock locker(fModel.Lock());
-				fModel.SetSearchTerms(searchTerms);
+				fModel.PackageFilter()->SetSearchTerms(searchTerms);
 			}
 			_AdoptModel();
 			break;
@@ -477,50 +604,17 @@ MainWindow::MessageReceived(BMessage* message)
 			PackageInfo* info;
 			if (message->FindPointer("package", (void**)&info) == B_OK) {
 				PackageInfoRef ref(info, true);
-				uint32 changes;
-				if (message->FindUInt32("changes", &changes) != B_OK)
-					changes = 0;
-				if ((changes & PKG_CHANGED_STATE) != 0) {
-					BAutolock locker(fModel.Lock());
-					fModel.SetPackageState(ref, ref->State());
-				}
-
-				// Asynchronous updates to the package information
-				// can mean that the package needs to be added or
-				// removed to/from the visible packages when the current
-				// filter parameters are re-evaluated on this package.
-				bool wasVisible = fVisiblePackages.Contains(ref);
-				bool isVisible;
-				{
-					BAutolock locker(fModel.Lock());
-					// The package didn't get a chance yet to be in the
-					// visible package list
-					isVisible = fModel.MatchesFilter(ref);
-
-					// Transfer this single package, otherwise we miss
-					// other packages if they appear or disappear along
-					// with this one before receive a notification for
-					// them.
-					if (isVisible) {
-						fVisiblePackages.Add(ref);
-					} else if (wasVisible)
-						fVisiblePackages.Remove(ref);
-				}
-
-				if (wasVisible != isVisible) {
-					if (!isVisible) {
-						fPackageListView->RemovePackage(ref);
-						fFeaturedPackagesView->RemovePackage(ref);
-					} else {
-						fPackageListView->AddPackage(ref);
-						if (ref->IsProminent())
-							fFeaturedPackagesView->AddPackage(ref);
-					}
-				}
-
-				if (!fSinglePackageMode && (changes & PKG_CHANGED_STATE) != 0)
-					fWorkStatusView->PackageStatusChanged(ref);
+				fFeaturedPackagesView->BeginAddRemove();
+				_AddRemovePackageFromLists(ref);
+				fFeaturedPackagesView->EndAddRemove();
 			}
+			break;
+		}
+
+		case MSG_PROCESS_COORDINATOR_CHANGED:
+		{
+			ProcessCoordinatorState state(message);
+			_HandleProcessCoordinatorChanged(state);
 			break;
 		}
 
@@ -538,73 +632,23 @@ MainWindow::MessageReceived(BMessage* message)
 			status_t status = message->FindString("reason", &reason);
 			if (status != B_OK)
 				break;
-			if (!fSinglePackageMode)
-				fWorkStatusView->SetBusy(reason);
+			fWorkStatusView->SetBusy(reason);
 			break;
 		}
 
 		case MSG_PACKAGE_WORKER_IDLE:
-			if (!fSinglePackageMode)
-				fWorkStatusView->SetIdle();
+			fWorkStatusView->SetIdle();
 			break;
 
-		case MSG_ADD_VISIBLE_PACKAGES:
+		case MSG_USER_USAGE_CONDITIONS_NOT_LATEST:
 		{
-			struct SemaphoreReleaser {
-				SemaphoreReleaser(sem_id semaphore)
-					:
-					fSemaphore(semaphore)
-				{ }
-
-				~SemaphoreReleaser() { release_sem(fSemaphore); }
-
-				sem_id fSemaphore;
-			};
-
-			// Make sure acknowledge semaphore is released even on error,
-			// so the worker thread won't be blocked
-			SemaphoreReleaser acknowledger(fShowPackagesAcknowledgeSem);
-
-			int32 numPackages = 0;
-			type_code unused;
-			status_t status = message->GetInfo("package_ref", &unused,
-				&numPackages);
-			if (status != B_OK || numPackages == 0)
-				break;
-
-			int32 listID = 0;
-			status = message->FindInt32("list_id", &listID);
-			if (status != B_OK)
-				break;
-			if (listID != atomic_get(&fPackagesToShowListID)) {
-				// list is outdated, ignore
-				break;
+			BMessage userDetailMsg;
+			if (message->FindMessage("userDetail", &userDetailMsg) != B_OK) {
+				debugger("expected the [userDetail] data to be carried in the "
+					"message.");
 			}
-
-			for (int i = 0; i < numPackages; i++) {
-				PackageInfo* packageRaw = NULL;
-				status = message->FindPointer("package_ref", i,
-					(void**)&packageRaw);
-				if (status != B_OK)
-					break;
-				PackageInfoRef package(packageRaw, true);
-
-				fPackageListView->AddPackage(package);
-				if (package->IsProminent())
-					fFeaturedPackagesView->AddPackage(package);
-			}
-			break;
-		}
-
-		case MSG_UPDATE_SELECTED_PACKAGE:
-		{
-			const PackageInfoRef& selectedPackage = fPackageInfoView->Package();
-			fFeaturedPackagesView->SelectPackage(selectedPackage, true);
-			fPackageListView->SelectPackage(selectedPackage);
-
-			AutoLocker<BLocker> modelLocker(fModel.Lock());
-			if (!fVisiblePackages.Contains(fPackageInfoView->Package()))
-				fPackageInfoView->Clear();
+			UserDetail userDetail(&userDetailMsg);
+			_HandleUserUsageConditionsNotLatest(userDetail);
 			break;
 		}
 
@@ -615,41 +659,73 @@ MainWindow::MessageReceived(BMessage* message)
 }
 
 
+static const char*
+main_window_package_list_view_mode_str(package_list_view_mode mode)
+{
+	if (mode == PROMINENT)
+		return "PROMINENT";
+	return "ALL";
+}
+
+
+static package_list_view_mode
+main_window_str_to_package_list_view_mode(const BString& str)
+{
+	if (str == "PROMINENT")
+		return PROMINENT;
+	return ALL;
+}
+
+
 void
-MainWindow::StoreSettings(BMessage& settings) const
+MainWindow::StoreSettings(BMessage& settings)
 {
 	settings.AddRect(_WindowFrameName(), Frame());
 	if (!fSinglePackageMode) {
 		settings.AddRect("window frame", Frame());
 
 		BMessage columnSettings;
-		fPackageListView->SaveState(&columnSettings);
+		if (fPackageListView != NULL)
+			fPackageListView->SaveState(&columnSettings);
 
 		settings.AddMessage("column settings", &columnSettings);
 
-		settings.AddBool("show featured packages",
-			fModel.ShowFeaturedPackages());
-		settings.AddBool("show available packages",
-			fModel.ShowAvailablePackages());
-		settings.AddBool("show installed packages",
-			fModel.ShowInstalledPackages());
-		settings.AddBool("show develop packages", fModel.ShowDevelopPackages());
-		settings.AddBool("show source packages", fModel.ShowSourcePackages());
+		settings.AddString(SETTING_PACKAGE_LIST_VIEW_MODE,
+			main_window_package_list_view_mode_str(
+				fModel.PackageListViewMode()));
+
+		settings.AddBool(SETTING_SHOW_AVAILABLE_PACKAGES,
+			fModel.PackageFilter()->ShowAvailablePackages());
+		settings.AddBool(SETTING_SHOW_INSTALLED_PACKAGES,
+			fModel.PackageFilter()->ShowInstalledPackages());
+		settings.AddBool(SETTING_SHOW_DEVELOP_PACKAGES,
+			fModel.PackageFilter()->ShowDevelopPackages());
+		settings.AddBool(SETTING_SHOW_SOURCE_PACKAGES,
+			fModel.PackageFilter()->ShowSourcePackages());
+
+		settings.AddBool(SETTING_CAN_SHARE_ANONYMOUS_USER_DATA,
+			fModel.CanShareAnonymousUsageData());
 	}
 
-	settings.AddString("username", fModel.Username());
+	settings.AddString("username", fModel.Nickname());
+}
+
+
+void
+MainWindow::Consume(ProcessCoordinator *item)
+{
+	_AddProcessCoordinator(item);
 }
 
 
 void
 MainWindow::PackageChanged(const PackageInfoEvent& event)
 {
-	uint32 watchedChanges = PKG_CHANGED_STATE | PKG_CHANGED_PROMINENCE;
+	uint32 watchedChanges = PKG_CHANGED_LOCAL_INFO | PKG_CHANGED_CLASSIFICATION;
 	if ((event.Changes() & watchedChanges) != 0) {
 		PackageInfoRef ref(event.Package());
 		BMessage message(MSG_PACKAGE_CHANGED);
 		message.AddPointer("package", ref.Get());
-		message.AddUInt32("changes", event.Changes());
 		ref.Detach();
 			// reference needs to be released by MessageReceived();
 		PostMessage(&message);
@@ -657,37 +733,22 @@ MainWindow::PackageChanged(const PackageInfoEvent& event)
 }
 
 
-status_t
-MainWindow::SchedulePackageActions(PackageActionList& list)
-{
-	AutoLocker<BLocker> lock(&fPendingActionsLock);
-	for (int32 i = 0; i < list.CountItems(); i++) {
-		if (!fPendingActions.Add(list.ItemAtFast(i)))
-			return B_NO_MEMORY;
-	}
-
-	return release_sem_etc(fPendingActionsSem, list.CountItems(), 0);
-}
-
-
-Model*
-MainWindow::GetModel()
-{
-	return &fModel;
-}
-
-
 void
 MainWindow::_BuildMenu(BMenuBar* menuBar)
 {
-	BMenu* menu = new BMenu(B_TRANSLATE("Tools"));
-	menu->AddItem(new BMenuItem(B_TRANSLATE("Refresh repositories"),
-		new BMessage(MSG_REFRESH_REPOS)));
+	BMenu* menu = new BMenu(B_TRANSLATE_SYSTEM_NAME("HaikuDepot"));
+	fRefreshRepositoriesItem = new BMenuItem(
+		B_TRANSLATE("Refresh repositories"), new BMessage(MSG_REFRESH_REPOS));
+	menu->AddItem(fRefreshRepositoriesItem);
 	menu->AddItem(new BMenuItem(B_TRANSLATE("Manage repositories"
 		B_UTF8_ELLIPSIS), new BMessage(MSG_MANAGE_REPOS)));
 	menu->AddItem(new BMenuItem(B_TRANSLATE("Check for updates"
 		B_UTF8_ELLIPSIS), new BMessage(MSG_SOFTWARE_UPDATER)));
-
+	menu->AddSeparatorItem();
+	menu->AddItem(new BMenuItem(B_TRANSLATE("Settings" B_UTF8_ELLIPSIS),
+		new BMessage(MSG_SETTINGS), ','));
+	menu->AddItem(new BMenuItem(B_TRANSLATE("Quit"),
+		new BMessage(B_QUIT_REQUESTED), 'Q'));
 	menuBar->AddItem(menu);
 
 	fRepositoryMenu = new BMenu(B_TRANSLATE("Repositories"));
@@ -734,17 +795,29 @@ MainWindow::_BuildUserMenu(BMenuBar* menuBar)
 		new BMessage(MSG_LOG_OUT));
 	fUserMenu->AddItem(fLogOutItem);
 
+	BMenuItem *latestUserUsageConditionsMenuItem =
+		new BMenuItem(B_TRANSLATE("View latest usage conditions"
+			B_UTF8_ELLIPSIS),
+			new BMessage(MSG_VIEW_LATEST_USER_USAGE_CONDITIONS));
+	fUserMenu->AddItem(latestUserUsageConditionsMenuItem);
+
+	fUsersUserUsageConditionsMenuItem =
+		new BMenuItem(B_TRANSLATE("View agreed usage conditions"
+			B_UTF8_ELLIPSIS),
+			new BMessage(MSG_VIEW_USERS_USER_USAGE_CONDITIONS));
+	fUserMenu->AddItem(fUsersUserUsageConditionsMenuItem);
+
 	menuBar->AddItem(fUserMenu);
 }
 
 
 void
-MainWindow::_RestoreUserName(const BMessage& settings)
+MainWindow::_RestoreNickname(const BMessage& settings)
 {
-	BString username;
-	if (settings.FindString("username", &username) == B_OK
-		&& username.Length() > 0) {
-		fModel.SetUsername(username);
+	BString nickname;
+	if (settings.FindString("username", &nickname) == B_OK
+		&& nickname.Length() > 0) {
+		fModel.SetNickname(nickname);
 	}
 }
 
@@ -793,67 +866,206 @@ MainWindow::_RestoreWindowFrame(const BMessage& settings)
 
 
 void
-MainWindow::_InitWorkerThreads()
+MainWindow::_RestoreModelSettings(const BMessage& settings)
 {
-	fPendingActionsSem = create_sem(0, "PendingPackageActions");
-	if (fPendingActionsSem >= 0) {
-		fPendingActionsWorker = spawn_thread(&_PackageActionWorker,
-			"Planet Express", B_NORMAL_PRIORITY, this);
-		if (fPendingActionsWorker >= 0)
-			resume_thread(fPendingActionsWorker);
-	} else
-		fPendingActionsWorker = -1;
+	BString packageListViewMode;
+	if (settings.FindString(SETTING_PACKAGE_LIST_VIEW_MODE,
+			&packageListViewMode) == B_OK) {
+		fModel.SetPackageListViewMode(
+			main_window_str_to_package_list_view_mode(packageListViewMode));
+	}
 
-	fPackageToPopulateSem = create_sem(0, "PopulatePackage");
-	if (fPackageToPopulateSem >= 0) {
-		fPopulatePackageWorker = spawn_thread(&_PopulatePackageWorker,
-			"Package Populator", B_NORMAL_PRIORITY, this);
-		if (fPopulatePackageWorker >= 0)
-			resume_thread(fPopulatePackageWorker);
-	} else
-		fPopulatePackageWorker = -1;
+	bool showOption;
 
-	fNewPackagesToShowSem = create_sem(0, "ShowPackages");
-	fShowPackagesAcknowledgeSem = create_sem(0, "ShowPackagesAck");
-	if (fNewPackagesToShowSem >= 0 && fShowPackagesAcknowledgeSem >= 0) {
-		fShowPackagesWorker = spawn_thread(&_PackagesToShowWorker,
-			"Good news everyone", B_NORMAL_PRIORITY, this);
-		if (fShowPackagesWorker >= 0)
-			resume_thread(fShowPackagesWorker);
-	} else
-		fShowPackagesWorker = -1;
+	if (settings.FindBool(SETTING_SHOW_AVAILABLE_PACKAGES, &showOption) == B_OK)
+		fModel.PackageFilter()->SetShowAvailablePackages(showOption);
+	if (settings.FindBool(SETTING_SHOW_INSTALLED_PACKAGES, &showOption) == B_OK)
+		fModel.PackageFilter()->SetShowInstalledPackages(showOption);
+	if (settings.FindBool(SETTING_SHOW_DEVELOP_PACKAGES, &showOption) == B_OK)
+		fModel.PackageFilter()->SetShowDevelopPackages(showOption);
+	if (settings.FindBool(SETTING_SHOW_SOURCE_PACKAGES, &showOption) == B_OK)
+		fModel.PackageFilter()->SetShowSourcePackages(showOption);
+
+	if (settings.FindBool(SETTING_CAN_SHARE_ANONYMOUS_USER_DATA,
+			&showOption) == B_OK) {
+		fModel.SetCanShareAnonymousUsageData(showOption);
+	}
+}
+
+
+void
+MainWindow::_MaybePromptCanShareAnonymousUserData(const BMessage& settings)
+{
+	bool showOption;
+	if (settings.FindBool(SETTING_CAN_SHARE_ANONYMOUS_USER_DATA,
+			&showOption) == B_NAME_NOT_FOUND) {
+		_PromptCanShareAnonymousUserData();
+	}
+}
+
+
+void
+MainWindow::_PromptCanShareAnonymousUserData()
+{
+	BAlert* alert = new(std::nothrow) BAlert(
+		B_TRANSLATE("Sending anonymous usage data"),
+		B_TRANSLATE("Would it be acceptable to send anonymous usage data to the"
+			" HaikuDepotServer system from this computer? You can change your"
+			" preference in the \"Settings\" window later."),
+		B_TRANSLATE("No"),
+		B_TRANSLATE("Yes"));
+
+	int32 result = alert->Go();
+	fModel.SetCanShareAnonymousUsageData(1 == result);
+}
+
+
+void
+MainWindow::_InitPreferredLanguage()
+{
+	LanguageRepository* repository = fModel.Languages();
+	LanguageRef defaultLanguage = LocaleUtils::DeriveDefaultLanguage(repository);
+	repository->AddLanguage(defaultLanguage);
+	fModel.SetPreferredLanguage(defaultLanguage);
+}
+
+
+void
+MainWindow::_AdoptModelControls()
+{
+	if (fSinglePackageMode)
+		return;
+
+	BAutolock locker(fModel.Lock());
+	fShowAvailablePackagesItem->SetMarked(fModel.PackageFilter()->ShowAvailablePackages());
+	fShowInstalledPackagesItem->SetMarked(fModel.PackageFilter()->ShowInstalledPackages());
+	fShowSourcePackagesItem->SetMarked(fModel.PackageFilter()->ShowSourcePackages());
+	fShowDevelopPackagesItem->SetMarked(fModel.PackageFilter()->ShowDevelopPackages());
+
+	if (fModel.PackageListViewMode() == PROMINENT)
+		fListTabs->Select(TAB_PROMINENT_PACKAGES);
+	else
+		fListTabs->Select(TAB_ALL_PACKAGES);
+
+	fFilterView->AdoptModel(fModel);
 }
 
 
 void
 MainWindow::_AdoptModel()
 {
-	fVisiblePackages = fModel.CreatePackageList();
+	HDTRACE("adopting model to main window ui");
+
+	if (fSinglePackageMode)
+		return;
+
+	std::vector<DepotInfoRef> depots = _CreateSnapshotOfDepots();
+	std::vector<DepotInfoRef>::iterator it;
+
+	fFeaturedPackagesView->BeginAddRemove();
+
+	for (it = depots.begin(); it != depots.end(); it++) {
+		DepotInfoRef depotInfoRef = *it;
+		for (int i = 0; i < depotInfoRef->CountPackages(); i++) {
+			PackageInfoRef package = depotInfoRef->PackageAtIndex(i);
+			_AddRemovePackageFromLists(package);
+		}
+	}
+
+	fFeaturedPackagesView->EndAddRemove();
+
+	_AdoptModelControls();
+}
+
+
+void
+MainWindow::_AddRemovePackageFromLists(const PackageInfoRef& package)
+{
+	bool matches;
 
 	{
 		AutoLocker<BLocker> modelLocker(fModel.Lock());
-		AutoLocker<BLocker> listLocker(fPackagesToShowListLock);
-		fPackagesToShowList = fVisiblePackages;
-		atomic_add(&fPackagesToShowListID, 1);
+		matches = fModel.PackageFilter()->Filter()->AcceptsPackage(package);
 	}
 
-	fFeaturedPackagesView->Clear();
-	fPackageListView->Clear();
+	if (matches) {
+		PackageClassificationInfoRef classification = package->PackageClassificationInfo();
 
-	release_sem(fNewPackagesToShowSem);
+		if (classification.IsSet()) {
+			if (classification->IsProminent())
+				fFeaturedPackagesView->AddPackage(package);
+		}
 
-	BAutolock locker(fModel.Lock());
-	fShowAvailablePackagesItem->SetMarked(fModel.ShowAvailablePackages());
-	fShowInstalledPackagesItem->SetMarked(fModel.ShowInstalledPackages());
-	fShowSourcePackagesItem->SetMarked(fModel.ShowSourcePackages());
-	fShowDevelopPackagesItem->SetMarked(fModel.ShowDevelopPackages());
+		fPackageListView->AddPackage(package);
+	} else {
+		fFeaturedPackagesView->RemovePackage(package);
+		fPackageListView->RemovePackage(package);
+	}
+}
 
-	if (fModel.ShowFeaturedPackages())
-		fListLayout->SetVisibleItem((int32)0);
-	else
-		fListLayout->SetVisibleItem((int32)1);
 
-	fFilterView->AdoptModel(fModel);
+void
+MainWindow::_SetupDelayedIncrementViewCounter(const PackageInfoRef package) {
+	if (fIncrementViewCounterDelayedRunner != NULL) {
+		fIncrementViewCounterDelayedRunner->SetCount(0);
+		delete fIncrementViewCounterDelayedRunner;
+	}
+	BMessage message(MSG_INCREMENT_VIEW_COUNTER);
+	message.SetString("name", package->Name());
+	fIncrementViewCounterDelayedRunner =
+		new BMessageRunner(BMessenger(this), &message,
+			kIncrementViewCounterDelayMicros, 1);
+	if (fIncrementViewCounterDelayedRunner->InitCheck()
+			!= B_OK) {
+		HDERROR("unable to init the increment view counter");
+	}
+}
+
+
+void
+MainWindow::_HandleIncrementViewCounter(const BMessage* message)
+{
+	BString name;
+	if (message->FindString("name", &name) == B_OK) {
+		const PackageInfoRef& viewedPackage =
+			fPackageInfoView->Package();
+		if (viewedPackage.IsSet()) {
+			if (viewedPackage->Name() == name)
+				_IncrementViewCounter(viewedPackage);
+			else
+				HDINFO("incr. view counter; name mismatch");
+		} else
+			HDINFO("incr. view counter; no viewed pkg");
+	} else
+		HDERROR("incr. view counter; no name");
+	fIncrementViewCounterDelayedRunner->SetCount(0);
+	delete fIncrementViewCounterDelayedRunner;
+	fIncrementViewCounterDelayedRunner = NULL;
+}
+
+
+void
+MainWindow::_IncrementViewCounter(const PackageInfoRef package)
+{
+	bool shouldIncrementViewCounter = false;
+
+	{
+		AutoLocker<BLocker> modelLocker(fModel.Lock());
+		bool canShareAnonymousUsageData = fModel.CanShareAnonymousUsageData();
+		if (canShareAnonymousUsageData && !PackageUtils::Viewed(package)) {
+			PackageLocalInfoRef localInfo = PackageUtils::NewLocalInfo(package);
+			localInfo->SetViewed();
+			package->SetLocalInfo(localInfo);
+			shouldIncrementViewCounter = true;
+		}
+	}
+
+	if (shouldIncrementViewCounter) {
+		ProcessCoordinator* incrementViewCoordinator =
+			ProcessCoordinatorFactory::CreateIncrementViewCounter(
+				&fModel, package);
+		_AddProcessCoordinator(incrementViewCoordinator);
+	}
 }
 
 
@@ -882,568 +1094,183 @@ MainWindow::_ClearPackage()
 
 
 void
-MainWindow::_RefreshRepositories(bool force)
+MainWindow::_StartBulkLoad(bool force)
 {
-	if (fSinglePackageMode)
-		return;
+	if (fFeaturedPackagesView != NULL)
+		fFeaturedPackagesView->Clear();
+	if (fPackageListView != NULL)
+		fPackageListView->Clear();
+	fPackageInfoView->Clear();
 
-	BPackageRoster roster;
-	BStringList repositoryNames;
+	fRefreshRepositoriesItem->SetEnabled(false);
+	ProcessCoordinator* bulkLoadCoordinator =
+		ProcessCoordinatorFactory::CreateBulkLoadCoordinator(
+			fPackageInfoListener, &fModel, force);
+	_AddProcessCoordinator(bulkLoadCoordinator);
+}
 
-	status_t result = roster.GetRepositoryNames(repositoryNames);
-	if (result != B_OK)
-		return;
 
-	DecisionProvider decisionProvider;
-	JobStateListener listener;
-	BContext context(decisionProvider, listener);
+void
+MainWindow::_BulkLoadCompleteReceived(status_t errorStatus)
+{
+	if (errorStatus != B_OK) {
+		AppUtils::NotifySimpleError(
+			B_TRANSLATE("Package update error"),
+			B_TRANSLATE("While updating package data, a problem has arisen "
+				"that may cause data to be outdated or missing from the "
+				"application's display. Additional details regarding this "
+				"problem may be able to be obtained from the application "
+				"logs."
+				ALERT_MSG_LOGS_USER_GUIDE));
+	}
 
-	BRepositoryCache cache;
-	for (int32 i = 0; i < repositoryNames.CountStrings(); ++i) {
-		const BString& repoName = repositoryNames.StringAt(i);
-		BRepositoryConfig repoConfig;
-		result = roster.GetRepositoryConfig(repoName, &repoConfig);
-		if (result != B_OK) {
-			// TODO: notify user
-			continue;
-		}
+	fRefreshRepositoriesItem->SetEnabled(true);
+	_AdoptModel();
+	_UpdateAvailableRepositories();
 
-		if (roster.GetRepositoryCache(repoName, &cache) != B_OK || force) {
-			try {
-				BRefreshRepositoryRequest refreshRequest(context, repoConfig);
+	// if after loading everything in, it transpires that there are no
+	// featured packages then the featured packages should be disabled
+	// and the user should be switched to the "all packages" view so
+	// that they are not presented with a blank window!
 
-				result = refreshRequest.Process();
-			} catch (BFatalErrorException ex) {
-				BString message(B_TRANSLATE("An error occurred while "
-					"refreshing the repository: %error% (%details%)"));
- 				message.ReplaceFirst("%error%", ex.Message());
-				message.ReplaceFirst("%details%", ex.Details());
-				_NotifyUser("Error", message.String());
-			} catch (BException ex) {
-				BString message(B_TRANSLATE("An error occurred while "
-					"refreshing the repository: %error%"));
-				message.ReplaceFirst("%error%", ex.Message());
-				_NotifyUser("Error", message.String());
-			}
-		}
+	bool hasProminentPackages = fModel.HasAnyProminentPackages();
+	fListTabs->TabAt(TAB_PROMINENT_PACKAGES)->SetEnabled(hasProminentPackages);
+	if (!hasProminentPackages
+			&& fListTabs->Selection() == TAB_PROMINENT_PACKAGES) {
+		fModel.SetPackageListViewMode(ALL);
+		fListTabs->Select(TAB_ALL_PACKAGES);
 	}
 }
 
 
 void
-MainWindow::_RefreshPackageList(bool force)
+MainWindow::_NotifyWorkStatusClear()
 {
-	if (fSinglePackageMode)
-		return;
-
-	BPackageRoster roster;
-	BStringList repositoryNames;
-
-	status_t result = roster.GetRepositoryNames(repositoryNames);
-	if (result != B_OK)
-		return;
-
-	std::vector<DepotInfo> depots(repositoryNames.CountStrings());
-	for (int32 i = 0; i < repositoryNames.CountStrings(); i++) {
-		const BString& repoName = repositoryNames.StringAt(i);
-		DepotInfo depotInfo = DepotInfo(repoName);
-
-		BRepositoryConfig repoConfig;
-		status_t getRepositoryConfigStatus = roster.GetRepositoryConfig(
-			repoName, &repoConfig);
-
-		if (getRepositoryConfigStatus == B_OK) {
-			depotInfo.SetBaseURL(repoConfig.BaseURL());
-			depotInfo.SetURL(repoConfig.URL());
-
-			if (Logger::IsDebugEnabled()) {
-				printf("local repository [%s] info;\n"
-					" * base url [%s]\n"
-					" * url [%s]\n",
-					repoName.String(), repoConfig.BaseURL().String(),
-					repoConfig.URL().String());
-			}
-		} else {
-			printf("unable to obtain the repository config for local "
-				"repository '%s'; %s\n",
-				repoName.String(), strerror(getRepositoryConfigStatus));
-		}
-
-		depots[i] = depotInfo;
-	}
-
-	PackageManager manager(B_PACKAGE_INSTALLATION_LOCATION_HOME);
-	try {
-		manager.Init(PackageManager::B_ADD_INSTALLED_REPOSITORIES
-			| PackageManager::B_ADD_REMOTE_REPOSITORIES);
-	} catch (BException ex) {
-		BString message(B_TRANSLATE("An error occurred while "
-			"initializing the package manager: %message%"));
-		message.ReplaceFirst("%message%", ex.Message());
-		_NotifyUser("Error", message.String());
-		return;
-	}
-
-	BObjectList<BSolverPackage> packages;
-	result = manager.Solver()->FindPackages("",
-		BSolver::B_FIND_CASE_INSENSITIVE | BSolver::B_FIND_IN_NAME
-			| BSolver::B_FIND_IN_SUMMARY | BSolver::B_FIND_IN_DESCRIPTION
-			| BSolver::B_FIND_IN_PROVIDES,
-		packages);
-	if (result != B_OK) {
-		BString message(B_TRANSLATE("An error occurred while "
-			"obtaining the package list: %message%"));
-		message.ReplaceFirst("%message%", strerror(result));
-		_NotifyUser("Error", message.String());
-		return;
-	}
-
-	if (packages.IsEmpty())
-		return;
-
-	PackageInfoMap foundPackages;
-		// if a given package is installed locally, we will potentially
-		// get back multiple entries, one for each local installation
-		// location, and one for each remote repository the package
-		// is available in. The above map is used to ensure that in such
-		// cases we consolidate the information, rather than displaying
-		// duplicates
-	PackageInfoMap remotePackages;
-		// any package that we find in a remote repository goes in this map.
-		// this is later used to discern which packages came from a local
-		// installation only, as those must be handled a bit differently
-		// upon uninstallation, since we'd no longer be able to pull them
-		// down remotely.
-	BStringList systemFlaggedPackages;
-		// any packages flagged as a system package are added to this list.
-		// such packages cannot be uninstalled, nor can any of their deps.
-	PackageInfoMap systemInstalledPackages;
-		// any packages installed in system are added to this list.
-		// This is later used for dependency resolution of the actual
-		// system packages in order to compute the list of protected
-		// dependencies indicated above.
-
-	for (int32 i = 0; i < packages.CountItems(); i++) {
-		BSolverPackage* package = packages.ItemAt(i);
-		const BPackageInfo& repoPackageInfo = package->Info();
-		const BString repositoryName = package->Repository()->Name();
-		PackageInfoRef modelInfo;
-		PackageInfoMap::iterator it = foundPackages.find(
-			repoPackageInfo.Name());
-		if (it != foundPackages.end())
-			modelInfo.SetTo(it->second);
-		else {
-			// Add new package info
-			modelInfo.SetTo(new(std::nothrow) PackageInfo(repoPackageInfo),
-				true);
-
-			if (modelInfo.Get() == NULL)
-				return;
-
-			modelInfo->SetDepotName(repositoryName);
-
-			foundPackages[repoPackageInfo.Name()] = modelInfo;
-		}
-
-		modelInfo->AddListener(this);
-
-		BSolverRepository* repository = package->Repository();
-		BPackageManager::RemoteRepository* remoteRepository =
-			dynamic_cast<BPackageManager::RemoteRepository*>(repository);
-
-		if (remoteRepository != NULL) {
-
-			std::vector<DepotInfo>::iterator it;
-
-			for (it = depots.begin(); it != depots.end(); it++) {
-				if (RepositoryUrlUtils::EqualsOnUrlOrBaseUrl(
-					it->URL(), remoteRepository->Config().URL(),
-					it->BaseURL(), remoteRepository->Config().BaseURL())) {
-					break;
-				}
-			}
-
-			if (it == depots.end()) {
-				if (Logger::IsDebugEnabled()) {
-					printf("pkg [%s] repository [%s] not recognized"
-						" --> ignored\n",
-						modelInfo->Name().String(), repositoryName.String());
-				}
-			} else {
-				it->AddPackage(modelInfo);
-
-				if (Logger::IsTraceEnabled()) {
-					printf("pkg [%s] assigned to [%s]\n",
-						modelInfo->Name().String(), repositoryName.String());
-				}
-			}
-
-			remotePackages[modelInfo->Name()] = modelInfo;
-		} else {
-			if (repository == static_cast<const BSolverRepository*>(
-					manager.SystemRepository())) {
-				modelInfo->AddInstallationLocation(
-					B_PACKAGE_INSTALLATION_LOCATION_SYSTEM);
-				if (!modelInfo->IsSystemPackage()) {
-					systemInstalledPackages[repoPackageInfo.FileName()]
-						= modelInfo;
-				}
-			} else if (repository == static_cast<const BSolverRepository*>(
-					manager.HomeRepository())) {
-				modelInfo->AddInstallationLocation(
-					B_PACKAGE_INSTALLATION_LOCATION_HOME);
-			}
-		}
-
-		if (modelInfo->IsSystemPackage())
-			systemFlaggedPackages.Add(repoPackageInfo.FileName());
-	}
-
-	bool wasEmpty = fModel.Depots().IsEmpty();
-	if (force || wasEmpty)
-		fBulkLoadStateMachine.Stop();
-
-	BAutolock lock(fModel.Lock());
-
-	if (force)
-		fModel.Clear();
-
-	// filter remote packages from the found list
-	// any packages remaining will be locally installed packages
-	// that weren't acquired from a repository
-	for (PackageInfoMap::iterator it = remotePackages.begin();
-			it != remotePackages.end(); it++) {
-		foundPackages.erase(it->first);
-	}
-
-	if (!foundPackages.empty()) {
-		BString repoName = B_TRANSLATE("Local");
-		depots.push_back(DepotInfo(repoName));
-
-		for (PackageInfoMap::iterator it = foundPackages.begin();
-				it != foundPackages.end(); ++it) {
-			depots.back().AddPackage(it->second);
-		}
-	}
-
-	{
-		std::vector<DepotInfo>::iterator it;
-
-		for (it = depots.begin(); it != depots.end(); it++) {
-			if (fModel.HasDepot(it->Name()))
-				fModel.SyncDepot(*it);
-			else
-				fModel.AddDepot(*it);
-		}
-	}
-
-	// start retrieving package icons and average ratings
-	if (force || wasEmpty) {
-			fBulkLoadStateMachine.Start();
-	}
-
-	// compute the OS package dependencies
-	try {
-		// create the solver
-		BSolver* solver;
-		status_t error = BSolver::Create(solver);
-		if (error != B_OK)
-			throw BFatalErrorException(error, "Failed to create solver.");
-
-		ObjectDeleter<BSolver> solverDeleter(solver);
-		BPath systemPath;
-		error = find_directory(B_SYSTEM_PACKAGES_DIRECTORY, &systemPath);
-		if (error != B_OK) {
-			throw BFatalErrorException(error,
-				"Unable to retrieve system packages directory.");
-		}
-
-		// add the "installed" repository with the given packages
-		BSolverRepository installedRepository;
-		{
-			BRepositoryBuilder installedRepositoryBuilder(installedRepository,
-				"installed");
-			for (int32 i = 0; i < systemFlaggedPackages.CountStrings(); i++) {
-				BPath packagePath(systemPath);
-				packagePath.Append(systemFlaggedPackages.StringAt(i));
-				installedRepositoryBuilder.AddPackage(packagePath.Path());
-			}
-			installedRepositoryBuilder.AddToSolver(solver, true);
-		}
-
-		// add system repository
-		BSolverRepository systemRepository;
-		{
-			BRepositoryBuilder systemRepositoryBuilder(systemRepository,
-				"system");
-			for (PackageInfoMap::iterator it = systemInstalledPackages.begin();
-					it != systemInstalledPackages.end(); it++) {
-				BPath packagePath(systemPath);
-				packagePath.Append(it->first);
-				systemRepositoryBuilder.AddPackage(packagePath.Path());
-			}
-			systemRepositoryBuilder.AddToSolver(solver, false);
-		}
-
-		// solve
-		error = solver->VerifyInstallation();
-		if (error != B_OK) {
-			throw BFatalErrorException(error, "Failed to compute packages to "
-				"install.");
-		}
-
-		BSolverResult solverResult;
-		error = solver->GetResult(solverResult);
-		if (error != B_OK) {
-			throw BFatalErrorException(error, "Failed to retrieve system "
-				"package dependency list.");
-		}
-
-		for (int32 i = 0; const BSolverResultElement* element
-				= solverResult.ElementAt(i); i++) {
-			BSolverPackage* package = element->Package();
-			if (element->Type() == BSolverResultElement::B_TYPE_INSTALL) {
-				PackageInfoMap::iterator it = systemInstalledPackages.find(
-					package->Info().FileName());
-				if (it != systemInstalledPackages.end())
-					it->second->SetSystemDependency(true);
-			}
-		}
-	} catch (BFatalErrorException ex) {
-		printf("Fatal exception occurred while resolving system dependencies: "
-			"%s, details: %s\n", strerror(ex.Error()), ex.Details().String());
-	} catch (BNothingToDoException) {
-		// do nothing
-	} catch (BException ex) {
-		printf("Exception occurred while resolving system dependencies: %s\n",
-			ex.Message().String());
-	} catch (...) {
-		printf("Unknown exception occurred while resolving system "
-			"dependencies.\n");
-	}
+	BMessage message(MSG_WORK_STATUS_CLEAR);
+	this->PostMessage(&message, this);
 }
 
 
 void
-MainWindow::_StartRefreshWorker(bool force)
+MainWindow::_HandleWorkStatusClear()
 {
-	if (fModelWorker != B_BAD_THREAD_ID)
+	fWorkStatusView->SetText("");
+	fWorkStatusView->SetIdle();
+}
+
+
+/*! Sends off a message to the Window so that it can change the status view
+    on the front-end in the UI thread.
+*/
+
+void
+MainWindow::_NotifyWorkStatusChange(const BString& text, float progress)
+{
+	BMessage message(MSG_WORK_STATUS_CHANGE);
+
+	if (!text.IsEmpty())
+		message.AddString(KEY_WORK_STATUS_TEXT, text);
+	message.AddFloat(KEY_WORK_STATUS_PROGRESS, progress);
+
+	this->PostMessage(&message, this);
+}
+
+
+void
+MainWindow::_HandleExternalPackageUpdateMessageReceived(const BMessage* message)
+{
+	BStringList addedPackageNames;
+	BStringList removedPackageNames;
+
+	if (message->FindStrings("added package names",
+			&addedPackageNames) == B_OK) {
+		addedPackageNames.Sort();
+		AutoLocker<BLocker> locker(fModel.Lock());
+		fModel.SetStateForPackagesByName(addedPackageNames, ACTIVATED);
+	}
+	else
+		HDINFO("no [added package names] key in inbound message");
+
+	if (message->FindStrings("removed package names",
+			&removedPackageNames) == B_OK) {
+		removedPackageNames.Sort();
+		AutoLocker<BLocker> locker(fModel.Lock());
+		fModel.SetStateForPackagesByName(addedPackageNames, UNINSTALLED);
+	} else
+		HDINFO("no [removed package names] key in inbound message");
+}
+
+
+void
+MainWindow::_HandleWorkStatusChangeMessageReceived(const BMessage* message)
+{
+	if (fWorkStatusView == NULL)
 		return;
 
-	RefreshWorkerParameters* parameters = new(std::nothrow)
-		RefreshWorkerParameters(this, force);
-	if (parameters == NULL)
-		return;
+	BString text;
+	float progress;
 
-	fWorkStatusView->SetBusy(B_TRANSLATE("Refreshing..."));
+	if (message->FindString(KEY_WORK_STATUS_TEXT, &text) == B_OK)
+		fWorkStatusView->SetText(text);
 
-	ObjectDeleter<RefreshWorkerParameters> deleter(parameters);
-	fModelWorker = spawn_thread(&_RefreshModelThreadWorker, "model loader",
-		B_LOW_PRIORITY, parameters);
-
-	if (fModelWorker > 0) {
-		deleter.Detach();
-		resume_thread(fModelWorker);
+	if (message->FindFloat(KEY_WORK_STATUS_PROGRESS, &progress) == B_OK) {
+		if (progress < 0.0f)
+			fWorkStatusView->SetBusy();
+		else
+			fWorkStatusView->SetProgress(progress);
+	} else {
+		HDERROR("work status change missing progress on update message");
+		fWorkStatusView->SetProgress(0.0f);
 	}
 }
 
 
-status_t
-MainWindow::_RefreshModelThreadWorker(void* arg)
-{
-	RefreshWorkerParameters* parameters
-		= reinterpret_cast<RefreshWorkerParameters*>(arg);
-	MainWindow* mainWindow = parameters->window;
-	ObjectDeleter<RefreshWorkerParameters> deleter(parameters);
+/*! Initially only superficial data is loaded from the server into the data
+	model of the packages.  When the package is viewed, additional data needs
+	to be populated including ratings.
 
-	BMessenger messenger(mainWindow);
-
-	mainWindow->_RefreshRepositories(parameters->forceRefresh);
-
-	if (mainWindow->fTerminating)
-		return B_OK;
-
-	mainWindow->_RefreshPackageList(parameters->forceRefresh);
-
-	messenger.SendMessage(MSG_MODEL_WORKER_DONE);
-
-	return B_OK;
-}
-
-
-status_t
-MainWindow::_PackageActionWorker(void* arg)
-{
-	MainWindow* window = reinterpret_cast<MainWindow*>(arg);
-
-	while (acquire_sem(window->fPendingActionsSem) == B_OK) {
-		PackageActionRef ref;
-		{
-			AutoLocker<BLocker> lock(&window->fPendingActionsLock);
-			ref = window->fPendingActions.ItemAt(0);
-			if (ref.Get() == NULL)
-				break;
-			window->fPendingActions.Remove(0);
-		}
-
-		BMessenger messenger(window);
-		BMessage busyMessage(MSG_PACKAGE_WORKER_BUSY);
-		BString text(ref->Label());
-		text << "...";
-		busyMessage.AddString("reason", text);
-
-		messenger.SendMessage(&busyMessage);
-		ref->Perform();
-		messenger.SendMessage(MSG_PACKAGE_WORKER_IDLE);
-	}
-
-	return 0;
-}
-
-
-/*! This method will cause the package to have its data refreshed from
-    the server application.  The refresh happens in the background; this method
-    is asynchronous.
+	This method will cause the package to have its data refreshed from
+	the server application.  The refresh happens in the background; this method
+	is asynchronous.
 */
 
 void
 MainWindow::_PopulatePackageAsync(bool forcePopulate)
 {
-		// Trigger asynchronous package population from the web-app
-	{
-		AutoLocker<BLocker> lock(&fPackageToPopulateLock);
-		fPackageToPopulate = fPackageInfoView->Package();
-		fForcePopulatePackage = forcePopulate;
-	}
-	release_sem_etc(fPackageToPopulateSem, 1, 0);
+	const PackageInfoRef package = fPackageInfoView->Package();
 
-	if (Logger::IsDebugEnabled()) {
-		printf("pkg [%s] will be updated from the server.\n",
-			fPackageToPopulate->Name().String());
-	}
-}
+	if (!fModel.CanPopulatePackage(package))
+		return;
 
+	const char* packageNameStr = package->Name().String();
 
-/*! This method will run in the background.  The thread will block until there
-    is a package to be updated.  When the thread unblocks, it will update the
-    package with information from the server.
-*/
+	PackageLocalizedTextRef localized = package->LocalizedText();
 
-status_t
-MainWindow::_PopulatePackageWorker(void* arg)
-{
-	MainWindow* window = reinterpret_cast<MainWindow*>(arg);
-
-	while (acquire_sem(window->fPackageToPopulateSem) == B_OK) {
-		PackageInfoRef package;
-		bool force;
-		{
-			AutoLocker<BLocker> lock(&window->fPackageToPopulateLock);
-			package = window->fPackageToPopulate;
-			force = window->fForcePopulatePackage;
-		}
-
-		if (package.Get() != NULL) {
-			uint32 populateFlags = Model::POPULATE_USER_RATINGS
-				| Model::POPULATE_SCREEN_SHOTS
-				| Model::POPULATE_CHANGELOG;
-
-			if (force)
-				populateFlags |= Model::POPULATE_FORCE;
-
-			window->fModel.PopulatePackage(package, populateFlags);
-
-			if (Logger::IsDebugEnabled()) {
-				printf("populating package [%s]\n",
-					package->Name().String());
-			}
+	if (localized.IsSet()) {
+		if (localized->HasChangelog() && (forcePopulate || localized->Changelog().IsEmpty())) {
+			_AddProcessCoordinator(
+				ProcessCoordinatorFactory::PopulatePkgChangelogCoordinator(&fModel, package));
+			HDINFO("pkg [%s] will have changelog updated from server.", packageNameStr);
+		} else {
+			HDDEBUG("pkg [%s] not have changelog updated from server.", packageNameStr);
 		}
 	}
 
-	return 0;
-}
-
-
-/* static */ status_t
-MainWindow::_PackagesToShowWorker(void* arg)
-{
-	MainWindow* window = reinterpret_cast<MainWindow*>(arg);
-
-	while (acquire_sem(window->fNewPackagesToShowSem) == B_OK) {
-		PackageList packageList;
-		int32 listID = 0;
-		{
-			AutoLocker<BLocker> lock(&window->fPackagesToShowListLock);
-			packageList = window->fPackagesToShowList;
-			listID = atomic_get(&window->fPackagesToShowListID);
-			window->fPackagesToShowList.Clear();
-		}
-
-		// Add packages to list views in batches of kPackagesPerUpdate so we
-		// don't block the window thread for long with each iteration
-		enum {
-			kPackagesPerUpdate = 20
-		};
-		uint32 packagesInMessage = 0;
-		BMessage message(MSG_ADD_VISIBLE_PACKAGES);
-		BMessenger messenger(window);
-		bool listIsOutdated = false;
-
-		for (int i = 0; i < packageList.CountItems(); i++) {
-			const PackageInfoRef& package = packageList.ItemAtFast(i);
-
-			if (packagesInMessage >= kPackagesPerUpdate) {
-				if (listID != atomic_get(&window->fPackagesToShowListID)) {
-					// The model was changed again in the meantime, and thus
-					// our package list isn't current anymore. Send no further
-					// messags based on this list and go back to start.
-					listIsOutdated = true;
-					break;
-				}
-
-				message.AddInt32("list_id", listID);
-				messenger.SendMessage(&message);
-				message.MakeEmpty();
-				packagesInMessage = 0;
-
-				// Don't spam the window's message queue, which would make it
-				// unresponsive (i.e. allows UI messages to get in between our
-				// messages). When it has processed the message we just sent,
-				// it will let us know by releasing the semaphore.
-				acquire_sem(window->fShowPackagesAcknowledgeSem);
-			}
-			package->AcquireReference();
-			message.AddPointer("package_ref", package.Get());
-			packagesInMessage++;
-		}
-
-		if (listIsOutdated)
-			continue;
-
-		// Send remaining package infos, if any, which didn't make it into
-		// the last message (count < kPackagesPerUpdate)
-		if (packagesInMessage > 0) {
-			message.AddInt32("list_id", listID);
-			messenger.SendMessage(&message);
-			acquire_sem(window->fShowPackagesAcknowledgeSem);
-		}
-
-		// Update selected package in list views
-		messenger.SendMessage(MSG_UPDATE_SELECTED_PACKAGE);
+	if (forcePopulate || RatingUtils::ShouldTryPopulateUserRatings(package->UserRatingInfo())) {
+		_AddProcessCoordinator(
+			ProcessCoordinatorFactory::PopulatePkgUserRatingsCoordinator(&fModel, package));
+		HDINFO("pkg [%s] will have user ratings updated from server.", packageNameStr);
+	} else {
+		HDDEBUG("pkg [%s] not have user ratings updated from server.", packageNameStr);
 	}
-
-	return 0;
 }
 
 
 void
-MainWindow::_NotifyUser(const char* title, const char* message)
+MainWindow::_OpenSettingsWindow()
 {
-	BAlert* alert = new(std::nothrow) BAlert(title, message,
-		B_TRANSLATE("Close"));
-
-	if (alert != NULL)
-		alert->Go();
+	SettingsWindow* window = new SettingsWindow(this, &fModel);
+	window->Show();
 }
 
 
@@ -1461,13 +1288,28 @@ MainWindow::_OpenLoginWindow(const BMessage& onSuccessMessage)
 
 
 void
+MainWindow::_StartUserVerify()
+{
+	if (!fModel.Nickname().IsEmpty()) {
+		_AddProcessCoordinator(
+			ProcessCoordinatorFactory::CreateUserDetailVerifierCoordinator(
+				this,
+					// UserDetailVerifierListener
+				&fModel) );
+	}
+}
+
+
+void
 MainWindow::_UpdateAuthorization()
 {
-	BString username(fModel.Username());
-	bool hasUser = !username.IsEmpty();
+	BString nickname(fModel.Nickname());
+	bool hasUser = !nickname.IsEmpty();
 
 	if (fLogOutItem != NULL)
 		fLogOutItem->SetEnabled(hasUser);
+	if (fUsersUserUsageConditionsMenuItem != NULL)
+		fUsersUserUsageConditionsMenuItem->SetEnabled(hasUser);
 	if (fLogInItem != NULL) {
 		if (hasUser)
 			fLogInItem->SetLabel(B_TRANSLATE("Switch account" B_UTF8_ELLIPSIS));
@@ -1477,11 +1319,11 @@ MainWindow::_UpdateAuthorization()
 
 	if (fUserMenu != NULL) {
 		BString label;
-		if (username.Length() == 0) {
-			label = B_TRANSLATE("Not logged in");
-		} else {
+		if (hasUser) {
 			label = B_TRANSLATE("Logged in as %User%");
-			label.ReplaceAll("%User%", username);
+			label.ReplaceAll("%User%", nickname);
+		} else {
+			label = B_TRANSLATE("Not logged in");
 		}
 		fUserMenu->Superitem()->SetLabel(label);
 	}
@@ -1499,17 +1341,23 @@ MainWindow::_UpdateAvailableRepositories()
 	fRepositoryMenu->AddItem(new BSeparatorItem());
 
 	bool foundSelectedDepot = false;
-	const DepotList& depots = fModel.Depots();
-	for (int i = 0; i < depots.CountItems(); i++) {
-		const DepotInfo& depot = depots.ItemAtFast(i);
+	std::vector<DepotInfoRef> depots = _CreateSnapshotOfDepots();
+	std::vector<DepotInfoRef>::iterator it;
 
-		if (depot.Name().Length() != 0) {
+	for (it = depots.begin(); it != depots.end(); it++) {
+		DepotInfoRef depot = *it;
+
+		if (depot->Name().Length() != 0) {
 			BMessage* message = new BMessage(MSG_DEPOT_SELECTED);
-			message->AddString("name", depot.Name());
-			BMenuItem* item = new BMenuItem(depot.Name(), message);
+			message->AddString("name", depot->Name());
+			BMenuItem* item = new(std::nothrow) BMenuItem(depot->Name(), message);
+
+			if (item == NULL)
+				HDFATAL("memory exhaustion");
+
 			fRepositoryMenu->AddItem(item);
 
-			if (depot.Name() == fModel.Depot()) {
+			if (depot->Name() == fModel.PackageFilter()->DepotName()) {
 				item->SetMarked(true);
 				foundSelectedDepot = true;
 			}
@@ -1525,14 +1373,28 @@ bool
 MainWindow::_SelectedPackageHasWebAppRepositoryCode()
 {
 	const PackageInfoRef& package = fPackageInfoView->Package();
-	const DepotInfo* depot = fModel.DepotForName(package->DepotName());
+	const BString depotName = package->DepotName();
 
-	BString repositoryCode;
+	if (depotName.IsEmpty()) {
+		HDDEBUG("the package [%s] has no depot name", package->Name().String());
+	} else {
+		const DepotInfo* depot = fModel.DepotForName(depotName);
 
-	if (depot != NULL)
-		repositoryCode = depot->WebAppRepositoryCode();
+		if (depot == NULL) {
+			HDINFO("the depot [%s] was not able to be found",
+				depotName.String());
+		} else {
+			BString repositoryCode = depot->WebAppRepositoryCode();
 
-	return !repositoryCode.IsEmpty();
+			if (repositoryCode.IsEmpty()) {
+				HDINFO("the depot [%s] has no web app repository code",
+					depotName.String());
+			} else
+				return true;
+		}
+	}
+
+	return false;
 }
 
 
@@ -1550,7 +1412,7 @@ MainWindow::_RatePackage()
     	return;
 	}
 
-	if (fModel.Username().IsEmpty()) {
+	if (fModel.Nickname().IsEmpty()) {
 		BAlert* alert = new(std::nothrow) BAlert(
 			B_TRANSLATE("Not logged in"),
 			B_TRANSLATE("You need to be logged into an account before you "
@@ -1581,7 +1443,7 @@ MainWindow::_ShowScreenshot()
 {
 	// TODO: Mechanism for remembering the window frame
 	if (fScreenshotWindow == NULL)
-		fScreenshotWindow = new ScreenshotWindow(this, BRect(0, 0, 500, 400));
+		fScreenshotWindow = new ScreenshotWindow(this, BRect(0, 0, 500, 400), &fModel);
 
 	if (fScreenshotWindow->LockWithTimeout(1000) != B_OK)
 		return;
@@ -1594,4 +1456,254 @@ MainWindow::_ShowScreenshot()
 		fScreenshotWindow->Activate();
 
 	fScreenshotWindow->Unlock();
+}
+
+
+void
+MainWindow::_ViewUserUsageConditions(
+	UserUsageConditionsSelectionMode mode)
+{
+	UserUsageConditionsWindow* window = new UserUsageConditionsWindow(
+		fModel, mode);
+	window->Show();
+}
+
+
+void
+MainWindow::UserCredentialsFailed()
+{
+	BString message = B_TRANSLATE("The password previously "
+		"supplied for the user [%Nickname%] is not currently "
+		"valid. The user will be logged-out of this application "
+		"and you should login again with your updated password.");
+	message.ReplaceAll("%Nickname%", fModel.Nickname());
+
+	AppUtils::NotifySimpleError(B_TRANSLATE("Login issue"),
+		message);
+
+	{
+		AutoLocker<BLocker> locker(fModel.Lock());
+		fModel.SetNickname("");
+	}
+}
+
+
+/*! \brief This method is invoked from the UserDetailVerifierProcess on a
+		   background thread.  For this reason it lodges a message into itself
+		   which can then be handled on the main thread.
+*/
+
+void
+MainWindow::UserUsageConditionsNotLatest(const UserDetail& userDetail)
+{
+	BMessage message(MSG_USER_USAGE_CONDITIONS_NOT_LATEST);
+	BMessage detailsMessage;
+	if (userDetail.Archive(&detailsMessage, true) != B_OK
+			|| message.AddMessage("userDetail", &detailsMessage) != B_OK) {
+		HDERROR("unable to archive the user detail into a message");
+	}
+	else
+		BMessenger(this).SendMessage(&message);
+}
+
+
+void
+MainWindow::_HandleUserUsageConditionsNotLatest(
+	const UserDetail& userDetail)
+{
+	ToLatestUserUsageConditionsWindow* window =
+		new ToLatestUserUsageConditionsWindow(this, fModel, userDetail);
+	window->Show();
+}
+
+
+void
+MainWindow::_AddProcessCoordinator(ProcessCoordinator* item)
+{
+	AutoLocker<BLocker> lock(&fCoordinatorLock);
+
+	if (fShouldCloseWhenNoProcessesToCoordinate) {
+		HDINFO("system shutting down --> new process coordinator [%s] rejected",
+			item->Name().String());
+		return;
+	}
+
+	item->SetListener(this);
+
+	if (fCoordinator == NULL) {
+		if (acquire_sem(fCoordinatorRunningSem) != B_OK)
+			debugger("unable to acquire the process coordinator sem");
+		HDINFO("adding and starting a process coordinator [%s]",
+			item->Name().String());
+		delete fCoordinator;
+		fCoordinator = item;
+		fCoordinator->Start();
+	} else {
+		HDINFO("adding process coordinator [%s] to the queue",
+			item->Name().String());
+		fCoordinatorQueue.push(item);
+	}
+}
+
+
+void
+MainWindow::_SpinUntilProcessCoordinatorComplete()
+{
+	while (true) {
+		if (acquire_sem(fCoordinatorRunningSem) != B_OK)
+			debugger("unable to acquire the process coordinator sem");
+		if (release_sem(fCoordinatorRunningSem) != B_OK)
+			debugger("unable to release the process coordinator sem");
+		{
+			AutoLocker<BLocker> lock(&fCoordinatorLock);
+			if (fCoordinator == NULL)
+				return;
+		}
+	}
+}
+
+
+void
+MainWindow::_StopProcessCoordinators()
+{
+	HDINFO("will stop all queued process coordinators");
+	AutoLocker<BLocker> lock(&fCoordinatorLock);
+
+	while (!fCoordinatorQueue.empty()) {
+		ProcessCoordinator* processCoordinator
+			= fCoordinatorQueue.front();
+		HDINFO("will drop queued process coordinator [%s]",
+			processCoordinator->Name().String());
+		fCoordinatorQueue.pop();
+		delete processCoordinator;
+	}
+
+	if (fCoordinator != NULL)
+		fCoordinator->RequestStop();
+}
+
+
+/*! This method is called when there is some change in the bulk load process
+	or other process coordinator.
+	A change may mean that a new process has started / stopped etc... or it
+	may mean that the entire coordinator has finished.
+*/
+
+void
+MainWindow::CoordinatorChanged(ProcessCoordinatorState& coordinatorState)
+{
+	BMessage message(MSG_PROCESS_COORDINATOR_CHANGED);
+	if (coordinatorState.Archive(&message, true) != B_OK) {
+		HDFATAL("unable to archive message when the process coordinator"
+			" has changed");
+	}
+	BMessenger(this).SendMessage(&message);
+}
+
+
+void
+MainWindow::_HandleProcessCoordinatorChanged(ProcessCoordinatorState& coordinatorState)
+{
+	AutoLocker<BLocker> lock(&fCoordinatorLock);
+
+	if (fCoordinator->Identifier()
+			== coordinatorState.ProcessCoordinatorIdentifier()) {
+		if (!coordinatorState.IsRunning()) {
+			if (release_sem(fCoordinatorRunningSem) != B_OK)
+				debugger("unable to release the process coordinator sem");
+			HDINFO("process coordinator [%s] did complete",
+				fCoordinator->Name().String());
+			// complete the last one that just finished
+			BMessage* message = fCoordinator->Message();
+
+			if (message != NULL) {
+				BMessenger messenger(this);
+				message->AddInt64(KEY_ERROR_STATUS,
+					(int64) fCoordinator->ErrorStatus());
+				messenger.SendMessage(message);
+			}
+
+			HDDEBUG("process coordinator report;\n---\n%s\n----",
+				fCoordinator->LogReport().String());
+
+			delete fCoordinator;
+			fCoordinator = NULL;
+
+			// now schedule the next one.
+			if (!fCoordinatorQueue.empty()) {
+				if (acquire_sem(fCoordinatorRunningSem) != B_OK)
+					debugger("unable to acquire the process coordinator sem");
+				fCoordinator = fCoordinatorQueue.front();
+				HDINFO("starting next process coordinator [%s]",
+					fCoordinator->Name().String());
+				fCoordinatorQueue.pop();
+				fCoordinator->Start();
+			}
+			else {
+				_NotifyWorkStatusClear();
+				if (fShouldCloseWhenNoProcessesToCoordinate) {
+					HDINFO("no more processes to coord --> will quit");
+					BMessage message(B_QUIT_REQUESTED);
+					PostMessage(&message);
+				}
+			}
+		}
+		else {
+			_NotifyWorkStatusChange(coordinatorState.Message(),
+				coordinatorState.Progress());
+				// show the progress to the user.
+		}
+	} else {
+		_NotifyWorkStatusClear();
+		HDINFO("! unknown process coordinator changed");
+	}
+}
+
+
+static package_list_view_mode
+main_window_tab_to_package_list_view_mode(int32 tab)
+{
+	if (tab == TAB_PROMINENT_PACKAGES)
+		return PROMINENT;
+	return ALL;
+}
+
+
+void
+MainWindow::_HandleChangePackageListViewMode()
+{
+	package_list_view_mode tabMode = main_window_tab_to_package_list_view_mode(
+		fListTabs->Selection());
+	package_list_view_mode modelMode = fModel.PackageListViewMode();
+
+	if (tabMode != modelMode) {
+		BAutolock locker(fModel.Lock());
+		fModel.SetPackageListViewMode(tabMode);
+	}
+}
+
+
+std::vector<DepotInfoRef>
+MainWindow::_CreateSnapshotOfDepots()
+{
+	std::vector<DepotInfoRef> result;
+	BAutolock locker(fModel.Lock());
+	int32 countDepots = fModel.CountDepots();
+	for(int32 i = 0; i < countDepots; i++)
+		result.push_back(fModel.DepotAtIndex(i));
+	return result;
+}
+
+
+/*! This will get invoked in the case that a screenshot has been cached
+    and so could now be loaded by some UI element. This method will then
+    signal to other UI elements that they could load a screenshot should
+    they have been waiting for it.
+*/
+
+void
+MainWindow::_HandleScreenshotCached(const BMessage* message)
+{
+	ScreenshotCoordinate coordinate(message);
+	fPackageInfoView->HandleScreenshotCached(coordinate);
 }

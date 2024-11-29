@@ -25,6 +25,7 @@
 #include <ScrollView.h>
 #include <SeparatorView.h>
 #include <SpaceLayoutItem.h>
+#include <UrlContext.h>
 
 #include "BrowserApp.h"
 #include "BrowserWindow.h"
@@ -53,7 +54,7 @@ public:
 		BGroupView(B_VERTICAL, 0.0)
 	{
 		SetFlags(Flags() | B_PULSE_NEEDED);
-		SetViewColor(245, 245, 245);
+		SetViewUIColor(B_LIST_BACKGROUND_COLOR);
 		AddChild(BSpaceLayoutItem::CreateGlue());
 	}
 

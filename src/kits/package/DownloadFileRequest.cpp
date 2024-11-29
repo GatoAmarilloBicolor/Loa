@@ -9,8 +9,10 @@
 
 #include <package/DownloadFileRequest.h>
 
-#include <package/FetchFileJob.h>
 #include <package/ValidateChecksumJob.h>
+
+#include "FetchFileJob.h"
+#include "FetchUtils.h"
 
 
 namespace BPackageKit {
@@ -48,15 +50,17 @@ DownloadFileRequest::CreateInitialJobs()
 	if (error != B_OK)
 		return B_NO_INIT;
 
-	// create the download job
-	FetchFileJob* fetchJob = new (std::nothrow) FetchFileJob(fContext,
-		BString("Downloading ") << fFileURL, fFileURL, fTargetEntry);
-	if (fetchJob == NULL)
-		return B_NO_MEMORY;
+	if (!FetchUtils::IsDownloadCompleted(BNode(&fTargetEntry))) {
+		// create the download job
+		FetchFileJob* fetchJob = new (std::nothrow) FetchFileJob(fContext,
+			BString("Downloading ") << fFileURL, fFileURL, fTargetEntry);
+		if (fetchJob == NULL)
+			return B_NO_MEMORY;
 
-	if ((error = QueueJob(fetchJob)) != B_OK) {
-		delete fetchJob;
-		return error;
+		if ((error = QueueJob(fetchJob)) != B_OK) {
+			delete fetchJob;
+			return error;
+		}
 	}
 
 	// create the checksum validation job

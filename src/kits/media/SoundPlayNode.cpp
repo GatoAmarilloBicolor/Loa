@@ -20,7 +20,7 @@
 
 #include <TimeSource.h>
 #include <MediaRoster.h>
-#include "debug.h"
+#include "MediaDebug.h"
 
 
 #define SEND_NEW_BUFFER_EVENT (BTimedEventQueue::B_USER_EVENT + 1)
@@ -657,13 +657,13 @@ SoundPlayNode::SendNewBuffer(const media_timed_event* event,
 			bigtime_t how_early = event->event_time - TimeSource()->Now() - fLatency - fInternalLatency;
 			if (how_early > 5000) {
 
-				TRACE("SoundPlayNode::SendNewBuffer, event scheduled too early, how_early is %Ld\n", how_early);
+				TRACE("SoundPlayNode::SendNewBuffer, event scheduled too early, how_early is %lld\n", how_early);
 
 				if (fTooEarlyCount++ == 5) {
 					fInternalLatency -= how_early;
 					if (fInternalLatency < 500)
 						fInternalLatency = 500;
-					TRACE("SoundPlayNode::SendNewBuffer setting internal latency to %Ld\n", fInternalLatency);
+					TRACE("SoundPlayNode::SendNewBuffer setting internal latency to %lld\n", fInternalLatency);
 					SetEventLatency(fLatency + fInternalLatency);
 					fTooEarlyCount = 0;
 				}

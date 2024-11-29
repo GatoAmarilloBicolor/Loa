@@ -89,8 +89,9 @@ x86_invalid_exception(iframe* frame)
 	Thread* thread = thread_get_current_thread();
 	char name[32];
 	panic("unhandled trap 0x%lx (%s) at ip 0x%lx, thread %" B_PRId32 "!\n",
-		frame->vector, exception_name(frame->vector, name, sizeof(name)),
-		frame->ip, thread ? thread->id : -1);
+		(long unsigned int)frame->vector,
+		exception_name(frame->vector, name, sizeof(name)),
+		(long unsigned int)frame->ip, thread ? thread->id : -1);
 }
 
 
@@ -99,7 +100,8 @@ x86_fatal_exception(iframe* frame)
 {
 	char name[32];
 	panic("Fatal exception \"%s\" occurred! Error code: 0x%lx\n",
-		exception_name(frame->vector, name, sizeof(name)), frame->error_code);
+		exception_name(frame->vector, name, sizeof(name)),
+		(long unsigned int)frame->error_code);
 }
 
 
@@ -207,7 +209,7 @@ x86_unexpected_exception(iframe* frame)
 		panic("Unexpected exception \"%s\" occurred in kernel mode! "
 			"Error code: 0x%lx\n",
 			exception_name(frame->vector, name, sizeof(name)),
-			frame->error_code);
+			(long unsigned int)(frame->error_code));
 	}
 }
 
@@ -241,12 +243,7 @@ x86_hardware_interrupt(struct iframe* frame)
 	}
 
 	cpu_status state = disable_interrupts();
-	if (thread->cpu->invoke_scheduler) {
-		SpinLocker schedulerLocker(thread->scheduler_lock);
-		scheduler_reschedule(B_THREAD_READY);
-		schedulerLocker.Unlock();
-		restore_interrupts(state);
-	} else if (thread->post_interrupt_callback != NULL) {
+	if (thread->post_interrupt_callback != NULL) {
 		void (*callback)(void*) = thread->post_interrupt_callback;
 		void* data = thread->post_interrupt_data;
 
@@ -256,6 +253,11 @@ x86_hardware_interrupt(struct iframe* frame)
 		restore_interrupts(state);
 
 		callback(data);
+	} else if (thread->cpu->invoke_scheduler) {
+		SpinLocker schedulerLocker(thread->scheduler_lock);
+		scheduler_reschedule(B_THREAD_READY);
+		schedulerLocker.Unlock();
+		restore_interrupts(state);
 	}
 }
 
@@ -296,6 +298,21 @@ x86_page_fault_exception(struct iframe* frame)
 		panic("page fault in debugger without fault handler! Touching "
 			"address %p from ip %p\n", (void*)cr2, (void*)frame->ip);
 		return;
+	} else if (!IFRAME_IS_USER(frame)
+		&& (frame->error_code & PGFAULT_I) != 0
+		&& (x86_read_cr4() & IA32_CR4_SMEP) != 0) {
+		// check that: 1. come not from userland,
+		// 2. is an instruction fetch, 3. smep is enabled
+		panic("SMEP violation user-mapped address %p touched from kernel %p\n",
+			(void*)cr2, (void*)frame->ip);
+	} else if ((frame->flags & X86_EFLAGS_ALIGNMENT_CHECK) == 0
+		&& !IFRAME_IS_USER(frame)
+		&& (frame->error_code & PGFAULT_P) != 0
+		&& (x86_read_cr4() & IA32_CR4_SMAP) != 0) {
+		// check that: 1. AC flag is not set, 2. come not from userland,
+		// 3. is a page-protection violation, 4. smap is enabled
+		panic("SMAP violation user-mapped address %p touched from kernel %p\n",
+			(void*)cr2, (void*)frame->ip);
 	} else if ((frame->flags & X86_EFLAGS_INTERRUPT) == 0) {
 		// interrupts disabled
 
@@ -327,21 +344,6 @@ x86_page_fault_exception(struct iframe* frame)
 		panic("page fault not allowed at this place. Touching address "
 			"%p from ip %p\n", (void*)cr2, (void*)frame->ip);
 		return;
-	} else if (!IFRAME_IS_USER(frame)
-		&& (frame->error_code & PGFAULT_I) != 0
-		&& (x86_read_cr4() & IA32_CR4_SMEP) != 0) {
-		// check that: 1. come not from userland,
-		// 2. is an instruction fetch, 3. smep is enabled
-		panic("SMEP violation user-mapped address %p touched from kernel %p\n",
-			(void*)cr2, (void*)frame->ip);
-	} else if ((frame->flags & X86_EFLAGS_ALIGNMENT_CHECK) == 0
-		&& !IFRAME_IS_USER(frame)
-		&& (frame->error_code & PGFAULT_P) != 0
-		&& (x86_read_cr4() & IA32_CR4_SMAP) != 0) {
-		// check that: 1. AC flag is not set, 2. come not from userland,
-		// 3. is a page-protection violation, 4. smap is enabled
-		panic("SMAP violation user-mapped address %p touched from kernel %p\n",
-			(void*)cr2, (void*)frame->ip);
 	}
 
 	enable_interrupts();
@@ -360,7 +362,7 @@ x86_page_fault_exception(struct iframe* frame)
 
 
 void
-x86_set_irq_source(int irq, irq_source source)
+x86_set_irq_source(int32 irq, irq_source source)
 {
 	sVectorSources[irq] = source;
 }
@@ -370,21 +372,21 @@ x86_set_irq_source(int irq, irq_source source)
 
 
 void
-arch_int_enable_io_interrupt(int irq)
+arch_int_enable_io_interrupt(int32 irq)
 {
 	sCurrentPIC->enable_io_interrupt(irq);
 }
 
 
 void
-arch_int_disable_io_interrupt(int irq)
+arch_int_disable_io_interrupt(int32 irq)
 {
 	sCurrentPIC->disable_io_interrupt(irq);
 }
 
 
 void
-arch_int_configure_io_interrupt(int irq, uint32 config)
+arch_int_configure_io_interrupt(int32 irq, uint32 config)
 {
 	sCurrentPIC->configure_io_interrupt(irq, config);
 }
@@ -424,7 +426,7 @@ arch_int_are_interrupts_enabled(void)
 }
 
 
-void
+int32
 arch_int_assign_to_cpu(int32 irq, int32 cpu)
 {
 	switch (sVectorSources[irq]) {
@@ -440,6 +442,7 @@ arch_int_assign_to_cpu(int32 irq, int32 cpu)
 		default:
 			break;
 	}
+	return cpu;
 }
 
 
@@ -466,7 +469,7 @@ status_t
 arch_int_init_io(kernel_args* args)
 {
 	msi_init(args);
-	ioapic_init(args);
+	ioapic_preinit(args);
 	return B_OK;
 }
 

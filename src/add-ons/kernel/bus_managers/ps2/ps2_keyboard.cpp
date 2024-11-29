@@ -5,7 +5,7 @@
  * Authors (in chronological order):
  *		Stefano Ceccherini (burton666@libero.it)
  *		Axel Dörfler, axeld@pinc-software.de
- *      Marcus Overhagen <marcus@overhagen.de>
+ *		Marcus Overhagen <marcus@overhagen.de>
  */
 
 
@@ -30,6 +30,13 @@
 #define KEY_BUFFER_SIZE 100
 	// we will buffer 100 key strokes before we start dropping them
 
+//#define TRACE_PS2_KEYBOARD
+#ifdef TRACE_PS2_KEYBOARD
+#	define TRACE(x...) dprintf(x)
+#else
+#	define TRACE(x...)
+#endif
+
 enum {
 	LED_SCROLL 	= 1,
 	LED_NUM 	= 2,
@@ -37,11 +44,14 @@ enum {
 };
 
 enum {
-	EXTENDED_KEY	= 0xe0,
+	EXTENDED_KEY_0	= 0xe0,
+	EXTENDED_KEY_1	= 0xe1,
 
 	LEFT_ALT_KEY	= 0x38,
 	RIGHT_ALT_KEY	= 0xb8,
-	SYS_REQ_KEY		= 0x54
+	SYS_REQ_KEY		= 0x54,
+	PRNT_SCRN_KEY	= 0x80 | 0x37,
+	PAUSE_KEY		= 0x80 | 0x46,
 };
 
 
@@ -57,7 +67,9 @@ static bool sHasKeyboardReader = false;
 static bool sHasDebugReader = false;
 static sem_id sKeyboardSem;
 static struct packet_buffer *sKeyBuffer;
-static bool sIsExtended = false;
+static bool sIsExtended0 = false;
+static bool sIsExtended1 = false;
+static uint8 sPauseSequenceRead = 0;
 
 static int32 sKeyboardRepeatRate;
 static bigtime_t sKeyboardRepeatDelay;
@@ -125,6 +137,8 @@ keyboard_handle_int(ps2_dev *dev)
 		EMERGENCY_RIGHT_ALT	= 0x02,
 		EMERGENCY_SYS_REQ	= 0x04,
 	};
+
+	static const uint8 pauseSequence[] = { 0x1D, 0x45 };
 	static int emergencyKeyStatus = 0;
 	raw_key_info keyInfo;
 	uint8 scancode = dev->history[0].data;
@@ -132,15 +146,17 @@ keyboard_handle_int(ps2_dev *dev)
 	if (atomic_get(&sKeyboardOpenCount) == 0)
 		return B_HANDLED_INTERRUPT;
 
-	// TODO: Handle braindead "pause" key special case
-
-	if (scancode == EXTENDED_KEY) {
-		sIsExtended = true;
-//		TRACE("Extended key\n");
+	if (scancode == EXTENDED_KEY_0) {
+		sIsExtended0 = true;
+		//TRACE("Extended key 0\n");
 		return B_HANDLED_INTERRUPT;
 	}
 
-//	TRACE("scancode: %x\n", scancode);
+	if (scancode == EXTENDED_KEY_1) {
+		sIsExtended1 = true;
+		//TRACE("Extended key 1\n");
+		return B_HANDLED_INTERRUPT;
+	}
 
 	if ((scancode & 0x80) != 0) {
 		keyInfo.is_keydown = false;
@@ -148,9 +164,23 @@ keyboard_handle_int(ps2_dev *dev)
 	} else
 		keyInfo.is_keydown = true;
 
-	if (sIsExtended) {
+	//	TRACE("scancode: %x\n", scancode);
+
+	// Handle braindead "pause" key special case
+	if (sIsExtended1 && scancode == pauseSequence[sPauseSequenceRead]) {
+		sPauseSequenceRead++;
+		if (sPauseSequenceRead == 2) {
+			sIsExtended1 = false;
+			sPauseSequenceRead = 0;
+			scancode = PAUSE_KEY;
+		} else {
+			return B_HANDLED_INTERRUPT;
+		}
+	}
+
+	if (sIsExtended0) {
 		scancode |= 0x80;
-		sIsExtended = false;
+		sIsExtended0 = false;
 	}
 
 	// Handle emergency keys
@@ -163,11 +193,11 @@ keyboard_handle_int(ps2_dev *dev)
 			emergencyKeyStatus &= ~(scancode == LEFT_ALT_KEY
 				? EMERGENCY_LEFT_ALT : EMERGENCY_RIGHT_ALT);
 		}
-	} else if (scancode == SYS_REQ_KEY) {
+	} else if (scancode == SYS_REQ_KEY || scancode == PRNT_SCRN_KEY) {
 		if (keyInfo.is_keydown)
 			emergencyKeyStatus |= EMERGENCY_SYS_REQ;
 		else
-			emergencyKeyStatus &= EMERGENCY_SYS_REQ;
+			emergencyKeyStatus &= ~EMERGENCY_SYS_REQ;
 	} else if (emergencyKeyStatus > EMERGENCY_SYS_REQ
 		&& debug_emergency_key_pressed(kUnshiftedKeymap[scancode])) {
 		static const int kKeys[] = {LEFT_ALT_KEY, RIGHT_ALT_KEY, SYS_REQ_KEY};
@@ -261,20 +291,35 @@ probe_keyboard(void)
 {
 	uint8 data;
 	status_t status;
+	int ids_read = 0;
 
-//  This test doesn't work relyable on some notebooks (it reports 0x03)
-//	status = ps2_command(PS2_CTRL_KEYBOARD_TEST, NULL, 0, &data, 1);
-//	if (status != B_OK || data != 0x00) {
-//		INFO("ps2: keyboard test failed, status 0x%08lx, data 0x%02x\n", status, data);
-//		return B_ERROR;
-//	}
+	// This test doesn't work reliably on some notebooks (it reports 0x03)
+#if 0
+	status = ps2_command(PS2_CTRL_KEYBOARD_TEST, NULL, 0, &data, 1);
+	if (status != B_OK || data != 0x00) {
+		INFO("ps2: keyboard test failed, status 0x%08lx, data 0x%02x\n", status, data);
+		return B_ERROR;
+	}
+#endif
 
 	status = ps2_dev_command(&ps2_device[PS2_DEVICE_KEYB], PS2_CMD_RESET, NULL,
 		0, &data, 1);
+	// Checking for reset is unreliable on some controllers, but we check
+	// ID which is good enough for Linux and should be good enough for us.
+	// Reset is needed though.
 	if (status != B_OK || data != 0xaa) {
-		INFO("ps2: keyboard reset failed, status 0x%08" B_PRIx32 ", data 0x%02x"
+		ERROR("ps2: keyboard reset failed, status 0x%08" B_PRIx32 ", data 0x%02x"
 			"\n", status, data);
-		return B_ERROR;
+		ids_read = 1;
+		status = ps2_dev_command(&ps2_device[PS2_DEVICE_KEYB],
+			PS2_CMD_GET_DEVICE_ID, NULL, 0, sKeyboardIds, sizeof(sKeyboardIds));
+		if ((status != B_OK) || (sKeyboardIds[0] != 0xab && sKeyboardIds[0] != 0xac &&	/* Regular and NCD Sun keyboards */
+					 sKeyboardIds[0] != 0x2b && sKeyboardIds[0] != 0x5d &&	/* Trust keyboard, raw and translated */
+					 sKeyboardIds[0] != 0x60 && sKeyboardIds[0] != 0x47)) {	/* NMB SGI keyboard, raw and translated */
+			ERROR("ps2: keyboard getid failed, status 0x%08" B_PRIx32 ", data 0x%02x%02x."
+			     " Assuming no keyboard\n", status, sKeyboardIds[0], sKeyboardIds[1]);
+			return B_ERROR;
+		}
 	}
 
 	// default settings after keyboard reset: delay = 0x01 (500 ms),
@@ -282,39 +327,43 @@ probe_keyboard(void)
 	sKeyboardRepeatRate = ((31 - 0x0b) * 280) / 31 + 20;
 	sKeyboardRepeatDelay = 500000;
 
-//	status = ps2_dev_command(&ps2_device[PS2_DEVICE_KEYB], PS2_ENABLE_KEYBOARD, NULL, 0, NULL, 0);
+#if 0
+	status = ps2_dev_command(&ps2_device[PS2_DEVICE_KEYB], PS2_ENABLE_KEYBOARD, NULL, 0, NULL, 0);
+#endif
 
-//  On my notebook, the keyboard controller does NACK the echo command.
-//	status = ps2_dev_command(&ps2_device[PS2_DEVICE_KEYB], PS2_CMD_ECHO, NULL, 0, &data, 1);
-//	if (status != B_OK || data != 0xee) {
-//		INFO("ps2: keyboard echo test failed, status 0x%08lx, data 0x%02x\n", status, data);
-//		return B_ERROR;
-//	}
+	// On at least some machines, the keyboard controller does NACK the echo command.
+#if 0
+	status = ps2_dev_command(&ps2_device[PS2_DEVICE_KEYB], PS2_CMD_ECHO, NULL, 0, &data, 1);
+	if (status != B_OK || data != 0xee) {
+		INFO("ps2: keyboard echo test failed, status 0x%08lx, data 0x%02x\n", status, data);
+		return B_ERROR;
+	}
+#endif
 
-// Some controllers set the disble keyboard command bit to "on" after resetting
-// the keyboard device. Read #7973 #6313 for more details.
-// So check the command byte now and re-enable the keyboard if it is the case.
+	// Some controllers set the disable keyboard command bit to "on" after resetting
+	// the keyboard device. Read #7973 #6313 for more details.
+	// So check the command byte now and re-enable the keyboard if it is the case.
 	uint8 cmdbyte = 0;
 	status = ps2_command(PS2_CTRL_READ_CMD, NULL, 0, &cmdbyte, 1);
 
 	if (status != B_OK) {
-		INFO("ps2: cannot read CMD byte on kbd probe:%#08" B_PRIx32 "\n",
+		ERROR("ps2: cannot read CMD byte on kbd probe:%#08" B_PRIx32 "\n",
 			status);
-	} else
-	if ((cmdbyte & PS2_BITS_KEYBOARD_DISABLED) == PS2_BITS_KEYBOARD_DISABLED) {
+	} else if ((cmdbyte & PS2_BITS_KEYBOARD_DISABLED) == PS2_BITS_KEYBOARD_DISABLED) {
 		cmdbyte &= ~PS2_BITS_KEYBOARD_DISABLED;
 		status = ps2_command(PS2_CTRL_WRITE_CMD, &cmdbyte, 1, NULL, 0);
 		if (status != B_OK) {
-			INFO("ps2: cannot write 0x%02x to CMD byte on kbd probe:%#08"
+			ERROR("ps2: cannot write 0x%02x to CMD byte on kbd probe:%#08"
 				B_PRIx32 "\n", cmdbyte, status);
 		}
 	}
 
-	status = ps2_dev_command(&ps2_device[PS2_DEVICE_KEYB],
+	if (!ids_read) {
+		status = ps2_dev_command(&ps2_device[PS2_DEVICE_KEYB],
 			PS2_CMD_GET_DEVICE_ID, NULL, 0, sKeyboardIds, sizeof(sKeyboardIds));
 
-	if (status != B_OK) {
-		INFO("ps2: cannot read keyboard device id:%#08" B_PRIx32 "\n", status);
+		if (status != B_OK)
+			ERROR("ps2: cannot read keyboard device id:%#08" B_PRIx32 "\n", status);
 	}
 
 	return B_OK;

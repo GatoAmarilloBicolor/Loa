@@ -72,7 +72,7 @@ public:
 private:
 			AVFormatContext*	fFormatContext;
 			AVStream*			fStream;
-			AVPacket			fPacket;
+			AVPacket*			fPacket;
 			// Since different threads may write to the target,
 			// we need to protect the file position and I/O by a lock.
 			BLocker*			fStreamLock;
@@ -87,12 +87,25 @@ AVFormatWriter::StreamCookie::StreamCookie(AVFormatContext* context,
 	fStream(NULL),
 	fStreamLock(streamLock)
 {
-	av_init_packet(&fPacket);
+	fPacket = av_packet_alloc();
 }
 
 
 AVFormatWriter::StreamCookie::~StreamCookie()
 {
+	// fStream is freed automatically when the codec context is closed
+	av_packet_free(&fPacket);
+}
+
+
+static void
+set_channel_count(AVCodecParameters* context, int count)
+{
+#if LIBAVCODEC_VERSION_MAJOR >= 60
+	context->ch_layout.nb_channels = count;
+#else
+	context->channels = count;
+#endif
 }
 
 
@@ -104,7 +117,7 @@ AVFormatWriter::StreamCookie::Init(media_format* format,
 
 	BAutolock _(fStreamLock);
 
-	fPacket.stream_index = fFormatContext->nb_streams;
+	fPacket->stream_index = fFormatContext->nb_streams;
 	fStream = avformat_new_stream(fFormatContext, NULL);
 
 	if (fStream == NULL) {
@@ -112,7 +125,7 @@ AVFormatWriter::StreamCookie::Init(media_format* format,
 		return B_ERROR;
 	}
 
-	fStream->id = fPacket.stream_index;
+	fStream->id = fPacket->stream_index;
 
 //	TRACE("  fStream->codecpar: %p\n", fStream->codecpar);
 	// TODO: This is a hack for now! Use avcodec_find_encoder_by_name()
@@ -159,7 +172,7 @@ AVFormatWriter::StreamCookie::Init(media_format* format,
 		fStream->codecpar->sample_rate = (int)format->u.raw_audio.frame_rate;
 
 		// channels
-		fStream->codecpar->channels = format->u.raw_audio.channel_count;
+		set_channel_count(fStream->codecpar, format->u.raw_audio.channel_count);
 
 		// set fStream to the audio format we want to use. This is only a hint
 		// (each encoder has a different set of accepted formats)
@@ -188,7 +201,7 @@ AVFormatWriter::StreamCookie::Init(media_format* format,
 
 		// Now negociate the actual format with the encoder
 		// First check if the requested format is acceptable
-		AVCodec* codec = avcodec_find_encoder(fStream->codecpar->codec_id);
+		const AVCodec* codec = avcodec_find_encoder(fStream->codecpar->codec_id);
 
 		if (codec == NULL)
 			return B_MEDIA_BAD_FORMAT;
@@ -232,6 +245,17 @@ AVFormatWriter::StreamCookie::Init(media_format* format,
 			}
 		}
 
+#if LIBAVCODEC_VERSION_MAJOR >= 60
+		if (format->u.raw_audio.channel_mask == 0) {
+			// guess the channel mask...
+			av_channel_layout_default(&fStream->codecpar->ch_layout,
+				format->u.raw_audio.channel_count);
+		} else {
+			// The bits match 1:1 for media_multi_channels and FFmpeg defines.
+			av_channel_layout_from_mask(&fStream->codecpar->ch_layout,
+				format->u.raw_audio.channel_mask);
+		}
+#else
 		if (format->u.raw_audio.channel_mask == 0) {
 			// guess the channel mask...
 			switch (format->u.raw_audio.channel_count) {
@@ -265,11 +289,11 @@ AVFormatWriter::StreamCookie::Init(media_format* format,
 			// The bits match 1:1 for media_multi_channels and FFmpeg defines.
 			fStream->codecpar->channel_layout = format->u.raw_audio.channel_mask;
 		}
+#endif
 	}
 
-	TRACE("  stream->time_base: (%d/%d), codec->time_base: (%d/%d))\n",
-		fStream->time_base.num, fStream->time_base.den,
-		fStream->codec->time_base.num, fStream->codec->time_base.den);
+	TRACE("  stream->time_base: (%d/%d)\n",
+		fStream->time_base.num, fStream->time_base.den);
 
 #if 0
 	// Write the AVCodecContext pointer to the user data section of the
@@ -297,29 +321,27 @@ AVFormatWriter::StreamCookie::WriteChunk(const void* chunkBuffer,
 	size_t chunkSize, media_encode_info* encodeInfo)
 {
 	TRACE_PACKET("AVFormatWriter::StreamCookie[%d]::WriteChunk(%p, %ld, "
-		"start_time: %lld)\n", fStream->index, chunkBuffer, chunkSize,
+		"start_time: %" B_PRIdBIGTIME ")\n", fStream->index, chunkBuffer, chunkSize,
 		encodeInfo->start_time);
 
 	BAutolock _(fStreamLock);
 
-	fPacket.data = const_cast<uint8_t*>((const uint8_t*)chunkBuffer);
-	fPacket.size = chunkSize;
-	fPacket.stream_index = fStream->index;
+	fPacket->data = const_cast<uint8_t*>((const uint8_t*)chunkBuffer);
+	fPacket->size = chunkSize;
+	fPacket->stream_index = fStream->index;
 
-	fPacket.pts = int64_t((double)encodeInfo->start_time
+	fPacket->pts = int64_t((double)encodeInfo->start_time
 		* fStream->time_base.den / (1000000.0 * fStream->time_base.num)
 		+ 0.5);
 
-	fPacket.dts = fPacket.pts;
+	fPacket->dts = fPacket->pts;
 
-	fPacket.flags = 0;
+	fPacket->flags = 0;
 	if ((encodeInfo->flags & B_MEDIA_KEY_FRAME) != 0)
-		fPacket.flags |= AV_PKT_FLAG_KEY;
+		fPacket->flags |= AV_PKT_FLAG_KEY;
 
-	TRACE_PACKET("  PTS: %lld (stream->time_base: (%d/%d), "
-		"codec->time_base: (%d/%d))\n", fPacket.pts,
-		fStream->time_base.num, fStream->time_base.den,
-		fStream->codec->time_base.num, fStream->codec->time_base.den);
+	TRACE_PACKET("  PTS: %" PRId64 " (stream->time_base: (%d/%d)\n", fPacket->pts,
+		fStream->time_base.num, fStream->time_base.den);
 
 #if 0
 	// TODO: Eventually, we need to write interleaved packets, but
@@ -327,11 +349,11 @@ AVFormatWriter::StreamCookie::WriteChunk(const void* chunkBuffer,
 	// more than one stream. For the moment, this crashes in AVPacket
 	// shuffling inside libavformat. Maybe if we want to use this, we
 	// need to allocate a separate AVPacket and copy the chunk buffer.
-	int result = av_interleaved_write_frame(fFormatContext, &fPacket);
+	int result = av_interleaved_write_frame(fFormatContext, fPacket);
 	if (result < 0)
 		TRACE("  av_interleaved_write_frame(): %d\n", result);
 #else
-	int result = av_write_frame(fFormatContext, &fPacket);
+	int result = av_write_frame(fFormatContext, fPacket);
 	if (result < 0)
 		TRACE("  av_write_frame(): %d\n", result);
 #endif
@@ -344,7 +366,7 @@ status_t
 AVFormatWriter::StreamCookie::AddTrackInfo(uint32 code,
 	const void* data, size_t size, uint32 flags)
 {
-	TRACE("AVFormatWriter::StreamCookie::AddTrackInfo(%lu, %p, %ld, %lu)\n",
+	TRACE("AVFormatWriter::StreamCookie::AddTrackInfo(%" B_PRIu32 ", %p, %ld, %" B_PRIu32 ")\n",
 		code, data, size, flags);
 
 	BAutolock _(fStreamLock);
@@ -392,21 +414,24 @@ AVFormatWriter::Init(const media_file_format* fileFormat)
 {
 	TRACE("AVFormatWriter::Init()\n");
 
-	uint8* buffer = static_cast<uint8*>(av_malloc(kIOBufferSize));
-	if (buffer == NULL)
-		return B_NO_MEMORY;
-
-	// Allocate I/O context and initialize it with buffer
-	// and hook functions, pass ourself as cookie.
-	fIOContext = avio_alloc_context(buffer, kIOBufferSize, 1, this,
-			0, _Write, _Seek);
 	if (fIOContext == NULL) {
-		TRACE("av_alloc_put_byte() failed!\n");
-		return B_ERROR;
-	}
+		uint8* buffer = static_cast<uint8*>(av_malloc(kIOBufferSize));
+		if (buffer == NULL)
+			return B_NO_MEMORY;
 
-	// Setup I/O hooks. This seems to be enough.
-	fFormatContext->pb = fIOContext;
+		// Allocate I/O context and initialize it with buffer
+		// and hook functions, pass ourself as cookie.
+		fIOContext = avio_alloc_context(buffer, kIOBufferSize, 1, this,
+				0, _Write, _Seek);
+		if (fIOContext == NULL) {
+			av_free(buffer);
+			TRACE("av_alloc_put_byte() failed!\n");
+			return B_ERROR;
+		}
+
+		// Setup I/O hooks. This seems to be enough.
+		fFormatContext->pb = fIOContext;
+	}
 
 	// Set the AVOutputFormat according to fileFormat...
 	fFormatContext->oformat = av_guess_format(fileFormat->short_name,
@@ -448,16 +473,20 @@ AVFormatWriter::CommitHeader()
 	fCodecOpened = true;
 
 	fHeaderError = avformat_write_header(fFormatContext, NULL);
-	if (fHeaderError < 0)
-		TRACE("  avformat_write_header(): %d\n", fHeaderError);
 
 	#ifdef TRACE_AVFORMAT_WRITER
-	TRACE("  wrote header\n");
+	if (fHeaderError < 0) {
+		char errorBuffer[AV_ERROR_MAX_STRING_SIZE];
+		av_strerror(fHeaderError, errorBuffer, sizeof(errorBuffer));
+		TRACE("  avformat_write_header(): %s\n", errorBuffer);
+	} else {
+		TRACE("  wrote header\n");
+	}
+
 	for (unsigned i = 0; i < fFormatContext->nb_streams; i++) {
 		AVStream* stream = fFormatContext->streams[i];
-		TRACE("  stream[%u] time_base: (%d/%d), codec->time_base: (%d/%d)\n",
-			i, stream->time_base.num, stream->time_base.den,
-			stream->codec->time_base.num, stream->codec->time_base.den);
+		TRACE("  stream[%u] time_base: (%d/%d)\n",
+			i, stream->time_base.num, stream->time_base.den);
 	}
 	#endif // TRACE_AVFORMAT_WRITER
 
@@ -553,7 +582,7 @@ status_t
 AVFormatWriter::AddTrackInfo(void* _cookie, uint32 code,
 	const void* data, size_t size, uint32 flags)
 {
-	TRACE("AVFormatWriter::AddTrackInfo(%lu, %p, %ld, %lu)\n",
+	TRACE("AVFormatWriter::AddTrackInfo(%" B_PRIu32 ", %p, %ld, %" B_PRIu32 ")\n",
 		code, data, size, flags);
 
 	if (fHeaderError != 0)

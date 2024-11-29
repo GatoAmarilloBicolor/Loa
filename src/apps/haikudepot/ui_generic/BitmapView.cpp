@@ -1,5 +1,6 @@
 /*
  * Copyright 2013, Stephan Aßmus <superstippi@gmx.de>.
+ * Copyright 2020-2024, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
@@ -14,10 +15,11 @@
 
 BitmapView::BitmapView(const char* name)
 	:
-	BView(name, B_WILL_DRAW | B_FULL_UPDATE_ON_RESIZE),
-	fBitmap(NULL),
+	BView(name, B_WILL_DRAW | B_FULL_UPDATE_ON_RESIZE | B_TRANSPARENT_BACKGROUND),
+	fBitmapHolderRef(NULL),
 	fScaleBitmap(true)
 {
+	 SetViewColor(B_TRANSPARENT_COLOR);
 }
 
 
@@ -27,22 +29,16 @@ BitmapView::~BitmapView()
 
 
 void
-BitmapView::AllAttached()
-{
-	AdoptParentColors();
-}
-
-
-void
 BitmapView::Draw(BRect updateRect)
 {
-	BRect bounds(Bounds());
-	DrawBackground(bounds, updateRect);
-
-	if (fBitmap == NULL)
+	if (!fBitmapHolderRef.IsSet())
 		return;
 
-	BRect bitmapBounds = fBitmap->Bounds();
+	BRect bounds(Bounds());
+
+	const BBitmap* bitmap = fBitmapHolderRef->Bitmap();
+
+	BRect bitmapBounds = bitmap->Bounds();
 	if (bitmapBounds.Width() <= 0.0f || bitmapBounds.Height() <= 0.0f)
 		return;
 
@@ -87,7 +83,7 @@ BitmapView::Draw(BRect updateRect)
 	bounds.bottom = ceilf(bounds.top + height);
 
 	SetDrawingMode(B_OP_ALPHA);
-	DrawBitmap(fBitmap, bitmapBounds, bounds, B_FILTER_BITMAP_BILINEAR);
+	DrawBitmap(bitmap, bitmapBounds, bounds, B_FILTER_BITMAP_BILINEAR);
 }
 
 
@@ -96,8 +92,8 @@ BitmapView::MinSize()
 {
 	BSize size(0.0f, 0.0f);
 
-	if (fBitmap != NULL) {
-		BRect bounds = fBitmap->Bounds();
+	if (fBitmapHolderRef.IsSet()) {
+		BRect bounds = fBitmapHolderRef->Bitmap()->Bounds();
 		size.width = bounds.Width();
 		size.height = bounds.Height();
 	}
@@ -123,16 +119,13 @@ BitmapView::MaxSize()
 
 
 void
-BitmapView::SetBitmap(SharedBitmap* bitmap, SharedBitmap::Size bitmapSize)
+BitmapView::SetBitmap(BitmapHolderRef bitmapHolderRef)
 {
-	if (bitmap == fReference && bitmapSize == fBitmapSize)
+	if (bitmapHolderRef == fBitmapHolderRef)
 		return;
 
 	BSize size = MinSize();
-
-	fReference.SetTo(bitmap);
-	fBitmapSize = bitmapSize;
-	fBitmap = bitmap->Bitmap(bitmapSize);
+	fBitmapHolderRef = bitmapHolderRef;
 
 	BSize newSize = MinSize();
 	if (size != newSize)
@@ -145,11 +138,10 @@ BitmapView::SetBitmap(SharedBitmap* bitmap, SharedBitmap::Size bitmapSize)
 void
 BitmapView::UnsetBitmap()
 {
-	if (fReference.Get() == NULL)
+	if (!fBitmapHolderRef.IsSet())
 		return;
 
-	fBitmap = NULL;
-	fReference.Unset();
+	fBitmapHolderRef.Unset();
 
 	InvalidateLayout();
 	Invalidate();
@@ -165,11 +157,4 @@ BitmapView::SetScaleBitmap(bool scaleBitmap)
 	fScaleBitmap = scaleBitmap;
 
 	Invalidate();
-}
-
-
-void
-BitmapView::DrawBackground(BRect& bounds, BRect updateRect)
-{
-	FillRect(updateRect, B_SOLID_LOW);
 }

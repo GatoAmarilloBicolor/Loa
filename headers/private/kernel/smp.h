@@ -55,10 +55,15 @@ public:
 
 	inline	bool		GetBit(int32 cpu) const;
 
+	inline	bool		Matches(const CPUSet& mask) const;
+	inline	CPUSet		And(const CPUSet& mask) const;
+
 	inline	bool		IsEmpty() const;
 
+	inline uint32		Bits(uint32 index) const { return fBitmap[index];}
 private:
-	static	const int	kArraySize = ROUNDUP(SMP_MAX_CPUS, 32) / 32;
+	static	const int	kArrayBits = 32;
+	static	const int	kArraySize = ROUNDUP(SMP_MAX_CPUS, kArrayBits) / kArrayBits;
 
 			uint32		fBitmap[kArraySize];
 };
@@ -91,6 +96,11 @@ int32 smp_get_current_cpu(void);
 
 int smp_intercpu_int_handler(int32 cpu);
 
+void call_single_cpu(uint32 targetCPU, void (*func)(void*, int), void* cookie);
+void call_single_cpu_sync(uint32 targetCPU, void (*func)(void*, int),
+	void* cookie);
+
+
 #ifdef __cplusplus
 }
 #endif
@@ -120,40 +130,62 @@ CPUSet::SetAll()
 inline void
 CPUSet::SetBit(int32 cpu)
 {
-	int32* element = (int32*)&fBitmap[cpu % kArraySize];
-	*element |= 1u << (cpu / kArraySize);
+	int32* element = (int32*)&fBitmap[cpu / kArrayBits];
+	*element |= 1u << (cpu % kArrayBits);
 }
 
 
 inline void
 CPUSet::ClearBit(int32 cpu)
 {
-	int32* element = (int32*)&fBitmap[cpu % kArraySize];
-	*element &= ~uint32(1u << (cpu / kArraySize));
+	int32* element = (int32*)&fBitmap[cpu / kArrayBits];
+	*element &= ~uint32(1u << (cpu % kArrayBits));
 }
 
 
 inline void
 CPUSet::SetBitAtomic(int32 cpu)
 {
-	int32* element = (int32*)&fBitmap[cpu % kArraySize];
-	atomic_or(element, 1u << (cpu / kArraySize));
+	int32* element = (int32*)&fBitmap[cpu / kArrayBits];
+	atomic_or(element, 1u << (cpu % kArrayBits));
 }
 
 
 inline void
 CPUSet::ClearBitAtomic(int32 cpu)
 {
-	int32* element = (int32*)&fBitmap[cpu % kArraySize];
-	atomic_and(element, ~uint32(1u << (cpu / kArraySize)));
+	int32* element = (int32*)&fBitmap[cpu / kArrayBits];
+	atomic_and(element, ~uint32(1u << (cpu % kArrayBits)));
 }
 
 
 inline bool
 CPUSet::GetBit(int32 cpu) const
 {
-	int32* element = (int32*)&fBitmap[cpu % kArraySize];
-	return ((uint32)atomic_get(element) & (1u << (cpu / kArraySize))) != 0;
+	int32* element = (int32*)&fBitmap[cpu / kArrayBits];
+	return ((uint32)atomic_get(element) & (1u << (cpu % kArrayBits))) != 0;
+}
+
+
+inline CPUSet
+CPUSet::And(const CPUSet& mask) const
+{
+	CPUSet andSet;
+	for (int i = 0; i < kArraySize; i++)
+		andSet.fBitmap[i] = fBitmap[i] & mask.fBitmap[i];
+	return andSet;
+}
+
+
+inline bool
+CPUSet::Matches(const CPUSet& mask) const
+{
+	for (int i = 0; i < kArraySize; i++) {
+		if ((fBitmap[i] & mask.fBitmap[i]) != 0)
+			return true;
+	}
+
+	return false;
 }
 
 
@@ -177,7 +209,7 @@ CPUSet::IsEmpty() const
 static inline bool
 try_acquire_spinlock_inline(spinlock* lock)
 {
-	return atomic_get_and_set((int32*)lock, 1) == 0;
+	return atomic_get_and_set(&lock->lock, 1) == 0;
 }
 
 
@@ -193,7 +225,7 @@ acquire_spinlock_inline(spinlock* lock)
 static inline void
 release_spinlock_inline(spinlock* lock)
 {
-	atomic_set((int32*)lock, 0);
+	atomic_set(&lock->lock, 0);
 }
 
 
@@ -282,14 +314,16 @@ release_write_seqlock_inline(seqlock* lock) {
 
 
 static inline uint32
-acquire_read_seqlock_inline(seqlock* lock) {
-	return atomic_get((int32*)&lock->count);
+acquire_read_seqlock_inline(seqlock* lock)
+{
+	return (uint32)atomic_get((int32*)&lock->count);
 }
 
 
 static inline bool
-release_read_seqlock_inline(seqlock* lock, uint32 count) {
-	uint32 current = atomic_get((int32*)&lock->count);
+release_read_seqlock_inline(seqlock* lock, uint32 count)
+{
+	uint32 current = (uint32)atomic_get((int32*)&lock->count);
 
 	return count % 2 == 0 && current == count;
 }

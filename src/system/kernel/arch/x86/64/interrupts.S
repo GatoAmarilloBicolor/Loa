@@ -64,8 +64,7 @@
 
 // The macros below require R12 to contain the current thread pointer. R12 is
 // callee-save so will be preserved through all function calls and only needs
-// to be obtained once. R13 is used to store the system call start time, will
-// also be preserved.
+// to be obtained once.
 
 #define LOCK_THREAD_TIME()										\
 	leaq	THREAD_time_lock(%r12), %rdi;						\
@@ -79,8 +78,6 @@
 	LOCK_THREAD_TIME()											\
 																\
 	call	system_time;										\
-																\
-	/* Preserve system_time for post syscall debug */			\
 	movq	%rax, %r13;											\
 																\
 	/* thread->user_time += now - thread->last_time; */			\
@@ -221,16 +218,32 @@ STATIC_FUNCTION(int_bottom):
 	// exception.
 	orq		$X86_EFLAGS_RESUME, IFRAME_flags(%rbp)
 
-	subq	$512, %rsp
-	andq	$~15, %rsp
-	fxsaveq	(%rsp)
+	// xsave needs a 64-byte alignment
+	andq	$~63, %rsp
+	movq	(gFPUSaveLength), %rcx
+	subq	%rcx, %rsp
+	leaq	(%rsp), %rdi
+	shrq	$3, %rcx
+	movq	$0, %rax
+	rep stosq
+	movl	(gXsaveMask), %eax
+	movl	(gXsaveMask+4), %edx
+	movq	%rsp, %rdi
+	CODEPATCH_START
+	fxsaveq	(%rdi)
+	CODEPATCH_END(ALTCODEPATCH_TAG_XSAVE)
 
 	// Call the interrupt handler.
 	movq	%rbp, %rdi
 	movq	IFRAME_vector(%rbp), %rax
 	call	*gInterruptHandlerTable(, %rax, 8)
 
-	fxrstorq	(%rsp)
+	movl	(gXsaveMask), %eax
+	movl	(gXsaveMask+4), %edx
+	movq	%rsp, %rdi
+	CODEPATCH_START
+	fxrstorq	(%rdi)
+	CODEPATCH_END(ALTCODEPATCH_TAG_XRSTOR)
 	movq	%rbp, %rsp
 
 	// Restore the saved registers.
@@ -244,6 +257,7 @@ FUNCTION_END(int_bottom)
 STATIC_FUNCTION(int_bottom_user):
 	// Load the kernel GS segment base.
 	swapgs
+	lfence
 
 	// Push the rest of the interrupt frame to the stack.
 	PUSH_IFRAME_BOTTOM(IFRAME_TYPE_OTHER)
@@ -252,9 +266,22 @@ STATIC_FUNCTION(int_bottom_user):
 	// Frame pointer is the iframe.
 	movq	%rsp, %rbp
 
-	subq	$512, %rsp
-	andq	$~15, %rsp
-	fxsaveq	(%rsp)
+	// xsave needs a 64-byte alignment
+	andq	$~63, %rsp
+	movq	(gFPUSaveLength), %rcx
+	subq	%rcx, %rsp
+	leaq	(%rsp), %rdi
+	shrq	$3, %rcx
+	movq	$0, %rax
+	rep stosq
+	movl	(gXsaveMask), %eax
+	movl	(gXsaveMask+4), %edx
+
+	movq	%rsp, %rdi
+	CODEPATCH_START
+	fxsaveq	(%rdi)
+	CODEPATCH_END(ALTCODEPATCH_TAG_XSAVE)
+
 	movq	%rsp, IFRAME_fpu(%rbp)
 
 	// Set the RF (resume flag) in RFLAGS. This prevents an instruction
@@ -285,7 +312,12 @@ STATIC_FUNCTION(int_bottom_user):
 
 	UPDATE_THREAD_KERNEL_TIME()
 
-	fxrstorq	(%rsp)
+	movl	(gXsaveMask), %eax
+	movl	(gXsaveMask+4), %edx
+	movq	%rsp, %rdi
+	CODEPATCH_START
+	fxrstorq	(%rdi)
+	CODEPATCH_END(ALTCODEPATCH_TAG_XRSTOR)
 	movq	%rbp, %rsp
 
 	// Restore the saved registers.
@@ -313,7 +345,12 @@ STATIC_FUNCTION(int_bottom_user):
 	movq	%rbp, %rdi
 	call	x86_init_user_debug_at_kernel_exit
 1:
-	fxrstorq	(%rsp)
+	movl	(gXsaveMask), %eax
+	movl	(gXsaveMask+4), %edx
+	movq	%rsp, %rdi
+	CODEPATCH_START
+	fxrstorq	(%rdi)
+	CODEPATCH_END(ALTCODEPATCH_TAG_XRSTOR)
 	movq	%rbp, %rsp
 
 	// Restore the saved registers.
@@ -465,10 +502,11 @@ FUNCTION(x86_64_syscall_entry):
 	push	IFRAME_di(%rbp)
 	movq	%r14, %rdi				// syscall number
 	movq	%rsp, %rsi
+	subq	$8, %rsp
 	push	%rax
 	call	user_debug_pre_syscall
 	pop		%rax
-	addq	$48, %rsp
+	addq	$56, %rsp
 	jmp		.Lpre_syscall_debug_done
 
 .Lpost_syscall_work:
@@ -485,7 +523,6 @@ FUNCTION(x86_64_syscall_entry):
 	movq	%r14, %rdi				// syscall number
 	movq	%rsp, %rsi
 	movq	IFRAME_ax(%rbp), %rdx	// return value
-	movq	%r13, %rcx				// start time, preserved earlier
 	call	user_debug_post_syscall
 	addq	$48, %rsp
 1:
@@ -517,8 +554,13 @@ FUNCTION(x86_64_syscall_entry):
 	jmp .Liret
 
 .Lrestore_fpu:
-	movq	IFRAME_fpu(%rbp), %rax
-	fxrstorq	(%rax)
+	movq	IFRAME_fpu(%rbp), %rdi
+
+	movl	(gXsaveMask), %eax
+	movl	(gXsaveMask+4), %edx
+	CODEPATCH_START
+	fxrstorq	(%rdi)
+	CODEPATCH_END(ALTCODEPATCH_TAG_XRSTOR)
 .Liret:
 	// Restore the saved registers.
 	RESTORE_IFRAME()

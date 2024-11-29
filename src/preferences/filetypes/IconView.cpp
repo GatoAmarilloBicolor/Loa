@@ -1,5 +1,5 @@
 /*
- * Copyright 2006-2007, Axel Dörfler, axeld@pinc-software.de. All rights reserved.
+ * Copyright 2006-2024, Axel Dörfler, axeld@pinc-software.de. All rights reserved.
  * Distributed under the terms of the MIT License.
  */
 
@@ -15,6 +15,8 @@
 #include <Attributes.h>
 #include <Bitmap.h>
 #include <Catalog.h>
+#include <ControlLook.h>
+#include <Directory.h>
 #include <IconEditorProtocol.h>
 #include <IconUtils.h>
 #include <Locale.h>
@@ -211,8 +213,7 @@ Icon::SetTo(const entry_ref& ref, const char* type)
 
 	BFile file(&ref, B_READ_ONLY);
 	BAppFileInfo info(&file);
-	if (file.InitCheck() == B_OK
-		&& info.InitCheck() == B_OK)
+	if (file.InitCheck() == B_OK && info.InitCheck() == B_OK)
 		SetTo(info, type);
 }
 
@@ -437,8 +438,7 @@ Icon::GetIcon(BBitmap* bitmap) const
 	if (bitmap == NULL)
 		return B_BAD_VALUE;
 
-	if (fData != NULL
-		&& BIconUtils::GetVectorIcon(fData, fSize, bitmap) == B_OK)
+	if (fData != NULL && BIconUtils::GetVectorIcon(fData, fSize, bitmap) == B_OK)
 		return B_OK;
 
 	int32 width = bitmap->Bounds().IntegerWidth() + 1;
@@ -454,7 +454,32 @@ Icon::GetIcon(BBitmap* bitmap) const
 		return B_OK;
 	}
 
-	return B_ENTRY_NOT_FOUND;
+	BBitmap* source = (width > B_LARGE_ICON && fLarge != NULL) || fMini == NULL
+		? fLarge : fMini;
+	if (source == NULL)
+		return B_ENTRY_NOT_FOUND;
+
+	// Resize bitmap to fit the target
+	BBitmap* target = new (nothrow) BBitmap(bitmap->Bounds(),
+		B_BITMAP_ACCEPTS_VIEWS, bitmap->ColorSpace());
+	if (target != NULL && target->InitCheck() == B_OK && target->Lock()) {
+		BView* view = new BView(bitmap->Bounds(), NULL, B_FOLLOW_NONE,
+			B_WILL_DRAW);
+		target->AddChild(view);
+		view->DrawBitmap(source, bitmap->Bounds());
+		view->Flush();
+		target->RemoveChild(view);
+		target->Unlock();
+
+		// Copy target to original bitmap
+		bitmap->SetBits(target->Bits(), target->BitsLength(), 0,
+			target->ColorSpace());
+
+		delete view;
+	}
+	delete target;
+
+	return B_OK;
 }
 
 
@@ -497,14 +522,20 @@ Icon::AdoptData(uint8* data, size_t size)
 
 
 /*static*/ BBitmap*
-Icon::AllocateBitmap(int32 size, int32 space)
+Icon::AllocateBitmap(icon_size size, int32 space)
 {
 	int32 kSpace = B_RGBA32;
 	if (space == -1)
 		space = kSpace;
 
-	BBitmap* bitmap = new (nothrow) BBitmap(BRect(0, 0, size - 1, size - 1),
-		(color_space)space);
+	BBitmap* bitmap;
+	if (space == B_CMAP8) {
+		// Legacy mode; no scaling
+		bitmap = new (nothrow) BBitmap(BRect(0, 0, (int32)size - 1, (int32)size - 1), B_CMAP8);
+	} else {
+		bitmap = new (nothrow) BBitmap(BRect(BPoint(0, 0),
+			be_control_look->ComposeIconSize(size)), (color_space)space);
+	}
 	if (bitmap == NULL || bitmap->InitCheck() != B_OK) {
 		delete bitmap;
 		return NULL;
@@ -518,25 +549,27 @@ Icon::AllocateBitmap(int32 size, int32 space)
 
 
 IconView::IconView(const char* name, uint32 flags)
-	: BControl(name, NULL, NULL, B_WILL_DRAW | flags),
+	:
+	BControl(name, NULL, NULL, B_WILL_DRAW | flags),
 	fModificationMessage(NULL),
-	fIconSize(B_LARGE_ICON),
-	fIcon(NULL),
-	fHeapIcon(NULL),
+	fIconSize((icon_size)0),
+	fIconBitmap(NULL),
+	fHeapIconBitmap(NULL),
 	fHasRef(false),
 	fHasType(false),
-	fIconData(NULL),
+	fIcon(NULL),
 	fTracking(false),
 	fDragging(false),
 	fDropTarget(false),
 	fShowEmptyFrame(true)
 {
+	SetIconSize(B_LARGE_ICON);
 }
 
 
 IconView::~IconView()
 {
-	delete fIcon;
+	delete fIconBitmap;
 	delete fModificationMessage;
 }
 
@@ -716,7 +749,7 @@ IconView::AcceptsDrag(const BMessage* message)
 BRect
 IconView::BitmapRect() const
 {
-	return BRect(0, 0, fIconSize - 1, fIconSize - 1);
+	return fIconRect;
 }
 
 
@@ -725,10 +758,10 @@ IconView::Draw(BRect updateRect)
 {
 	SetDrawingMode(B_OP_ALPHA);
 
-	if (fHeapIcon != NULL)
-		DrawBitmap(fHeapIcon, BitmapRect().LeftTop());
-	else if (fIcon != NULL)
-		DrawBitmap(fIcon, BitmapRect().LeftTop());
+	if (fHeapIconBitmap != NULL)
+		DrawBitmap(fHeapIconBitmap, BitmapRect());
+	else if (fIconBitmap != NULL)
+		DrawBitmap(fIconBitmap, BitmapRect());
 	else if (!fDropTarget && fShowEmptyFrame) {
 		// draw frame so that the user knows here is something he
 		// might be able to click on
@@ -761,10 +794,10 @@ void
 IconView::GetPreferredSize(float* _width, float* _height)
 {
 	if (_width)
-		*_width = fIconSize;
+		*_width = fIconRect.Width();
 
 	if (_height)
-		*_height = fIconSize;
+		*_height = fIconRect.Height();
 }
 
 
@@ -811,7 +844,7 @@ IconView::MouseDown(BPoint where)
 		if (clicks == 2) {
 			// double click - open Icon-O-Matic
 			Invoke();
-		} else if (fIcon != NULL) {
+		} else if (fIconBitmap != NULL) {
 			// start tracking - this icon might be dragged around
 			fDragPoint = where;
 			fTracking = true;
@@ -827,7 +860,7 @@ IconView::MouseDown(BPoint where)
 		BPopUpMenu* menu = new BPopUpMenu("context");
 		menu->SetFont(be_plain_font);
 
-		bool hasIcon = fHasType ? fSource == kOwnIcon : fIcon != NULL;
+		bool hasIcon = fHasType ? fSource == kOwnIcon : fIconBitmap != NULL;
 		if (hasIcon) {
 			menu->AddItem(new BMenuItem(
 				B_TRANSLATE("Edit icon" B_UTF8_ELLIPSIS),
@@ -867,13 +900,13 @@ IconView::MouseUp(BPoint where)
 void
 IconView::MouseMoved(BPoint where, uint32 transit, const BMessage* dragMessage)
 {
-	if (fTracking && !fDragging && fIcon != NULL
+	if (fTracking && !fDragging && fIconBitmap != NULL
 		&& (abs((int32)(where.x - fDragPoint.x)) > 3
 			|| abs((int32)(where.y - fDragPoint.y)) > 3)) {
 		// Start drag
 		BMessage message(B_SIMPLE_DATA);
 
-		::Icon* icon = fIconData;
+		::Icon* icon = fIcon;
 		if (fHasRef || fHasType) {
 			icon = new ::Icon;
 			if (fHasRef)
@@ -884,10 +917,10 @@ IconView::MouseMoved(BPoint where, uint32 transit, const BMessage* dragMessage)
 
 		icon->CopyTo(message);
 
-		if (icon != fIconData)
+		if (icon != fIcon)
 			delete icon;
 
-		BBitmap *dragBitmap = new BBitmap(fIcon->Bounds(), B_RGBA32, true);
+		BBitmap *dragBitmap = new BBitmap(fIconBitmap->Bounds(), B_RGBA32, true);
 		dragBitmap->Lock();
 		BView *view
 			= new BView(dragBitmap->Bounds(), B_EMPTY_STRING, B_FOLLOW_NONE, 0);
@@ -898,7 +931,7 @@ IconView::MouseMoved(BPoint where, uint32 transit, const BMessage* dragMessage)
 		view->SetBlendingMode(B_CONSTANT_ALPHA, B_ALPHA_COMPOSITE);
 		view->SetDrawingMode(B_OP_ALPHA);
 		view->SetHighColor(0, 0, 0, 160);
-		view->DrawBitmap(fIcon);
+		view->DrawBitmap(fIconBitmap);
 
 		view->Sync();
 		dragBitmap->Unlock();
@@ -987,12 +1020,12 @@ IconView::SetTo(const BMimeType& type)
 void
 IconView::SetTo(::Icon* icon)
 {
-	if (fIconData == icon)
+	if (fIcon == icon)
 		return;
 
 	Unset();
 
-	fIconData = icon;
+	fIcon = icon;
 
 	Update();
 }
@@ -1008,20 +1041,20 @@ IconView::Unset()
 	fHasType = false;
 
 	fType.Unset();
-	fIconData = NULL;
+	fIcon = NULL;
 }
 
 
 void
 IconView::Update()
 {
-	delete fIcon;
-	fIcon = NULL;
+	delete fIconBitmap;
+	fIconBitmap = NULL;
 
 	Invalidate();
 		// this will actually trigger a redraw *after* we updated the icon below
 
-	BBitmap* icon = NULL;
+	BBitmap* bitmap = NULL;
 
 	if (fHasRef) {
 		BFile file(&fRef, B_READ_ONLY);
@@ -1032,42 +1065,43 @@ IconView::Update()
 		if (info.SetTo(&file) != B_OK)
 			return;
 
-		icon = Icon::AllocateBitmap(fIconSize);
-		if (icon != NULL && info.GetTrackerIcon(icon,
-				(icon_size)fIconSize) != B_OK) {
-			delete icon;
+		bitmap = Icon::AllocateBitmap(fIconSize);
+		if (bitmap != NULL && info.GetTrackerIcon(bitmap,
+				(icon_size)(bitmap->Bounds().IntegerWidth() + 1)) != B_OK) {
+			delete bitmap;
 			return;
 		}
 	} else if (fHasType) {
-		icon = Icon::AllocateBitmap(fIconSize);
-		if (icon != NULL && icon_for_type(fType, *icon, (icon_size)fIconSize,
+		bitmap = Icon::AllocateBitmap(fIconSize);
+		if (bitmap != NULL && icon_for_type(fType, *bitmap, (icon_size)fIconSize,
 				&fSource) != B_OK) {
-			delete icon;
+			delete bitmap;
 			return;
 		}
-	} else if (fIconData) {
-		icon = Icon::AllocateBitmap(fIconSize);
-		if (fIconData->GetIcon(icon) != B_OK) {
-			delete icon;
-			icon = NULL;
+	} else if (fIcon != NULL) {
+		bitmap = Icon::AllocateBitmap(fIconSize);
+		if (fIcon->GetIcon(bitmap) != B_OK) {
+			delete bitmap;
+			bitmap = NULL;
 		}
 	}
 
-	fIcon = icon;
+	fIconBitmap = bitmap;
 }
 
 
 void
-IconView::SetIconSize(int32 size)
+IconView::SetIconSize(icon_size size)
 {
 	if (size < B_MINI_ICON)
 		size = B_MINI_ICON;
 	if (size > 256)
-		size = 256;
+		size = (icon_size)256;
 	if (size == fIconSize)
 		return;
 
 	fIconSize = size;
+	fIconRect = BRect(BPoint(0, 0), be_control_look->ComposeIconSize(fIconSize));
 	Update();
 }
 
@@ -1075,7 +1109,7 @@ IconView::SetIconSize(int32 size)
 void
 IconView::ShowIconHeap(bool show)
 {
-	if (show == (fHeapIcon != NULL))
+	if (show == (fHeapIconBitmap != NULL))
 		return;
 
 	if (show) {
@@ -1086,12 +1120,12 @@ IconView::ShowIconHeap(bool show)
 			data = resources->LoadResource('VICN', "icon heap", &size);
 			if (data != NULL) {
 				// got vector icon data
-				fHeapIcon = Icon::AllocateBitmap(B_LARGE_ICON, B_RGBA32);
+				fHeapIconBitmap = Icon::AllocateBitmap(B_LARGE_ICON, B_RGBA32);
 				if (BIconUtils::GetVectorIcon((const uint8*)data,
-						size, fHeapIcon) != B_OK) {
+						size, fHeapIconBitmap) != B_OK) {
 					// bad data
-					delete fHeapIcon;
-					fHeapIcon = NULL;
+					delete fHeapIconBitmap;
+					fHeapIconBitmap = NULL;
 					data = NULL;
 				}
 			}
@@ -1101,17 +1135,17 @@ IconView::ShowIconHeap(bool show)
 				data = resources->LoadResource(B_LARGE_ICON_TYPE, "icon heap",
 					NULL);
 				if (data != NULL) {
-					fHeapIcon = Icon::AllocateBitmap(B_LARGE_ICON, B_CMAP8);
-					if (fHeapIcon != NULL) {
-						memcpy(fHeapIcon->Bits(), data,
-							fHeapIcon->BitsLength());
+					fHeapIconBitmap = Icon::AllocateBitmap(B_LARGE_ICON, B_CMAP8);
+					if (fHeapIconBitmap != NULL) {
+						memcpy(fHeapIconBitmap->Bits(), data,
+							fHeapIconBitmap->BitsLength());
 					}
 				}
 			}
 		}
 	} else {
-		delete fHeapIcon;
-		fHeapIcon = NULL;
+		delete fHeapIconBitmap;
+		fHeapIconBitmap = NULL;
 	}
 }
 
@@ -1123,7 +1157,7 @@ IconView::ShowEmptyFrame(bool show)
 		return;
 
 	fShowEmptyFrame = show;
-	if (fIcon == NULL)
+	if (fIconBitmap == NULL)
 		Invalidate();
 }
 
@@ -1158,7 +1192,7 @@ IconView::Invoke(BMessage* message)
 Icon*
 IconView::Icon()
 {
-	return fIconData;
+	return fIcon;
 }
 
 
@@ -1199,7 +1233,7 @@ IconView::_AddOrEditIcon()
 		message.what = B_EDIT_ICON_DATA;
 		message.AddMessenger("reply to", BMessenger(this));
 
-		::Icon* icon = fIconData;
+		::Icon* icon = fIcon;
 		if (icon == NULL) {
 			icon = new ::Icon();
 			if (fHasRef)
@@ -1221,7 +1255,7 @@ IconView::_AddOrEditIcon()
 			// where ever a vector icon attribute is present?
 		}
 
-		if (icon != fIconData)
+		if (icon != fIcon)
 			delete icon;
 	}
 
@@ -1234,28 +1268,37 @@ IconView::_SetIcon(BBitmap* large, BBitmap* mini, const uint8* data,
 	size_t size, bool force)
 {
 	if (fHasRef) {
-		BFile file(&fRef, B_READ_WRITE);
+		BNodeInfo node;
+		BDirectory refdir;
+		BFile file;
+		BEntry entry(&fRef, true);
 
-		if (is_application(file)) {
-			BAppFileInfo info(&file);
-			if (info.InitCheck() == B_OK) {
-				if (large != NULL || force)
-					info.SetIconForType(fType.Type(), large, B_LARGE_ICON);
-				if (mini != NULL || force)
-					info.SetIconForType(fType.Type(), mini, B_MINI_ICON);
-				if (data != NULL || force)
-					info.SetIconForType(fType.Type(), data, size);
-			}
-		} else {
-			BNodeInfo info(&file);
-			if (info.InitCheck() == B_OK) {
-				if (large != NULL || force)
-					info.SetIcon(large, B_LARGE_ICON);
-				if (mini != NULL || force)
-					info.SetIcon(mini, B_MINI_ICON);
-				if (data != NULL || force)
-					info.SetIcon(data, size);
-			}
+		if (entry.IsFile()) {
+			file.SetTo(&fRef, B_READ_WRITE);
+			if (is_application(file)) {
+				BAppFileInfo info(&file);
+				if (info.InitCheck() == B_OK) {
+					if (large != NULL || force)
+						info.SetIconForType(fType.Type(), large, B_LARGE_ICON);
+					if (mini != NULL || force)
+						info.SetIconForType(fType.Type(), mini, B_MINI_ICON);
+					if (data != NULL || force)
+						info.SetIconForType(fType.Type(), data, size);
+				}
+			} else
+				node.SetTo(&file);
+		}
+		if (entry.IsDirectory()) {
+			refdir.SetTo(&fRef);
+			node.SetTo(&refdir);
+		}
+		if (node.InitCheck() == B_OK) {
+			if (large != NULL || force)
+				node.SetIcon(large, B_LARGE_ICON);
+			if (mini != NULL || force)
+				node.SetIcon(mini, B_MINI_ICON);
+			if (data != NULL || force)
+				node.SetIcon(data, size);
 		}
 		// the icon shown will be updated using node monitoring
 	} else if (fHasType) {
@@ -1268,21 +1311,21 @@ IconView::_SetIcon(BBitmap* large, BBitmap* mini, const uint8* data,
 
 		// the icon shown will be updated automatically - we're watching
 		// any changes to the MIME database
-	} else if (fIconData != NULL) {
+	} else if (fIcon != NULL) {
 		if (large != NULL || force)
-			fIconData->SetLarge(large);
+			fIcon->SetLarge(large);
 		if (mini != NULL || force)
-			fIconData->SetMini(mini);
+			fIcon->SetMini(mini);
 		if (data != NULL || force)
-			fIconData->SetData(data, size);
+			fIcon->SetData(data, size);
 
 		// replace visible icon
-		if (fIcon == NULL && fIconData->HasData())
-			fIcon = Icon::AllocateBitmap(fIconSize);
+		if (fIconBitmap == NULL && fIcon->HasData())
+			fIconBitmap = Icon::AllocateBitmap(fIconSize);
 
-		if (fIconData->GetIcon(fIcon) != B_OK) {
-			delete fIcon;
-			fIcon = NULL;
+		if (fIcon->GetIcon(fIconBitmap) != B_OK) {
+			delete fIconBitmap;
+			fIconBitmap = NULL;
 		}
 		Invalidate();
 	}

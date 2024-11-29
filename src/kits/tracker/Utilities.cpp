@@ -45,6 +45,7 @@ All rights reserved.
 
 #include <BitmapStream.h>
 #include <Catalog.h>
+#include <ControlLook.h>
 #include <Debug.h>
 #include <Font.h>
 #include <IconUtils.h>
@@ -86,6 +87,35 @@ const float kExactMatchScore = INFINITY;
 bool gLocalizedNamePreferred;
 
 
+float
+ReadOnlyTint(rgb_color base)
+{
+	// darken tint if read-only (or lighten if dark)
+	return base.IsLight() ? B_DARKEN_1_TINT : 0.85;
+}
+
+
+rgb_color
+InvertColor(rgb_color color)
+{
+	return make_color(255 - color.red, 255 - color.green, 255 - color.blue);
+}
+
+
+rgb_color
+InvertedBackColor(rgb_color background)
+{
+	rgb_color inverted = InvertColor(background);
+
+	// The colors are different enough, we can use inverted
+	if (rgb_color::Contrast(background, inverted) > 127)
+		return inverted;
+
+	// use black or white
+	return background.IsLight() ? kBlack : kWhite;
+}
+
+
 bool
 SecondaryMouseButtonDown(int32 modifiers, int32 buttons)
 {
@@ -96,7 +126,7 @@ SecondaryMouseButtonDown(int32 modifiers, int32 buttons)
 
 
 uint32
-HashString(const char* string, uint32 seed)
+SeededHashString(const char* string, uint32 seed)
 {
 	char ch;
 	uint32 hash = seed;
@@ -421,7 +451,7 @@ OffscreenBitmap::NewBitmap(BRect bounds)
 {
 	delete fBitmap;
 	fBitmap = new(std::nothrow) BBitmap(bounds, B_RGB32, true);
-	if (fBitmap && fBitmap->Lock()) {
+	if (fBitmap != NULL && fBitmap->Lock()) {
 		BView* view = new BView(fBitmap->Bounds(), "", B_FOLLOW_NONE, 0);
 		fBitmap->AddChild(view);
 
@@ -547,7 +577,6 @@ FadeRGBA32Vertical(uint32* bits, int32 width, int32 height, int32 from,
 	}
 }
 
-
 }	// namespace BPrivate
 
 
@@ -555,7 +584,7 @@ FadeRGBA32Vertical(uint32* bits, int32 width, int32 height, int32 from,
 
 
 DraggableIcon::DraggableIcon(BRect rect, const char* name,
-	const char* mimeType, icon_size which, const BMessage* message,
+	const char* type, icon_size which, const BMessage* message,
 	BMessenger target, uint32 resizingMode, uint32 flags)
 	:
 	BView(rect, name, resizingMode, flags),
@@ -563,11 +592,11 @@ DraggableIcon::DraggableIcon(BRect rect, const char* name,
 	fTarget(target)
 {
 	fBitmap = new BBitmap(Bounds(), kDefaultIconDepth);
-	BMimeType mime(mimeType);
+	BMimeType mime(type);
 	status_t result = mime.GetIcon(fBitmap, which);
 	ASSERT(mime.IsValid());
 	if (result != B_OK) {
-		PRINT(("failed to get icon for %s, %s\n", mimeType, strerror(result)));
+		PRINT(("failed to get icon for %s, %s\n", type, strerror(result)));
 		BMimeType mime(B_FILE_MIMETYPE);
 		ASSERT(mime.IsInstalled());
 		mime.GetIcon(fBitmap, which);
@@ -818,6 +847,10 @@ void
 TitledSeparatorItem::GetContentSize(float* width, float* height)
 {
 	_inherited::GetContentSize(width, height);
+
+	// Adjust for the extra space needed by the separator bars at the left and right
+	if (width)
+		*width += (kMinSeparatorStubX + kStubToStringSlotX) * 2;
 }
 
 
@@ -1257,6 +1290,15 @@ StringToScalar(const char* text)
 }
 
 
+int32
+ListIconSize()
+{
+	static int32 sIconSize = be_control_look->ComposeIconSize(B_MINI_ICON)
+		.IntegerWidth() + 1;
+	return sIconSize;
+}
+
+
 static BRect
 LineBounds(BPoint where, float length, bool vertical)
 {
@@ -1342,6 +1384,13 @@ HexDump(const void* buf, int32 length)
 }
 
 
+int
+CompareLabels(const BMenuItem* item1, const BMenuItem* item2)
+{
+	return strcasecmp(item1->Label(), item2->Label());
+}
+
+
 void
 EnableNamedMenuItem(BMenu* menu, const char* itemName, bool on)
 {
@@ -1384,17 +1433,12 @@ DeleteSubmenu(BMenuItem* submenuItem)
 	if (submenuItem == NULL)
 		return;
 
-	BMenu* menu = submenuItem->Submenu();
-	if (menu == NULL)
+	BMenu* submenu = submenuItem->Submenu();
+	if (submenu == NULL)
 		return;
 
-	for (;;) {
-		BMenuItem* item = menu->RemoveItem((int32)0);
-		if (item == NULL)
-			return;
-
-		delete item;
-	}
+	// delete all submenu items
+	submenu->RemoveItems(0, submenu->CountItems(), true);
 }
 
 
@@ -1478,9 +1522,13 @@ GetAppIconFromAttr(BFile* file, BBitmap* icon, icon_size which)
 status_t
 GetFileIconFromAttr(BNode* node, BBitmap* icon, icon_size which)
 {
-	BNodeInfo fileInfo(node);
-	return fileInfo.GetIcon(icon, which);
+	// get icon from the node info
+	BNodeInfo nodeInfo(node);
+	return nodeInfo.GetIcon(icon, which);
 }
+
+
+//	#pragma mark - PrintToStream
 
 
 void
@@ -1489,6 +1537,9 @@ PrintToStream(rgb_color color)
 	printf("r:%x, g:%x, b:%x, a:%x\n",
 		color.red, color.green, color.blue, color.alpha);
 }
+
+
+//	#pragma mark - EachMenuItem
 
 
 extern BMenuItem*
@@ -1603,7 +1654,7 @@ PositionPassingMenuItem::Invoke(BMessage* message)
 	// use the window position only, if the item was invoked from the menu
 	// menu->Window() points to the window the item was invoked from
 	if (dynamic_cast<BContainerWindow*>(menu->Window()) == NULL) {
-		LooperAutoLocker lock(menu);
+		AutoLocker<BLooper> lock(menu->Looper());
 		if (lock.IsLocked()) {
 			BPoint invokeOrigin(menu->Window()->Frame().LeftTop());
 			clone.AddPoint("be:invoke_origin", invokeOrigin);

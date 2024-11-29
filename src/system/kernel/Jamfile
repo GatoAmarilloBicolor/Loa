@@ -10,6 +10,7 @@ SubDir HAIKU_TOP src system kernel ;
 	SubDirC++Flags $(defines) ;
 }
 
+SEARCH_SOURCE += [ FDirName $(SUBDIR) events ] ;
 SEARCH_SOURCE += [ FDirName $(SUBDIR) locks ] ;
 SEARCH_SOURCE += [ FDirName $(SUBDIR) scheduler ] ;
 
@@ -41,7 +42,6 @@ KernelMergeObject kernel_core.o :
 	low_resource_manager.cpp
 	main.cpp
 	module.cpp
-	Notifications.cpp
 	port.cpp
 	real_time_clock.cpp
 	sem.cpp
@@ -56,7 +56,11 @@ KernelMergeObject kernel_core.o :
 	UserEvent.cpp
 	usergroup.cpp
 	UserTimer.cpp
+
+	# events
 	wait_for_objects.cpp
+	Notifications.cpp
+	event_queue.cpp
 
 	# locks
 	lock.cpp
@@ -74,15 +78,6 @@ KernelMergeObject kernel_core.o :
 
 	: $(TARGET_KERNEL_PIC_CCFLAGS)
 ;
-
-# Generate the header defining macros for C++ structure sizes.
-local kernelC++StructSizesHeader = [ FGristFiles kernel_c++_struct_sizes.h ] ;
-TARGET_HDRS_$(TARGET_PACKAGING_ARCH) on $(kernelC++StructSizesHeader)
-	= [ on $(kernelC++StructSizesHeader)
-			return $(TARGET_HDRS_$(TARGET_PACKAGING_ARCH)) ]
-		$(TARGET_PRIVATE_KERNEL_HEADERS) ;
-CreateAsmStructOffsetsHeader $(kernelC++StructSizesHeader)
-	: kernel_c++_structs.cpp ;
 
 # We need to specify the dependency on the generated syscalls files explicitly.
 Includes [ FGristFiles syscalls.cpp ]
@@ -113,7 +108,7 @@ KernelLd kernel_$(TARGET_ARCH) :
 	kernel_vm.o
 
 	kernel_arch_$(TARGET_KERNEL_ARCH).o
-	kernel_platform_$(TARGET_BOOT_PLATFORM).o
+	kernel_platform_$(TARGET_KERNEL_PLATFORM).o
 
 	linkhack.so
 
@@ -125,15 +120,16 @@ KernelLd kernel_$(TARGET_ARCH) :
 	kernel_misc.o
 
 	: $(HAIKU_TOP)/src/system/ldscripts/$(TARGET_ARCH)/kernel.ld
-	: -Bdynamic -export-dynamic -dynamic-linker /foo/bar
-	  $(TARGET_KERNEL_PIC_LINKFLAGS)
+	: --orphan-handling=warn -L $(HAIKU_TOP)/src/system/ldscripts/common/
+	  -Bdynamic -export-dynamic -dynamic-linker /foo/bar
+	  $(TARGET_KERNEL_PIC_LINKFLAGS) --no-undefined
 	:
 ;
 
 if $(HAIKU_ARCH) in x86_64 arm {
 	# Cannot relink everything as a shared object on x86_64 as shared library
 	# code is required to be position-independent. Instead create a copy of the
-	# executable kernel image and change the ELF header type to DYN. A bit of
+	# executable kernel image and change the ELF header type to DYN. A bit of
 	# a hack, but avoids having to recompile a PIC copy of the kernel code.
 	# kernel.so is only used when linking modules to provide symbol information,
 	# this is sufficient for that purpose.
@@ -153,7 +149,7 @@ if $(HAIKU_ARCH) in x86_64 arm {
 		kernel_vm.o
 
 		kernel_arch_$(TARGET_KERNEL_ARCH).o
-		kernel_platform_$(TARGET_BOOT_PLATFORM).o
+		kernel_platform_$(TARGET_KERNEL_PLATFORM).o
 
 		linkhack.so
 
@@ -165,7 +161,8 @@ if $(HAIKU_ARCH) in x86_64 arm {
 		kernel_misc.o
 
 		: $(HAIKU_TOP)/src/system/ldscripts/$(TARGET_ARCH)/kernel.ld
-		: -Bdynamic -shared -export-dynamic -dynamic-linker /foo/bar
+		: --orphan-handling=warn -L $(HAIKU_TOP)/src/system/ldscripts/common/
+		  -Bdynamic -shared -export-dynamic -dynamic-linker /foo/bar
 		  $(TARGET_KERNEL_PIC_LINKFLAGS)
 	;
 }
@@ -202,6 +199,6 @@ SubInclude HAIKU_TOP src system kernel slab ;
 SubInclude HAIKU_TOP src system kernel util ;
 SubInclude HAIKU_TOP src system kernel vm ;
 
-if $(TARGET_BOOT_PLATFORM) {
-	SubInclude HAIKU_TOP src system kernel platform $(TARGET_BOOT_PLATFORM) ;
+if $(TARGET_KERNEL_PLATFORM) {
+	SubInclude HAIKU_TOP src system kernel platform $(TARGET_KERNEL_PLATFORM) ;
 }

@@ -8,12 +8,16 @@
 
 #include <driver_settings.h>
 
-#include <AutoDeleter.h>
+#include <AutoDeleterDrivers.h>
 #include <boot/vfs.h>
 #include <system/directories.h>
 
 
 namespace PackageFS {
+
+
+static const char* const kBlockedEntriesParameterName = "BlockedEntries";
+static const char* const kLegacyBlockedEntriesParameterName = "EntryBlacklist";
 
 
 // #pragma mark - PackageSettingsItem
@@ -43,21 +47,19 @@ PackageSettingsItem::Load(::Directory* systemDirectory, const char* name)
 {
 	// open the driver settings file
 	const char* settingsFilePath
-		= kSystemSettingsDirectory "/packages" + strlen(kSystemDirectory) + 1;
+		= &(kSystemSettingsDirectory "/packages")[strlen(kSystemDirectory) + 1];
 
-	int fd = open_from(systemDirectory, settingsFilePath, B_READ_ONLY, 0);
-	if (fd < 0)
+	FileDescriptorCloser fd(open_from(systemDirectory, settingsFilePath,
+		B_READ_ONLY, 0));
+	if (!fd.IsSet())
 		return NULL;
-	FileDescriptorCloser fdCloser(fd);
 
 	// load the driver settings
-	void* settingsHandle = load_driver_settings_file(fd);
-	if (settingsHandle == NULL)
+	DriverSettingsUnloader settingsHandle(load_driver_settings_file(fd.Get()));
+	if (!settingsHandle.IsSet())
 		return NULL;
-	CObjectDeleter<void, status_t> settingsDeleter(settingsHandle,
-		&unload_driver_settings);
 
-	const driver_settings* settings = get_driver_settings(settingsHandle);
+	const driver_settings* settings = get_driver_settings(settingsHandle.Get());
 	for (int i = 0; i < settings->parameter_count; i++) {
 		const driver_parameter& parameter = settings->parameters[i];
 		if (strcmp(parameter.name, "Package") != 0
@@ -88,10 +90,12 @@ PackageSettingsItem::Init(const driver_parameter& parameter)
 
 	for (int i = 0; i < parameter.parameter_count; i++) {
 		const driver_parameter& subParameter = parameter.parameters[i];
-		if (strcmp(subParameter.name, "EntryBlacklist") != 0)
+		if (strcmp(subParameter.name, kBlockedEntriesParameterName) != 0
+			&& strcmp(subParameter.name, kLegacyBlockedEntriesParameterName)
+				!= 0)
 			continue;
 
-		status_t error = _AddBlackListedEntries(subParameter);
+		status_t error = _AddBlockedEntries(subParameter);
 		// abort only in case of serious issues (memory shortage)
 		if (error == B_NO_MEMORY)
 			return error;
@@ -164,7 +168,7 @@ PackageSettingsItem::FindEntry(Entry* parent, const char* name,
 
 
 status_t
-PackageSettingsItem::_AddBlackListedEntries(const driver_parameter& parameter)
+PackageSettingsItem::_AddBlockedEntries(const driver_parameter& parameter)
 {
 	for (int i = 0; i < parameter.parameter_count; i++) {
 		Entry* entry;
@@ -173,7 +177,7 @@ PackageSettingsItem::_AddBlackListedEntries(const driver_parameter& parameter)
 		if (error == B_NO_MEMORY)
 			return error;
 
-		entry->SetBlackListed(true);
+		entry->SetBlocked(true);
 	}
 
 	return B_OK;

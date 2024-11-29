@@ -87,6 +87,9 @@ arch_system_info_init(struct kernel_args *args)
 		case VENDOR_TRANSMETA:
 			sCPUVendor = B_CPU_VENDOR_TRANSMETA;
 			break;
+		case VENDOR_HYGON:
+			sCPUVendor = B_CPU_VENDOR_HYGON;
+			break;
 		default:
 			sCPUVendor = B_CPU_VENDOR_UNKNOWN;
 			break;
@@ -97,6 +100,18 @@ arch_system_info_init(struct kernel_args *args)
 		| (cpu->arch.family << 8) | (cpu->arch.model << 4) | cpu->arch.stepping;
 
 	sCPUClockSpeed = args->arch_args.cpu_clock_speed;
+	if (cpu->arch.vendor == VENDOR_INTEL) {
+		cpuid_info cpuid;
+		get_current_cpuid(&cpuid, 0, 0);
+		uint32 maxBasicLeaf = cpuid.eax_0.max_eax;
+		if (maxBasicLeaf >= 0x16) {
+			get_current_cpuid(&cpuid, 0x16, 0);
+			if (cpuid.regs.eax != 0) {
+				sCPUClockSpeed = cpuid.regs.eax * 1000000LL;
+				dprintf("found clock speed with CPUID.16h\n");
+			}
+		}
+	}
 	return B_OK;
 }
 
@@ -106,7 +121,7 @@ arch_fill_topology_node(cpu_topology_node_info* node, int32 cpu)
 {
 	switch (node->type) {
 		case B_TOPOLOGY_ROOT:
-#if __INTEL__
+#if __i386__
 			node->data.root.platform = B_CPU_x86;
 #elif __x86_64__
 			node->data.root.platform = B_CPU_x86_64;
@@ -128,6 +143,47 @@ arch_fill_topology_node(cpu_topology_node_info* node, int32 cpu)
 		default:
 			break;
 	}
+}
+
+
+static void
+get_frequency_for(void *_frequency, int cpu)
+{
+	uint64 *frequency = (uint64*)_frequency;
+
+	bigtime_t timestamp = gCPU[cpu].arch.perf_timestamp;
+	bigtime_t timestamp2 = system_time();
+	if (timestamp2 - timestamp < 100) {
+		*frequency = gCPU[cpu].arch.frequency;
+		return;
+	}
+
+	uint64 mperf = gCPU[cpu].arch.mperf_prev;
+	uint64 aperf = gCPU[cpu].arch.aperf_prev;
+	uint64 mperf2 = x86_read_msr(IA32_MSR_MPERF);
+	uint64 aperf2 = x86_read_msr(IA32_MSR_APERF);
+
+	if (mperf2 == mperf)
+		*frequency = 0;
+	else {
+		*frequency = (aperf2 - aperf) * sCPUClockSpeed / (mperf2 - mperf);
+		gCPU[cpu].arch.mperf_prev = mperf2;
+		gCPU[cpu].arch.aperf_prev = aperf2;
+		gCPU[cpu].arch.perf_timestamp = timestamp2;
+		gCPU[cpu].arch.frequency = *frequency;
+	}
+}
+
+
+status_t
+arch_get_frequency(uint64 *frequency, int32 cpu)
+{
+	if (x86_check_feature(IA32_FEATURE_APERFMPERF, FEATURE_6_ECX))
+		call_single_cpu_sync(cpu, get_frequency_for, frequency);
+	else
+		*frequency = sCPUClockSpeed;
+
+	return B_OK;
 }
 
 

@@ -79,10 +79,16 @@ ScheduleThread::AddDump(TraceOutput& out)
 			case THREAD_BLOCK_TYPE_RW_LOCK:
 				out.Print("rwlock %p", fPreviousWaitObject);
 				break;
+			case THREAD_BLOCK_TYPE_USER:
+				out.Print("_user_block_thread()");
+				break;
 			case THREAD_BLOCK_TYPE_OTHER:
 				out.Print("other (%p)", fPreviousWaitObject);
 					// We could print the string, but it might come from a
 					// kernel module that has already been unloaded.
+				break;
+			case THREAD_BLOCK_TYPE_OTHER_OBJECT:
+				out.Print("other object (%p)", fPreviousWaitObject);
 				break;
 			default:
 				out.Print("unknown (%p)", fPreviousWaitObject);

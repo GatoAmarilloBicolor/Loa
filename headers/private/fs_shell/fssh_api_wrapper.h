@@ -12,6 +12,9 @@
 #endif
 #include <stdlib.h>
 
+#undef __THROW
+#define __THROW
+
 #include "fssh_dirent.h"
 #include "fssh_errno.h"
 #include "fssh_fcntl.h"
@@ -170,6 +173,8 @@
 
 #undef	offsetof
 #define offsetof(type,member)	fssh_offsetof(type,member)
+#undef	alignof
+#define alignof(type)	fssh_alignof(type)
 
 #define min_c(a,b)				fssh_min_c(a,b)
 #define max_c(a,b)				fssh_max_c(a,b)
@@ -384,7 +389,6 @@
 #define unload_driver_settings			fssh_unload_driver_settings
 #define parse_driver_settings_string	fssh_parse_driver_settings_string
 #define get_driver_settings_string		fssh_get_driver_settings_string
-#define delete_driver_settings			fssh_delete_driver_settings
 #define get_driver_parameter			fssh_get_driver_parameter
 #define get_driver_boolean_parameter	fssh_get_driver_boolean_parameter
 #define get_driver_settings				fssh_get_driver_settings
@@ -562,7 +566,6 @@
 
 /* Storage Kit/File System Errors */
 #define B_FILE_ERROR			FSSH_B_FILE_ERROR
-#define B_FILE_NOT_FOUND		FSSH_B_FILE_NOT_FOUND
 #define B_FILE_EXISTS			FSSH_B_FILE_EXISTS
 #define B_ENTRY_NOT_FOUND		FSSH_B_ENTRY_NOT_FOUND
 #define B_NAME_TOO_LONG			FSSH_B_NAME_TOO_LONG
@@ -851,6 +854,7 @@
 #define block_cache_get					fssh_block_cache_get
 #define block_cache_set_dirty			fssh_block_cache_set_dirty
 #define block_cache_put					fssh_block_cache_put
+#define block_cache_prefetch			fssh_block_cache_prefetch
 
 /* file cache */
 #define file_cache_create				fssh_file_cache_create
@@ -1001,6 +1005,8 @@
 #define debugger_command_hook	fssh_debugger_command_hook
 #define add_debugger_command	fssh_add_debugger_command
 #define remove_debugger_command	fssh_remove_debugger_command
+
+#define ASSERT_ALWAYS	ASSERT
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1397,6 +1403,8 @@
 #define index		fssh_index
 #define rindex		fssh_rindex
 
+/* SMAP-specific functions */
+#define user_strlcpy	fssh_strlcpy
 
 ////////////////////////////////////////////////////////////////////////////////
 // #pragma mark - fssh_time.h

@@ -21,6 +21,10 @@
 #include <sys/types.h>
 #include <stdint.h>
 
+#ifndef __FLOAT_WORD_ORDER
+#define __FLOAT_WORD_ORDER __BYTE_ORDER
+#endif
+
 /* The original fdlibm code used statements like:
 	n0 = ((*(int*)&one)>>29)^1;		* index of high word *
 	ix0 = *(n0+(int*)&x);			* high word of x *
@@ -282,8 +286,6 @@ extern int   __kernel_rem_pio2l (long double*,long double*,int,int,
 /* prototypes required to compile the ldbl-96 support without warnings */
 extern int __finitel (long double);
 extern int __ilogbl (long double);
-extern int __isinfl (long double);
-extern int __isnanl (long double);
 extern long double __atanl (long double);
 extern long double __copysignl (long double, long double);
 extern long double __expm1l (long double);

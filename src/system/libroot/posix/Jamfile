@@ -17,27 +17,36 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 		} else {
 			PWD_BACKEND = pwd.cpp grp.cpp shadow.cpp user_group_common.cpp ;
 		}
+
+
+		local threadsLib = call_once.c cnd.c mtx.c thrd.c tss.c ;
+		SEARCH_SOURCE += [ FDirName $(SUBDIR) libstdthreads ] ;
+		if $(HAIKU_CC_IS_LEGACY_GCC_$(architecture)) = 1 {
+			# the threads library is not available on gcc2
+			threadsLib = ;
+		}
+
 		MergeObject <$(architecture)>posix_main.o :
-			assert.c
+			assert.cpp
+			cat.cpp
+			devctl.c
 			dlfcn.c
-			dirent.c
+			dirent.cpp
 			errno.c
 			fcntl.cpp
-			fnmatch.c
-			fts.c
-			ftw.c
 			glob.c
 			inttypes.c
 			libgen.cpp
-			nftw.c
-			poll.c
+			poll.cpp
 			$(PWD_BACKEND)
 			scheduler.cpp
 			semaphore.cpp
 			spawn.cpp
 			syslog.cpp
 			termios.c
+			$(threadsLib)
 			utime.c
+			utmpx.cpp
 			;
 	}
 }
@@ -50,7 +59,6 @@ for arch in $(TARGET_ARCHS) {
 SubInclude HAIKU_TOP src system libroot posix crypt ;
 SubInclude HAIKU_TOP src system libroot posix locale ;
 SubInclude HAIKU_TOP src system libroot posix malloc ;
-SubInclude HAIKU_TOP src system libroot posix malloc_debug ;
 SubInclude HAIKU_TOP src system libroot posix pthread ;
 SubInclude HAIKU_TOP src system libroot posix signal ;
 SubInclude HAIKU_TOP src system libroot posix stdio ;
@@ -62,3 +70,4 @@ SubInclude HAIKU_TOP src system libroot posix unistd ;
 SubInclude HAIKU_TOP src system libroot posix wchar ;
 
 SubInclude HAIKU_TOP src system libroot posix glibc ;
+SubInclude HAIKU_TOP src system libroot posix musl ;

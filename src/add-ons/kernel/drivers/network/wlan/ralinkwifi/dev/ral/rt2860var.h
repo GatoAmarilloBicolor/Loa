@@ -15,7 +15,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  * $OpenBSD: rt2860var.h,v 1.20 2010/09/07 16:21:42 deraadt Exp $
- * $FreeBSD: releng/11.1/sys/dev/ral/rt2860var.h 300657 2016-05-25 06:29:23Z sgalabov $
  */
 
 #define RT2860_TX_RING_COUNT	64
@@ -55,7 +54,7 @@ struct rt2860_tx_radiotap_header {
 	uint8_t		wt_rate;
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
-} __packed __aligned(8);
+} __packed;
 
 #define RT2860_TX_RADIOTAP_PRESENT					\
 	((1 << IEEE80211_RADIOTAP_FLAGS) |				\
@@ -116,6 +115,7 @@ struct rt2860_vap {
 
 struct rt2860_softc {
 	struct ieee80211com		sc_ic;
+	struct ieee80211_ratectl_tx_status sc_txs;
 	struct mbufq			sc_snd;
 	struct mtx			sc_mtx;
 	device_t			sc_dev;
@@ -141,7 +141,7 @@ struct rt2860_softc {
 #define RT2860_PCIE		(1 << 2)
 #define	RT2860_RUNNING		(1 << 3)
 
-	struct ieee80211_node		*wcid2ni[RT2860_WCID_MAX];
+	struct ieee80211_node		*wcid2ni[RT2860_WCID_MAX + 1];
 
 	struct rt2860_tx_ring		txq[6];
 	struct rt2860_rx_ring		rxq;

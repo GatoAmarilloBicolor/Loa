@@ -11,7 +11,9 @@ SubDirHdrs $(SUBDIR) timers ;
 
 UsePrivateKernelHeaders ;
 UsePrivateHeaders shared ;
+UsePrivateHeaders [ FDirName system arch x86 ] ;
 
+SEARCH_SOURCE += [ FDirName $(SUBDIR) $(DOTDOT) generic ] ;
 SEARCH_SOURCE += [ FDirName $(SUBDIR) paging ] ;
 SEARCH_SOURCE += [ FDirName $(SUBDIR) timers ] ;
 
@@ -24,9 +26,9 @@ if $(TARGET_ARCH) = x86_64 {
 		arch.S
 		cpuid.cpp
 		descriptors.cpp
+		errata.cpp
 		interrupts.S
 		signals.cpp
-		signals_asm.S
 		syscalls.cpp
 		thread.cpp
 
@@ -49,6 +51,7 @@ if $(TARGET_ARCH) = x86_64 {
 		bios.cpp
 		cpuid.S
 		descriptors.cpp
+		errata.cpp
 		interrupts.S
 		signals.cpp
 		signals_asm.S
@@ -90,9 +93,13 @@ local archGenericSources =
 	arch_vm_translation_map.cpp
 	apic.cpp
 	ioapic.cpp
-	irq_routing_table.cpp
+	acpi_irq_routing_table.cpp
 	msi.cpp
 	pic.cpp
+
+	# serial
+	debug_uart.cpp
+	debug_uart_8250.cpp
 
 	# paging
 	X86PagingMethod.cpp
@@ -105,14 +112,14 @@ local archGenericSources =
 	x86_pit.cpp
 ;
 
-KernelMergeObject kernel_arch_x86.o :
+KernelMergeObject kernel_arch_$(TARGET_KERNEL_ARCH).o :
 	$(archSpecificSources)
 	$(archGenericSources)
 	:
 	$(TARGET_KERNEL_PIC_CCFLAGS)
 ;
 
-CreateAsmStructOffsetsHeader asm_offsets.h : asm_offsets.cpp ;
+CreateAsmStructOffsetsHeader asm_offsets.h : asm_offsets.cpp : $(TARGET_KERNEL_ARCH) ;
 
 # We need to specify the dependency on the generated syscalls file explicitly.
 Includes [ FGristFiles interrupts.S arch.S signals.cpp signals_asm.S ]

@@ -7,6 +7,7 @@
 
 
 #include <InterfaceDefs.h>
+#include <NumberFormat.h>
 #include <String.h>
 
 class SystemInfo;
@@ -61,6 +62,8 @@ protected:
 	int64				fMaximum;
 	bigtime_t			fInterval;
 	rgb_color			fColor;
+
+	mutable BNumberFormat	fNumberFormat;
 };
 
 
@@ -70,7 +73,6 @@ public:
 	virtual				~MemoryDataSource();
 
 	virtual void		Print(BString& text, int64 value) const;
-	virtual const char*	Unit() const;
 };
 
 
@@ -260,6 +262,36 @@ public:
 private:
 	bigtime_t			fPreviousActive;
 	bigtime_t			fPreviousTime;
+};
+
+
+class CPUFrequencyDataSource : public DataSource {
+public:
+						CPUFrequencyDataSource(int32 cpu = 0);
+						CPUFrequencyDataSource(const CPUFrequencyDataSource& other);
+	virtual				~CPUFrequencyDataSource();
+
+	virtual DataSource*	Copy() const;
+	virtual DataSource*	CopyForCPU(int32 cpu) const;
+
+	virtual void		Print(BString& text, int64 value) const;
+	virtual	int64		NextValue(SystemInfo& info);
+
+	virtual const char*	InternalName() const;
+	virtual const char*	Name() const;
+	virtual const char*	Label() const;
+	virtual const char*	ShortLabel() const;
+
+	virtual int32		CPU() const;
+	virtual bool		PerCPU() const;
+	virtual bool		Primary() const;
+
+private:
+			void		_SetCPU(int32 cpu);
+
+	int32				fCPU;
+	BString				fLabel;
+	BString				fShortLabel;
 };
 
 

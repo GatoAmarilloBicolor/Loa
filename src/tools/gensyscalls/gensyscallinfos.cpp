@@ -18,6 +18,10 @@
 #include "arch_gensyscalls.h"
 	// for the alignment type macros (only for the type names)
 
+#ifndef SYSCALL_LONG_PARAMETER_ALIGNMENT_TYPE
+#define SYSCALL_LONG_PARAMETER_ALIGNMENT_TYPE SYSCALL_PARAMETER_ALIGNMENT_TYPE
+#endif
+
 
 // macro trickery to create a string literal
 #define MAKE_STRING(x)	#x
@@ -48,7 +52,7 @@ const char* kUsage =
 static void
 print_usage(bool error)
 {
-	fprintf((error ? stderr : stdout), kUsage);
+	fputs(kUsage, (error ? stderr : stdout));
 }
 
 
@@ -313,7 +317,7 @@ private:
 		// open the input file
 		ifstream file(filename, ifstream::in);
 		if (!file.is_open())
-			throw new IOException(string("Failed to open `") + filename + "'.");
+			throw IOException(string("Failed to open `") + filename + "'.");
 		// parse the syscalls
 		Tokenizer tokenizer(file);
 		// find "#pragma syscalls begin"
@@ -344,7 +348,7 @@ private:
 		// open the syscall info file
 		ofstream file(filename, ofstream::out | ofstream::trunc);
 		if (!file.is_open())
-			throw new IOException(string("Failed to open `") + filename + "'.");
+			throw IOException(string("Failed to open `") + filename + "'.");
 
 		// write preamble
 		file << "#include \"gensyscalls.h\"" << endl;
@@ -357,10 +361,15 @@ private:
 		file << "const char* const kParameterAlignmentType = \""
 			EVAL_MACRO(MAKE_STRING, SYSCALL_PARAMETER_ALIGNMENT_TYPE)
 			<< "\";" << endl;
+		file << "const char* const kLongParameterAlignmentType = \""
+			EVAL_MACRO(MAKE_STRING, SYSCALL_LONG_PARAMETER_ALIGNMENT_TYPE)
+			<< "\";" << endl;
 		file << "const int kReturnTypeAlignmentSize = "
 			"SYSCALL_RETURN_TYPE_ALIGNMENT_SIZE;" << endl;
 		file << "const int kParameterAlignmentSize = "
 			"SYSCALL_PARAMETER_ALIGNMENT_SIZE;" << endl;
+		file << "const int kLongParameterAlignmentSize = "
+			"SYSCALL_LONG_PARAMETER_ALIGNMENT_SIZE;" << endl;
 		file << endl;
 
 		file << "SyscallVector* create_syscall_vector() {" << endl;
@@ -410,7 +419,7 @@ private:
 		// open the syscall info file
 		ofstream file(filename, ofstream::out | ofstream::trunc);
 		if (!file.is_open())
-			throw new IOException(string("Failed to open `") + filename + "'.");
+			throw IOException(string("Failed to open `") + filename + "'.");
 
 		// write preamble
 		file << "#include <computed_asm_macros.h>" << endl;
@@ -418,12 +427,18 @@ private:
 		file << endl;
 		file << "#include \"arch_gensyscalls.h\"" << endl;
 		file << endl;
+		file << "#ifndef SYSCALL_LONG_PARAMETER_ALIGNMENT_TYPE" << endl;
+		file << "#define SYSCALL_LONG_PARAMETER_ALIGNMENT_TYPE SYSCALL_PARAMETER_ALIGNMENT_TYPE"
+			<< endl;
+		file << "#endif" << endl;
 		file << "void dummy() {" << endl;
 
 		file << "DEFINE_COMPUTED_ASM_MACRO(SYSCALL_RETURN_TYPE_ALIGNMENT_SIZE, "
 			"sizeof(SYSCALL_RETURN_TYPE_ALIGNMENT_TYPE));" << endl;
   		file << "DEFINE_COMPUTED_ASM_MACRO(SYSCALL_PARAMETER_ALIGNMENT_SIZE, "
 			"sizeof(SYSCALL_PARAMETER_ALIGNMENT_TYPE));" << endl;
+		file << "DEFINE_COMPUTED_ASM_MACRO(SYSCALL_LONG_PARAMETER_ALIGNMENT_SIZE, "
+			"sizeof(SYSCALL_LONG_PARAMETER_ALIGNMENT_TYPE));" << endl;
 		file << endl;
 
 		// syscalls
@@ -569,7 +584,7 @@ main(int argc, char** argv)
 {
 	try {
 		return Main().Run(argc, argv);
-	} catch (Exception& exception) {
+	} catch (const Exception& exception) {
 		fprintf(stderr, "%s\n", exception.what());
 		return 1;
 	}

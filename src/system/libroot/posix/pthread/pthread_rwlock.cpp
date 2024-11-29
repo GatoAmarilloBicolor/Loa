@@ -1,4 +1,5 @@
 /*
+ * Copyright 2022, Haiku, Inc. All rights reserved.
  * Copyright 2008, Ingo Weinhold, ingo_weinhold@gmx.de.
  * Distributed under the terms of the MIT License.
  */
@@ -10,8 +11,8 @@
 #include <Debug.h>
 
 #include <AutoLocker.h>
-#include <libroot_lock.h>
 #include <syscalls.h>
+#include <time_private.h>
 #include <user_mutex_defs.h>
 #include <user_thread.h>
 #include <util/DoublyLinkedList.h>
@@ -64,19 +65,24 @@ struct SharedRWLock {
 		return delete_sem(sem) == B_OK ? B_OK : B_BAD_VALUE;
 	}
 
-	status_t ReadLock(bigtime_t timeout)
+	status_t ReadLock(uint32 flags, bigtime_t timeout)
 	{
-		return acquire_sem_etc(sem, 1,
-			timeout >= 0 ? B_ABSOLUTE_REAL_TIME_TIMEOUT : 0, timeout);
+		status_t status;
+		do {
+			status = acquire_sem_etc(sem, 1, flags, timeout);
+		} while (status == B_INTERRUPTED);
+		return status;
 	}
 
-	status_t WriteLock(bigtime_t timeout)
+	status_t WriteLock(uint32 flags, bigtime_t timeout)
 	{
-		status_t error = acquire_sem_etc(sem, MAX_READER_COUNT,
-			timeout >= 0 ? B_ABSOLUTE_REAL_TIME_TIMEOUT : 0, timeout);
-		if (error == B_OK)
+		status_t status;
+		do {
+			status = acquire_sem_etc(sem, MAX_READER_COUNT, flags, timeout);
+		} while (status == B_INTERRUPTED);
+		if (status == B_OK)
 			owner = find_thread(NULL);
-		return error;
+		return status;
 	}
 
 	status_t Unlock()
@@ -124,11 +130,9 @@ struct LocalRWLock {
 
 	bool StructureLock()
 	{
-		// Enter critical region: lock the mutex
-		int32 status = atomic_or((int32*)&mutex, B_USER_MUTEX_LOCKED);
-
-		// If already locked, call the kernel
-		if ((status & (B_USER_MUTEX_LOCKED | B_USER_MUTEX_WAITING)) != 0) {
+		const int32 oldValue = atomic_test_and_set((int32*)&mutex, B_USER_MUTEX_LOCKED, 0);
+		if (oldValue != 0) {
+			status_t status;
 			do {
 				status = _kern_mutex_lock((int32*)&mutex, NULL, 0, 0);
 			} while (status == B_INTERRUPTED);
@@ -144,12 +148,11 @@ struct LocalRWLock {
 		// Exit critical region: unlock the mutex
 		int32 status = atomic_and((int32*)&mutex,
 			~(int32)B_USER_MUTEX_LOCKED);
-
 		if ((status & B_USER_MUTEX_WAITING) != 0)
-			_kern_mutex_unlock((int32*)&mutex, 0);
+			_kern_mutex_unblock((int32*)&mutex, 0);
 	}
 
-	status_t ReadLock(bigtime_t timeout)
+	status_t ReadLock(uint32 flags, bigtime_t timeout)
 	{
 		Locker locker(this);
 
@@ -158,10 +161,10 @@ struct LocalRWLock {
 			return B_OK;
 		}
 
-		return _Wait(false, timeout);
+		return _Wait(false, flags, timeout);
 	}
 
-	status_t WriteLock(bigtime_t timeout)
+	status_t WriteLock(uint32 flags, bigtime_t timeout)
 	{
 		Locker locker(this);
 
@@ -171,7 +174,7 @@ struct LocalRWLock {
 			return B_OK;
 		}
 
-		return _Wait(true, timeout);
+		return _Wait(true, flags, timeout);
 	}
 
 	status_t Unlock()
@@ -190,10 +193,13 @@ struct LocalRWLock {
 	}
 
 private:
-	status_t _Wait(bool writer, bigtime_t timeout)
+	status_t _Wait(bool writer, uint32 flags, bigtime_t timeout)
 	{
 		if (timeout == 0)
 			return B_TIMED_OUT;
+
+		if (writer_count == 1 && owner == find_thread(NULL))
+			return EDEADLK;
 
 		Waiter waiter(writer);
 		waiters.Add(&waiter);
@@ -203,13 +209,15 @@ private:
 		if (writer)
 			writer_count++;
 
-		StructureUnlock();
-		status_t error = _kern_block_thread(
-			timeout >= 0 ? B_ABSOLUTE_REAL_TIME_TIMEOUT : 0, timeout);
-		StructureLock();
+		status_t status;
+		do {
+			StructureUnlock();
+			status = _kern_block_thread(flags, timeout);
+			StructureLock();
 
-		if (!waiter.queued)
-			return waiter.status;
+			if (!waiter.queued)
+				return waiter.status;
+		} while (status == B_INTERRUPTED);
 
 		// we're still queued, which means an error (timeout, interrupt)
 		// occurred
@@ -220,7 +228,7 @@ private:
 
 		_Unblock();
 
-		return error;
+		return status;
 	}
 
 	void _Unblock()
@@ -324,9 +332,9 @@ int
 pthread_rwlock_rdlock(pthread_rwlock_t* lock)
 {
 	if ((lock->flags & RWLOCK_FLAG_SHARED) != 0)
-		return ((SharedRWLock*)lock)->ReadLock(B_INFINITE_TIMEOUT);
+		return ((SharedRWLock*)lock)->ReadLock(0, B_INFINITE_TIMEOUT);
 	else
-		return ((LocalRWLock*)lock)->ReadLock(B_INFINITE_TIMEOUT);
+		return ((LocalRWLock*)lock)->ReadLock(0, B_INFINITE_TIMEOUT);
 }
 
 
@@ -335,27 +343,54 @@ pthread_rwlock_tryrdlock(pthread_rwlock_t* lock)
 {
 	status_t error;
 	if ((lock->flags & RWLOCK_FLAG_SHARED) != 0)
-		error = ((SharedRWLock*)lock)->ReadLock(0);
+		error = ((SharedRWLock*)lock)->ReadLock(B_ABSOLUTE_REAL_TIME_TIMEOUT, 0);
 	else
-		error = ((LocalRWLock*)lock)->ReadLock(0);
+		error = ((LocalRWLock*)lock)->ReadLock(B_ABSOLUTE_REAL_TIME_TIMEOUT, 0);
 
 	return error == B_TIMED_OUT ? EBUSY : error;
 }
 
 
-int pthread_rwlock_timedrdlock(pthread_rwlock_t* lock,
-	const struct timespec *timeout)
+int
+pthread_rwlock_clockrdlock(pthread_rwlock_t* lock, clockid_t clock_id,
+	const struct timespec *abstime)
 {
-	bigtime_t timeoutMicros = timeout->tv_sec * 1000000LL
-		+ timeout->tv_nsec / 1000LL;
+	bigtime_t timeout = 0;
+	bool invalidTime = false;
+	if (abstime == NULL || !timespec_to_bigtime(*abstime, timeout))
+		invalidTime = true;
+
+	uint32 flags = 0;
+	if (timeout >= 0) {
+		switch (clock_id) {
+			case CLOCK_REALTIME:
+				flags = B_ABSOLUTE_REAL_TIME_TIMEOUT;
+				break;
+			case CLOCK_MONOTONIC:
+				flags = B_ABSOLUTE_TIMEOUT;
+				break;
+			default:
+				return EINVAL;
+		}
+	}
 
 	status_t error;
 	if ((lock->flags & RWLOCK_FLAG_SHARED) != 0)
-		error = ((SharedRWLock*)lock)->ReadLock(timeoutMicros);
+		error = ((SharedRWLock*)lock)->ReadLock(flags, timeout);
 	else
-		error = ((LocalRWLock*)lock)->ReadLock(timeoutMicros);
+		error = ((LocalRWLock*)lock)->ReadLock(flags, timeout);
 
-	return error == B_TIMED_OUT ? EBUSY : error;
+	if (error != B_OK && invalidTime)
+		return EINVAL;
+	return (error == B_TIMED_OUT) ? EBUSY : error;
+}
+
+
+int
+pthread_rwlock_timedrdlock(pthread_rwlock_t* lock,
+	const struct timespec *abstime)
+{
+	return pthread_rwlock_clockrdlock(lock, CLOCK_REALTIME, abstime);
 }
 
 
@@ -363,9 +398,9 @@ int
 pthread_rwlock_wrlock(pthread_rwlock_t* lock)
 {
 	if ((lock->flags & RWLOCK_FLAG_SHARED) != 0)
-		return ((SharedRWLock*)lock)->WriteLock(B_INFINITE_TIMEOUT);
+		return ((SharedRWLock*)lock)->WriteLock(0, B_INFINITE_TIMEOUT);
 	else
-		return ((LocalRWLock*)lock)->WriteLock(B_INFINITE_TIMEOUT);
+		return ((LocalRWLock*)lock)->WriteLock(0, B_INFINITE_TIMEOUT);
 }
 
 
@@ -374,28 +409,54 @@ pthread_rwlock_trywrlock(pthread_rwlock_t* lock)
 {
 	status_t error;
 	if ((lock->flags & RWLOCK_FLAG_SHARED) != 0)
-		error = ((SharedRWLock*)lock)->WriteLock(0);
+		error = ((SharedRWLock*)lock)->WriteLock(B_ABSOLUTE_REAL_TIME_TIMEOUT, 0);
 	else
-		error = ((LocalRWLock*)lock)->WriteLock(0);
+		error = ((LocalRWLock*)lock)->WriteLock(B_ABSOLUTE_REAL_TIME_TIMEOUT, 0);
 
 	return error == B_TIMED_OUT ? EBUSY : error;
 }
 
 
 int
-pthread_rwlock_timedwrlock(pthread_rwlock_t* lock,
-	const struct timespec *timeout)
+pthread_rwlock_clockwrlock(pthread_rwlock_t* lock, clockid_t clock_id,
+	const struct timespec *abstime)
 {
-	bigtime_t timeoutMicros = timeout->tv_sec * 1000000LL
-		+ timeout->tv_nsec / 1000LL;
+	bigtime_t timeout = 0;
+	bool invalidTime = false;
+	if (abstime == NULL || !timespec_to_bigtime(*abstime, timeout))
+		invalidTime = true;
+
+	uint32 flags = 0;
+	if (timeout >= 0) {
+		switch (clock_id) {
+			case CLOCK_REALTIME:
+				flags = B_ABSOLUTE_REAL_TIME_TIMEOUT;
+				break;
+			case CLOCK_MONOTONIC:
+				flags = B_ABSOLUTE_TIMEOUT;
+				break;
+			default:
+				return EINVAL;
+		}
+	}
 
 	status_t error;
 	if ((lock->flags & RWLOCK_FLAG_SHARED) != 0)
-		error = ((SharedRWLock*)lock)->WriteLock(timeoutMicros);
+		error = ((SharedRWLock*)lock)->WriteLock(flags, timeout);
 	else
-		error = ((LocalRWLock*)lock)->WriteLock(timeoutMicros);
+		error = ((LocalRWLock*)lock)->WriteLock(flags, timeout);
 
-	return error == B_TIMED_OUT ? EBUSY : error;
+	if (error != B_OK && invalidTime)
+		return EINVAL;
+	return (error == B_TIMED_OUT) ? EBUSY : error;
+}
+
+
+int
+pthread_rwlock_timedwrlock(pthread_rwlock_t* lock,
+	const struct timespec *abstime)
+{
+	return pthread_rwlock_clockwrlock(lock, CLOCK_REALTIME, abstime);
 }
 
 
@@ -460,4 +521,3 @@ pthread_rwlockattr_setpshared(pthread_rwlockattr_t* _attr, int shared)
 
 	return 0;
 }
-

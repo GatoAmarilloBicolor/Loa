@@ -576,6 +576,7 @@ AVLTreeBase::_Remove(AVLTreeNode* node)
 		*nodeP = NULL;
 	}
 
+	node->parent = node->left = node->right = NULL;
 	fNodeCount--;
 
 	// do the balancing
@@ -629,5 +630,5 @@ AVLTreeBase::_CheckTree(AVLTreeNode* parent, AVLTreeNode* node,
 	}
 
 	_nodeCount = leftNodeCount + rightNodeCount + 1;
-	return std::max(leftDepth, rightDepth) + 1;
+	return max_c(leftDepth, rightDepth) + 1;
 }

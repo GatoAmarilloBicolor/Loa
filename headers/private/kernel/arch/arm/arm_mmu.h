@@ -38,32 +38,35 @@
 	// 31                                  10 9 8      5 432 10
 	// | page table address                  |0| domain |000|01|
 
+#define ARM_MMU_L1_FLAG_PXN				0x00000004
 
 // the domain is not used so and the ? is implementation specified... have not
 // found it in the cortex A8 reference... so I set t to 0
 // page table must obviously be on multiple of 1KB
 
-/*
- * L2-Page descriptors... now things get really complicated...
- * there are three different types of pages large pages (64KB) and small(4KB)
- * and "small extended".
- * only small extende is used by now....
- * and there is a new and a old format of page table entries
- * I will use the old format...
- */
-
 #define ARM_MMU_L2_TYPE_LARGE			0x1
+#define ARM_MMU_L2_TYPE_SMALLNEW		0x2
 #define ARM_MMU_L2_TYPE_SMALLEXT		0x3
 
-/* for new format entries (cortex-a8) */
-#define ARM_MMU_L2_TYPE_SMALLNEW		0x2
+#define ARM_MMU_L2_FLAG_XN				0x001
+#define ARM_MMU_L2_FLAG_B				0x004
+#define ARM_MMU_L2_FLAG_C				0x008
+#define ARM_MMU_L2_FLAG_AP0				0x010
+#define ARM_MMU_L2_FLAG_AP1				0x020
+#define ARM_MMU_L2_FLAG_TEX0			0x040
+#define ARM_MMU_L2_FLAG_TEX1			0x080
+#define ARM_MMU_L2_FLAG_TEX2			0x100
+#define ARM_MMU_L2_FLAG_AP2				0x200
+#define ARM_MMU_L2_FLAG_S				0x400
+#define ARM_MMU_L2_FLAG_NG				0x800
 
-// for B C and TEX see ARM arm B4-11
-#define ARM_MMU_L2_FLAG_B				0x4
-#define ARM_MMU_L2_FLAG_C				0x8
-#define ARM_MMU_L2_FLAG_TEX				0	// use 0b000 as TEX
-#define ARM_MMU_L2_FLAG_AP_RW			0x30
-	// allow read and write for user and system
+#define ARM_MMU_L2_FLAG_HAIKU_SWDBM		ARM_MMU_L2_FLAG_TEX2
+	// reuse TEX[2] for software-emulated Dirty Bit Modifier
+
+#define ARM_MMU_L2_FLAG_HAIKU_KERNEL_RW	(ARM_MMU_L2_FLAG_TEX2 | ARM_MMU_L2_FLAG_AP0)
+	// allow read and write for kernel only
+	// set Accessed and Modified flag during early page mapping
+	// as the exception handler may be not available yet
 
 #define ARM_MMU_L1_TABLE_ENTRY_COUNT	4096
 #define ARM_MMU_L1_TABLE_SIZE			(ARM_MMU_L1_TABLE_ENTRY_COUNT \
@@ -95,5 +98,8 @@
 
 #define ARM_PTE_ADDRESS_MASK			0xfffff000
 #define ARM_PTE_TYPE_MASK				0x00000003
+
+#define ARM_PTE_PROTECTION_MASK			0x00000121	// SWDBM, AP[1], XN
+#define ARM_PTE_MEMORY_TYPE_MASK		0x0000004c	// TEX[0], B, C
 
 #endif /* _ARCH_ARM_ARM_MMU_H */

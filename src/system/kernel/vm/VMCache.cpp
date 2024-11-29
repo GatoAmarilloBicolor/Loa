@@ -22,6 +22,7 @@
 #include <kernel.h>
 #include <slab/Slab.h>
 #include <smp.h>
+#include <thread.h>
 #include <tracing.h>
 #include <util/AutoLock.h>
 #include <vfs.h>
@@ -51,11 +52,13 @@
 #if DEBUG_CACHE_LIST
 VMCache* gDebugCacheList;
 #endif
-static mutex sCacheListLock = MUTEX_INITIALIZER("global VMCache list");
+static rw_lock sCacheListLock = RW_LOCK_INITIALIZER("global VMCache list");
 	// The lock is also needed when the debug feature is disabled.
 
 ObjectCache* gCacheRefObjectCache;
+#if ENABLE_SWAP_SUPPORT
 ObjectCache* gAnonymousCacheObjectCache;
+#endif
 ObjectCache* gAnonymousNoSwapCacheObjectCache;
 ObjectCache* gVnodeCacheObjectCache;
 ObjectCache* gDeviceCacheObjectCache;
@@ -184,6 +187,29 @@ class Resize : public VMCacheTraceEntry {
 	private:
 		off_t	fOldSize;
 		off_t	fSize;
+};
+
+
+class Rebase : public VMCacheTraceEntry {
+	public:
+		Rebase(VMCache* cache, off_t base)
+			:
+			VMCacheTraceEntry(cache),
+			fOldBase(cache->virtual_base),
+			fBase(base)
+		{
+			Initialized();
+		}
+
+		virtual void AddDump(TraceOutput& out)
+		{
+			out.Print("vm cache rebase: cache: %p, base: %lld -> %lld", fCache,
+				fOldBase, fBase);
+		}
+
+	private:
+		off_t	fOldBase;
+		off_t	fBase;
 };
 
 
@@ -482,8 +508,10 @@ vm_cache_init(kernel_args* args)
 	// Create object caches for the structures we allocate here.
 	gCacheRefObjectCache = create_object_cache("cache refs", sizeof(VMCacheRef),
 		0, NULL, NULL, NULL);
+#if ENABLE_SWAP_SUPPORT
 	gAnonymousCacheObjectCache = create_object_cache("anon caches",
 		sizeof(VMAnonymousCache), 0, NULL, NULL, NULL);
+#endif
 	gAnonymousNoSwapCacheObjectCache = create_object_cache(
 		"anon no-swap caches", sizeof(VMAnonymousNoSwapCache), 0, NULL, NULL,
 		NULL);
@@ -494,7 +522,10 @@ vm_cache_init(kernel_args* args)
 	gNullCacheObjectCache = create_object_cache("null caches",
 		sizeof(VMNullCache), 0, NULL, NULL, NULL);
 
-	if (gCacheRefObjectCache == NULL || gAnonymousCacheObjectCache == NULL
+	if (gCacheRefObjectCache == NULL
+#if ENABLE_SWAP_SUPPORT
+		|| gAnonymousCacheObjectCache == NULL
+#endif
 		|| gAnonymousNoSwapCacheObjectCache == NULL
 		|| gVnodeCacheObjectCache == NULL
 		|| gDeviceCacheObjectCache == NULL
@@ -527,48 +558,32 @@ vm_cache_init_post_heap()
 VMCache*
 vm_cache_acquire_locked_page_cache(vm_page* page, bool dontWait)
 {
-	mutex_lock(&sCacheListLock);
-
-	while (dontWait) {
-		VMCacheRef* cacheRef = page->CacheRef();
-		if (cacheRef == NULL) {
-			mutex_unlock(&sCacheListLock);
-			return NULL;
-		}
-
-		VMCache* cache = cacheRef->cache;
-		if (!cache->TryLock()) {
-			mutex_unlock(&sCacheListLock);
-			return NULL;
-		}
-
-		if (cacheRef == page->CacheRef()) {
-			mutex_unlock(&sCacheListLock);
-			cache->AcquireRefLocked();
-			return cache;
-		}
-
-		// the cache changed in the meantime
-		cache->Unlock();
-	}
+	rw_lock_read_lock(&sCacheListLock);
 
 	while (true) {
 		VMCacheRef* cacheRef = page->CacheRef();
 		if (cacheRef == NULL) {
-			mutex_unlock(&sCacheListLock);
+			rw_lock_read_unlock(&sCacheListLock);
 			return NULL;
 		}
 
 		VMCache* cache = cacheRef->cache;
-		if (!cache->SwitchLock(&sCacheListLock)) {
-			// cache has been deleted
-			mutex_lock(&sCacheListLock);
-			continue;
+		if (dontWait) {
+			if (!cache->TryLock()) {
+				rw_lock_read_unlock(&sCacheListLock);
+				return NULL;
+			}
+		} else {
+			if (!cache->SwitchFromReadLock(&sCacheListLock)) {
+				// cache has been deleted
+				rw_lock_read_lock(&sCacheListLock);
+				continue;
+			}
+			rw_lock_read_lock(&sCacheListLock);
 		}
 
-		mutex_lock(&sCacheListLock);
 		if (cache == page->Cache()) {
-			mutex_unlock(&sCacheListLock);
+			rw_lock_read_unlock(&sCacheListLock);
 			cache->AcquireRefLocked();
 			return cache;
 		}
@@ -596,8 +611,8 @@ VMCacheRef::VMCacheRef(VMCache* cache)
 bool
 VMCache::_IsMergeable() const
 {
-	return areas == NULL && temporary && !consumers.IsEmpty()
-		&& consumers.Head() == consumers.Tail();
+	return areas == NULL && temporary && !unmergeable
+		&& !consumers.IsEmpty() && consumers.Head() == consumers.Tail();
 }
 
 
@@ -626,6 +641,7 @@ VMCache::Init(uint32 cacheType, uint32 allocationFlags)
 	virtual_end = 0;
 	committed_size = 0;
 	temporary = 0;
+	unmergeable = 0;
 	page_count = 0;
 	fWiredPagesCount = 0;
 	type = cacheType;
@@ -642,14 +658,14 @@ VMCache::Init(uint32 cacheType, uint32 allocationFlags)
 		return B_NO_MEMORY;
 
 #if DEBUG_CACHE_LIST
-	mutex_lock(&sCacheListLock);
+	rw_lock_write_lock(&sCacheListLock);
 
 	if (gDebugCacheList != NULL)
 		gDebugCacheList->debug_previous = this;
 	debug_next = gDebugCacheList;
 	gDebugCacheList = this;
 
-	mutex_unlock(&sCacheListLock);
+	rw_lock_write_unlock(&sCacheListLock);
 #endif
 
 	return B_OK;
@@ -690,7 +706,7 @@ VMCache::Delete()
 	// We lock and unlock the sCacheListLock, even if the DEBUG_CACHE_LIST is
 	// not enabled. This synchronization point is needed for
 	// vm_cache_acquire_locked_page_cache().
-	mutex_lock(&sCacheListLock);
+	rw_lock_write_lock(&sCacheListLock);
 
 #if DEBUG_CACHE_LIST
 	if (debug_previous)
@@ -703,7 +719,7 @@ VMCache::Delete()
 
 	mutex_destroy(&fLock);
 
-	mutex_unlock(&sCacheListLock);
+	rw_lock_write_unlock(&sCacheListLock);
 
 	DeleteObject();
 }
@@ -825,11 +841,12 @@ VMCache::RemovePage(vm_page* page)
 }
 
 
-/*!	Moves the given page from its current cache inserts it into this cache.
+/*!	Moves the given page from its current cache inserts it into this cache
+	at the given offset.
 	Both caches must be locked.
 */
 void
-VMCache::MovePage(vm_page* page)
+VMCache::MovePage(vm_page* page, off_t offset)
 {
 	VMCache* oldCache = page->Cache();
 
@@ -840,6 +857,9 @@ VMCache::MovePage(vm_page* page)
 	oldCache->pages.Remove(page);
 	oldCache->page_count--;
 	T2(RemovePage(oldCache, page));
+
+	// change the offset
+	page->cache_offset = offset >> PAGE_SHIFT;
 
 	// insert here
 	pages.Insert(page);
@@ -852,6 +872,15 @@ VMCache::MovePage(vm_page* page)
 	}
 
 	T2(InsertPage(this, page, page->cache_offset << PAGE_SHIFT));
+}
+
+/*!	Moves the given page from its current cache inserts it into this cache.
+	Both caches must be locked.
+*/
+void
+VMCache::MovePage(vm_page* page)
+{
+	MovePage(page, page->cache_offset << PAGE_SHIFT);
 }
 
 
@@ -872,11 +901,11 @@ VMCache::MoveAllPages(VMCache* fromCache)
 	fromCache->fWiredPagesCount = 0;
 
 	// swap the VMCacheRefs
-	mutex_lock(&sCacheListLock);
+	rw_lock_write_lock(&sCacheListLock);
 	std::swap(fCacheRef, fromCache->fCacheRef);
 	fCacheRef->cache = this;
 	fromCache->fCacheRef->cache = fromCache;
-	mutex_unlock(&sCacheListLock);
+	rw_lock_write_unlock(&sCacheListLock);
 
 #if VM_CACHE_TRACING >= 2
 	for (VMCachePagesTree::Iterator it = pages.GetIterator();
@@ -908,8 +937,7 @@ VMCache::WaitForPageEvents(vm_page* page, uint32 events, bool relock)
 
 	fPageEventWaiters = &waiter;
 
-	thread_prepare_to_block(waiter.thread, 0, THREAD_BLOCK_TYPE_OTHER,
-		"cache page events");
+	thread_prepare_to_block(waiter.thread, 0, THREAD_BLOCK_TYPE_OTHER_OBJECT, page);
 
 	Unlock();
 	thread_block();
@@ -1055,8 +1083,6 @@ VMCache::SetMinimalCommitment(off_t commitment, int priority)
 {
 	TRACE(("VMCache::SetMinimalCommitment(cache %p, commitment %" B_PRIdOFF
 		")\n", this, commitment));
-	AssertLocked();
-
 	T(SetMinimalCommitment(this, commitment));
 
 	status_t status = B_OK;
@@ -1064,14 +1090,57 @@ VMCache::SetMinimalCommitment(off_t commitment, int priority)
 	// If we don't have enough committed space to cover through to the new end
 	// of the area...
 	if (committed_size < commitment) {
-		// ToDo: should we check if the cache's virtual size is large
-		//	enough for a commitment of that size?
+#if KDEBUG
+		const off_t size = ROUNDUP(virtual_end - virtual_base, B_PAGE_SIZE);
+		ASSERT_PRINT(commitment <= size, "cache %p, commitment %" B_PRIdOFF ", size %" B_PRIdOFF,
+			this, commitment, size);
+#endif
 
 		// try to commit more memory
 		status = Commit(commitment, priority);
 	}
 
 	return status;
+}
+
+
+bool
+VMCache::_FreePageRange(VMCachePagesTree::Iterator it,
+	page_num_t* toPage = NULL)
+{
+	for (vm_page* page = it.Next();
+		page != NULL && (toPage == NULL || page->cache_offset < *toPage);
+		page = it.Next()) {
+
+		if (page->busy) {
+			if (page->busy_writing) {
+				// We cannot wait for the page to become available
+				// as we might cause a deadlock this way
+				page->busy_writing = false;
+					// this will notify the writer to free the page
+				continue;
+			}
+
+			// wait for page to become unbusy
+			WaitForPageEvents(page, PAGE_EVENT_NOT_BUSY, true);
+			return true;
+		}
+
+		// remove the page and put it into the free queue
+		DEBUG_PAGE_ACCESS_START(page);
+		vm_remove_all_page_mappings(page);
+		ASSERT(page->WiredCount() == 0);
+			// TODO: Find a real solution! If the page is wired
+			// temporarily (e.g. by lock_memory()), we actually must not
+			// unmap it!
+		RemovePage(page);
+			// Note: When iterating through a IteratableSplayTree
+			// removing the current node is safe.
+
+		vm_page_free(this, page);
+	}
+
+	return false;
 }
 
 
@@ -1089,55 +1158,97 @@ VMCache::Resize(off_t newSize, int priority)
 {
 	TRACE(("VMCache::Resize(cache %p, newSize %" B_PRIdOFF ") old size %"
 		B_PRIdOFF "\n", this, newSize, this->virtual_end));
-	this->AssertLocked();
-
 	T(Resize(this, newSize));
+
+	AssertLocked();
+
+	page_num_t oldPageCount = (page_num_t)((virtual_end + B_PAGE_SIZE - 1)
+		>> PAGE_SHIFT);
+	page_num_t newPageCount = (page_num_t)((newSize + B_PAGE_SIZE - 1)
+		>> PAGE_SHIFT);
+
+	if (newPageCount < oldPageCount) {
+		// we need to remove all pages in the cache outside of the new virtual
+		// size
+		while (_FreePageRange(pages.GetIterator(newPageCount, true, true)))
+			;
+	}
 
 	status_t status = Commit(newSize - virtual_base, priority);
 	if (status != B_OK)
 		return status;
 
-	uint32 oldPageCount = (uint32)((virtual_end + B_PAGE_SIZE - 1)
-		>> PAGE_SHIFT);
-	uint32 newPageCount = (uint32)((newSize + B_PAGE_SIZE - 1) >> PAGE_SHIFT);
+	virtual_end = newSize;
+	return B_OK;
+}
 
-	if (newPageCount < oldPageCount) {
+/*!	This function updates the virtual_base field of the cache.
+	If needed, it will free up all pages that don't belong to the cache anymore.
+	The cache lock must be held when you call it.
+	Since removed pages don't belong to the cache any longer, they are not
+	written back before they will be removed.
+
+	Note, this function may temporarily release the cache lock in case it
+	has to wait for busy pages.
+*/
+status_t
+VMCache::Rebase(off_t newBase, int priority)
+{
+	TRACE(("VMCache::Rebase(cache %p, newBase %lld) old base %lld\n",
+		this, newBase, this->virtual_base));
+	this->AssertLocked();
+
+	T(Rebase(this, newBase));
+
+	status_t status = Commit(virtual_end - newBase, priority);
+	if (status != B_OK)
+		return status;
+
+	page_num_t basePage = (page_num_t)(newBase >> PAGE_SHIFT);
+
+	if (newBase > virtual_base) {
 		// we need to remove all pages in the cache outside of the new virtual
-		// size
-		for (VMCachePagesTree::Iterator it
-					= pages.GetIterator(newPageCount, true, true);
-				vm_page* page = it.Next();) {
-			if (page->busy) {
-				if (page->busy_writing) {
-					// We cannot wait for the page to become available
-					// as we might cause a deadlock this way
-					page->busy_writing = false;
-						// this will notify the writer to free the page
-				} else {
-					// wait for page to become unbusy
-					WaitForPageEvents(page, PAGE_EVENT_NOT_BUSY, true);
-
-					// restart from the start of the list
-					it = pages.GetIterator(newPageCount, true, true);
-				}
-				continue;
-			}
-
-			// remove the page and put it into the free queue
-			DEBUG_PAGE_ACCESS_START(page);
-			vm_remove_all_page_mappings(page);
-			ASSERT(page->WiredCount() == 0);
-				// TODO: Find a real solution! If the page is wired
-				// temporarily (e.g. by lock_memory()), we actually must not
-				// unmap it!
-			RemovePage(page);
-			vm_page_free(this, page);
-				// Note: When iterating through a IteratableSplayTree
-				// removing the current node is safe.
-		}
+		// base
+		while (_FreePageRange(pages.GetIterator(), &basePage))
+			;
 	}
 
-	virtual_end = newSize;
+	virtual_base = newBase;
+	return B_OK;
+}
+
+
+/*!	Moves pages in the given range from the source cache into this cache. Both
+	caches must be locked.
+*/
+status_t
+VMCache::Adopt(VMCache* source, off_t offset, off_t size, off_t newOffset)
+{
+	page_num_t startPage = offset >> PAGE_SHIFT;
+	page_num_t endPage = (offset + size + B_PAGE_SIZE - 1) >> PAGE_SHIFT;
+	off_t offsetChange = newOffset - offset;
+
+	VMCachePagesTree::Iterator it = source->pages.GetIterator(startPage, true,
+		true);
+	for (vm_page* page = it.Next();
+				page != NULL && page->cache_offset < endPage;
+				page = it.Next()) {
+		MovePage(page, (page->cache_offset << PAGE_SHIFT) + offsetChange);
+	}
+
+	return B_OK;
+}
+
+
+/*! Discards pages in the given range. */
+status_t
+VMCache::Discard(off_t offset, off_t size)
+{
+	page_num_t startPage = offset >> PAGE_SHIFT;
+	page_num_t endPage = (offset + size + B_PAGE_SIZE - 1) >> PAGE_SHIFT;
+	while (_FreePageRange(pages.GetIterator(startPage, true, true), &endPage))
+		;
+
 	return B_OK;
 }
 
@@ -1190,8 +1301,8 @@ VMCache::FlushAndRemoveAllPages()
 status_t
 VMCache::Commit(off_t size, int priority)
 {
-	committed_size = size;
-	return B_OK;
+	ASSERT_UNREACHABLE();
+	return B_NOT_SUPPORTED;
 }
 
 
@@ -1329,7 +1440,7 @@ VMCache::Dump(bool showPages) const
 	kprintf("  type:         %s\n", vm_cache_type_to_string(type));
 	kprintf("  virtual_base: 0x%" B_PRIx64 "\n", virtual_base);
 	kprintf("  virtual_end:  0x%" B_PRIx64 "\n", virtual_end);
-	kprintf("  temporary:    %" B_PRIu32 "\n", temporary);
+	kprintf("  temporary:    %" B_PRIu32 "\n", uint32(temporary));
 	kprintf("  lock:         %p\n", &fLock);
 #if KDEBUG
 	kprintf("  lock.holder:  %" B_PRId32 "\n", fLock.holder);

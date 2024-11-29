@@ -24,11 +24,11 @@
 
 #define TRACE_AC
 #ifdef TRACE_AC
-#	define TRACE(x...) dprintf("acpi_ac: "x)
+#	define TRACE(x...) dprintf("acpi_ac: " x)
 #else
 #	define TRACE(x...)
 #endif
-#define ERROR(x...)	dprintf("acpi_ac: "x)
+#define ERROR(x...)	dprintf("acpi_ac: " x)
 
 static device_manager_info *sDeviceManager;
 
@@ -42,14 +42,35 @@ typedef struct acpi_ns_device_info {
 
 
 static void
+acpi_ac_update_status(acpi_ac_device_info* device)
+{
+	acpi_data buf;
+	buf.pointer = NULL;
+	buf.length = ACPI_ALLOCATE_BUFFER;
+
+	if (device->acpi->evaluate_method(device->acpi_cookie, "_PSR", NULL, &buf) != B_OK
+		|| buf.pointer == NULL
+		|| ((acpi_object_type*)buf.pointer)->object_type != ACPI_TYPE_INTEGER) {
+		ERROR("couldn't get status\n");
+	} else {
+		acpi_object_type* object = (acpi_object_type*)buf.pointer;
+		device->last_status = object->integer.integer;
+		TRACE("status %d\n", device->last_status);
+	}
+	free(buf.pointer);
+}
+
+
+static void
 acpi_ac_notify_handler(acpi_handle device, uint32 value, void *context)
 {
-	if (value == 0x80) {
-		dprintf("acpi_ac: status changed\n");
-	} else {
-		dprintf("acpi_ac: unknown notification\n");
+	if (value != 0x80) {
+		dprintf("acpi_ac: unknown notification (%d)\n", value);
+		return;
 	}
 
+	acpi_ac_device_info* dev = (acpi_ac_device_info*) context;
+	acpi_ac_update_status(dev);
 }
 
 
@@ -87,7 +108,13 @@ acpi_ac_read(void* _cookie, off_t position, void *buf, size_t* num_bytes)
 	if (*num_bytes < 1)
 		return B_IO_ERROR;
 
-	*((uint8 *)(buf)) = device->last_status;
+	if (position > 0) {
+		*num_bytes = 0;
+		return B_OK;
+	}
+
+	if (user_memcpy(buf, &device->last_status, sizeof(uint8)) < B_OK)
+		return B_BAD_ADDRESS;
 
 	*num_bytes = 1;
 	return B_OK;
@@ -162,7 +189,7 @@ static status_t
 acpi_ac_register_device(device_node *node)
 {
 	device_attr attrs[] = {
-		{ B_DEVICE_PRETTY_NAME, B_STRING_TYPE, { string: "ACPI AC" }},
+		{ B_DEVICE_PRETTY_NAME, B_STRING_TYPE, { .string = "ACPI AC" }},
 		{ NULL }
 	};
 
@@ -196,20 +223,8 @@ acpi_ac_init_driver(device_node *node, void **_driverCookie)
 	}
 
 	device->last_status = 0;
-	acpi_data buf;
-	buf.pointer = NULL;
-	buf.length = ACPI_ALLOCATE_BUFFER;
-	if (device->acpi->evaluate_method(device->acpi_cookie, "_PSR", NULL,
-			&buf) != B_OK
-		|| buf.pointer == NULL
-		|| ((acpi_object_type*)buf.pointer)->object_type != ACPI_TYPE_INTEGER) {
-		ERROR("couldn't get status\n");
-	} else {
-		acpi_object_type* object = (acpi_object_type*)buf.pointer;
-		device->last_status = object->integer.integer;
-		free(buf.pointer);
-		TRACE("status %d\n", device->last_status);
-	}
+
+	acpi_ac_update_status(device);
 
 	*_driverCookie = device;
 	return B_OK;

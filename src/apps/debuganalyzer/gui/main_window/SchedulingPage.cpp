@@ -1492,6 +1492,7 @@ printf("failed to read event!\n");
 					case THREAD_BLOCK_TYPE_MUTEX:
 					case THREAD_BLOCK_TYPE_RW_LOCK:
 					case THREAD_BLOCK_TYPE_OTHER:
+					case THREAD_BLOCK_TYPE_OTHER_OBJECT:
 					default:
 						break;
 				}
@@ -1768,6 +1769,7 @@ MainWindow::SchedulingPage::SchedulingPage(MainWindow* parent)
 				&fSelectionModel),
 			fFontInfo, &fFilterModel)).View();
 	;
+	scrollChild->SetFlags(scrollChild->Flags() | B_SCROLL_VIEW_AWARE);
 
 	AddChild(fScrollView = new BScrollView("scroll", scrollChild, 0, true,
 		true));

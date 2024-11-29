@@ -6,14 +6,10 @@
 
 #include "UserDataWriter.h"
 
-using namespace std;
-
-typedef uint8	*addr;
-
 // RelocationEntryList
-struct UserDataWriter::RelocationEntryList : Vector<addr*> {};
+struct UserDataWriter::RelocationEntryList : Vector<addr_t*> {};
 
-// constructor
+
 UserDataWriter::UserDataWriter()
 	: fBuffer(NULL),
 	  fBufferSize(0),
@@ -22,7 +18,7 @@ UserDataWriter::UserDataWriter()
 {
 }
 
-// constructor
+
 UserDataWriter::UserDataWriter(user_disk_device_data *buffer,
 							   size_t bufferSize)
 	: fBuffer(NULL),
@@ -33,13 +29,13 @@ UserDataWriter::UserDataWriter(user_disk_device_data *buffer,
 	SetTo(buffer, bufferSize);
 }
 
-// destructor
+
 UserDataWriter::~UserDataWriter()
 {
 	delete fRelocationEntries;
 }
 
-// SetTo
+
 status_t
 UserDataWriter::SetTo(user_disk_device_data *buffer, size_t bufferSize)
 {
@@ -48,14 +44,14 @@ UserDataWriter::SetTo(user_disk_device_data *buffer, size_t bufferSize)
 	fBufferSize = bufferSize;
 	fAllocatedSize = 0;
 	if (fBuffer && fBufferSize > 0) {
-		fRelocationEntries = new(nothrow) RelocationEntryList;
+		fRelocationEntries = new(std::nothrow) RelocationEntryList;
 		if (!fRelocationEntries)
 			return B_NO_MEMORY;
 	}
 	return B_OK;
 }
 
-// Unset
+
 void
 UserDataWriter::Unset()
 {
@@ -66,7 +62,7 @@ UserDataWriter::Unset()
 	fRelocationEntries = NULL;
 }
 
-// AllocateData
+
 void *
 UserDataWriter::AllocateData(size_t size, size_t align)
 {
@@ -84,7 +80,7 @@ UserDataWriter::AllocateData(size_t size, size_t align)
 	return result;
 }
 
-// AllocatePartitionData
+
 user_partition_data *
 UserDataWriter::AllocatePartitionData(size_t childCount)
 {
@@ -94,7 +90,7 @@ UserDataWriter::AllocatePartitionData(size_t childCount)
 		sizeof(int));
 }
 
-// AllocateDeviceData
+
 user_disk_device_data *
 UserDataWriter::AllocateDeviceData(size_t childCount)
 {
@@ -104,7 +100,7 @@ UserDataWriter::AllocateDeviceData(size_t childCount)
 		sizeof(int));
 }
 
-// PlaceString
+
 char *
 UserDataWriter::PlaceString(const char *str)
 {
@@ -117,25 +113,25 @@ UserDataWriter::PlaceString(const char *str)
 	return data;
 }
 
-// AllocatedSize
+
 size_t
 UserDataWriter::AllocatedSize() const
 {
 	return fAllocatedSize;
 }
 
-// AddRelocationEntry
+
 status_t
 UserDataWriter::AddRelocationEntry(void *address)
 {
-	if (fRelocationEntries && (addr)address >= (addr)fBuffer
-		&& (addr)address < (addr)fBuffer + fBufferSize - sizeof(void*)) {
-		return fRelocationEntries->PushBack((addr*)address);
+	if (fRelocationEntries && (addr_t)address >= (addr_t)fBuffer
+		&& (addr_t)address < (addr_t)fBuffer + fBufferSize - sizeof(void*)) {
+		return fRelocationEntries->PushBack((addr_t*)address);
 	}
 	return B_ERROR;
 }
 
-// Relocate
+
 status_t
 UserDataWriter::Relocate(void *address)
 {
@@ -143,10 +139,9 @@ UserDataWriter::Relocate(void *address)
 		return B_BAD_VALUE;
 	int32 count = fRelocationEntries->Count();
 	for (int32 i = 0; i < count; i++) {
-		addr *entry = fRelocationEntries->ElementAt(i);
+		addr_t *entry = fRelocationEntries->ElementAt(i);
 		if (*entry)
-			*entry += (addr)address - (addr)fBuffer;
+			*entry += (addr_t)address - (addr_t)fBuffer;
 	}
 	return B_OK;
 }
-

@@ -136,6 +136,7 @@ CharacterWindow::CharacterWindow()
 	if (settings.FindRect("window frame", &frame) == B_OK) {
 		MoveTo(frame.LeftTop());
 		ResizeTo(frame.Width(), frame.Height());
+		MoveOnScreen(B_MOVE_IF_PARTIALLY_OFFSCREEN);
 	} else {
 		float scaling = be_plain_font->Size() / 12.0f;
 		ResizeTo(Frame().Width() * scaling, Frame().Height() * scaling);
@@ -173,7 +174,7 @@ CharacterWindow::CharacterWindow()
 	}
 	if (settings.FindBool("show contained blocks only", &show) == B_OK) {
 		fCharacterView->ShowContainedBlocksOnly(show);
-		fUnicodeBlockView->ShowPrivateBlocks(show);
+		fUnicodeBlockView->ShowContainedBlocksOnly(show);
 	}
 
 	const char* family;
@@ -202,6 +203,7 @@ CharacterWindow::CharacterWindow()
 		font.SetSize(fontSize);
 
 		fCharacterView->SetCharacterFont(font);
+		fUnicodeBlockView->SetCharacterFont(font);
 	} else
 		fontSize = (int32)fCharacterView->CharacterFont().Size();
 
@@ -261,12 +263,11 @@ CharacterWindow::CharacterWindow()
 	menu->AddItem(item = new BMenuItem(B_TRANSLATE("Show private blocks"),
 		new BMessage(kMsgPrivateBlocks)));
 	item->SetMarked(fCharacterView->IsShowingPrivateBlocks());
-// TODO: this feature is not yet supported by Haiku!
-#if 0
-	menu->AddItem(item = new BMenuItem("Only show blocks contained in font",
+
+	menu->AddItem(item = new BMenuItem(
+		B_TRANSLATE("Only show blocks contained in font"),
 		new BMessage(kMsgContainedBlocks)));
 	item->SetMarked(fCharacterView->IsShowingContainedBlocksOnly());
-#endif
 	menuBar->AddItem(menu);
 
 	fFontMenu = _CreateFontMenu();
@@ -396,6 +397,7 @@ CharacterWindow::MessageReceived(BMessage* message)
 			BFont font = fCharacterView->CharacterFont();
 			font.SetSize(size);
 			fCharacterView->SetCharacterFont(font);
+			fUnicodeBlockView->SetCharacterFont(font);
 			break;
 		}
 
@@ -529,6 +531,7 @@ CharacterWindow::_SetFont(const char* family, const char* style)
 	font.SetFamilyAndStyle(family, style);
 
 	fCharacterView->SetCharacterFont(font);
+	fUnicodeBlockView->SetCharacterFont(font);
 	fGlyphView->SetFont(&font, B_FONT_FAMILY_AND_STYLE);
 }
 

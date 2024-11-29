@@ -12,14 +12,12 @@
 #include <ServerProtocol.h>
 
 
-void
-string_for_message_code(uint32 code, BString& string)
+const char*
+string_for_message_code(uint32 code)
 {
-	string = "";
-
 	switch (code) {
 		// Return the exact name for each constant
-		#define CODE(x) case x: string = #x; break
+		#define CODE(x) case x: return #x
 
 		CODE(AS_GET_DESKTOP);
 		CODE(AS_REGISTER_INPUT_SERVER);
@@ -56,7 +54,8 @@ string_for_message_code(uint32 code, BString& string)
 		CODE(AS_QUERY_CURSOR_HIDDEN);
 
 		CODE(AS_CREATE_CURSOR);
-		CODE(AS_REFERENCE_CURSOR);
+		CODE(AS_CREATE_CURSOR_BITMAP);
+		CODE(AS_CLONE_CURSOR);
 		CODE(AS_DELETE_CURSOR);
 
 		CODE(AS_BEGIN_RECT_TRACKING);
@@ -127,6 +126,9 @@ string_for_message_code(uint32 code, BString& string)
 		CODE(AS_GET_TRUNCATED_STRINGS);
 		CODE(AS_GET_UNICODE_BLOCKS);
 		CODE(AS_GET_HAS_UNICODE_BLOCK);
+		CODE(AS_ADD_FONT_FILE);
+		CODE(AS_ADD_FONT_MEMORY);
+		CODE(AS_REMOVE_FONT);
 
 		// Screen methods
 		CODE(AS_VALID_SCREEN_ID);
@@ -323,7 +325,7 @@ string_for_message_code(uint32 code, BString& string)
 		CODE(AS_COLOR_MAP_UPDATED);
 
 		default:
-			string << "unkown code: " << code;
+			return "unknown code";
 			break;
 	}
 }

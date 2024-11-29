@@ -7,6 +7,7 @@
  */
 
 
+#include <sys/ioctl.h>
 #include <sys/sockio.h>
 #include <termios.h>
 
@@ -20,7 +21,7 @@
 
 
 struct ioctl_info {
-	int index;
+	unsigned int index;
 	const char *name;
 	TypeHandler *handler;
 };
@@ -111,6 +112,9 @@ static const ioctl_info kIOCtls[] = {
 	IOCTL_INFO_ENTRY_TYPE(B_SOCKET_COUNT_ALIASES, struct ifreq *),
 
 	// termios ioctls
+#define TCWAITEVENT				(TCGETA + 4)
+#define TCQUERYCONNECTED		(TCGETA + 8)
+#define TCVTIME					(TCGETA + 14)
 	IOCTL_INFO_ENTRY(TCGETA),
 	IOCTL_INFO_ENTRY(TCSETA),
 	IOCTL_INFO_ENTRY(TCSETAF),
@@ -128,6 +132,17 @@ static const ioctl_info kIOCtls[] = {
 	IOCTL_INFO_ENTRY(TCVTIME),
 	IOCTL_INFO_ENTRY(TIOCGPGRP),
 	IOCTL_INFO_ENTRY(TIOCSPGRP),
+	IOCTL_INFO_ENTRY(TIOCSCTTY),
+	IOCTL_INFO_ENTRY(TIOCMGET),
+	IOCTL_INFO_ENTRY(TIOCMSET),
+	IOCTL_INFO_ENTRY(TIOCSBRK),
+	IOCTL_INFO_ENTRY(TIOCCBRK),
+	IOCTL_INFO_ENTRY(TIOCMBIS),
+	IOCTL_INFO_ENTRY(TIOCMBIC),
+	IOCTL_INFO_ENTRY(TIOCOUTQ),
+	IOCTL_INFO_ENTRY(TIOCEXCL),
+	IOCTL_INFO_ENTRY(TIOCNXCL),
+
 	// private termios
 	IOCTL_INFO_ENTRY(B_IOCTL_GET_TTY_INDEX),
 	IOCTL_INFO_ENTRY(B_IOCTL_GRANT_TTY),
@@ -152,7 +167,13 @@ static const ioctl_info kIOCtls[] = {
 	IOCTL_INFO_ENTRY(B_SCSI_SCAN),
 	IOCTL_INFO_ENTRY(B_SCSI_DATA_MODE),
 
-	{ -1, NULL, NULL }
+	// socket ioctls
+	IOCTL_INFO_ENTRY_TYPE(FIONBIO, int*),
+	IOCTL_INFO_ENTRY_TYPE(FIONREAD, int*),
+	IOCTL_INFO_ENTRY_TYPE(FIOSEEKDATA, off_t*),
+	IOCTL_INFO_ENTRY_TYPE(FIOSEEKHOLE, off_t*),
+
+	{ 0, NULL, NULL }
 };
 
 static EnumTypeHandler::EnumMap kIoctlNames;

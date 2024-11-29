@@ -1,23 +1,28 @@
-1	russian	x-vnd.Haiku-Mandelbrot	1781779654
-About	MandelbrotWindow		О программе
-Julia	MandelbrotWindow		Джулия
+1	russian	x-vnd.Haiku-Mandelbrot	2302392624
 Grassland	MandelbrotWindow		Луг
-Spring	MandelbrotWindow		Весна
-High contrast	MandelbrotWindow		Высокий контраст
-Fire	MandelbrotWindow		Огонь
-Royal	MandelbrotWindow		Королевский
-File	MandelbrotWindow		Файл
-Lightning	MandelbrotWindow		Молния
-Midnight	MandelbrotWindow		Полночь
-Palette	MandelbrotWindow		Палитра
-Mandelbrot	MandelbrotWindow		Мандельброт
-Burning Ship	MandelbrotWindow		Горящий корабль
-Quit	MandelbrotWindow		Выход
-Frost	MandelbrotWindow		Мороз
-Set	MandelbrotWindow		Набор
-Iterations	MandelbrotWindow		Итерации
-Mandelbrot	System name		Мандельброт
-Deepfrost	MandelbrotWindow		Заморозка
 Tricorn	MandelbrotWindow		Треуголка
-Multibrot	MandelbrotWindow		Мультиброт
 Orbit Trap	MandelbrotWindow		Орбитальная ловушка
+Deepfrost	MandelbrotWindow		Заморозка
+1 (none)	MandelbrotWindow		1 (ничего)
+Quit	MandelbrotWindow		Выход
+Save as image…	MandelbrotWindow		Сохранить изображение как…
+Fire	MandelbrotWindow		Огонь
+High contrast	MandelbrotWindow		Высокий контраст
+Full screen	MandelbrotWindow		Во весь экран
+Midnight	MandelbrotWindow		Полночь
+Burning Ship	MandelbrotWindow		Горящий корабль
+Lightning	MandelbrotWindow		Молния
+About	MandelbrotWindow		О программе
+Palette	MandelbrotWindow		Палитра
+Set	MandelbrotWindow		Набор
+Royal	MandelbrotWindow		Королевская
+Subsampling	MandelbrotWindow		Подвыборка
+File	MandelbrotWindow		Файл
+Julia	MandelbrotWindow		Жюлиа
+Frost	MandelbrotWindow		Мороз
+View	MandelbrotWindow		Вид
+Mandelbrot	System name		Мандельброт
+Multibrot	MandelbrotWindow		Мультиброт
+Iterations	MandelbrotWindow		Итерации
+Spring	MandelbrotWindow		Весна
+Mandelbrot	MandelbrotWindow		Мандельброт

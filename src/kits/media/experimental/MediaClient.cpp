@@ -12,7 +12,7 @@
 
 #include "MediaClientNode.h"
 
-#include "debug.h"
+#include "MediaDebug.h"
 
 
 namespace BPrivate { namespace media {
@@ -179,8 +179,7 @@ BMediaClient::Unbind(BMediaInput* input, BMediaOutput* output)
 {
 	CALLED();
 
-	if (input == NULL
-		|| input == NULL)
+	if (input == NULL || output == NULL)
 		return B_ERROR;
 
 	if (input->fOwner != this || output->fOwner != this)
@@ -582,12 +581,12 @@ BMediaClient::_ReleaseConnection(BMediaConnection* conn)
 		return B_ERROR;
 
 	if (conn->Connection().IsInput()) {
-		InputReleaser obj = InputReleaser(dynamic_cast<BMediaInput*>(conn));
-		fInputs.RemoveItem(&obj);
+		InputReleaser obj(dynamic_cast<BMediaInput*>(conn));
+		fInputs.RemoveItem(&obj, false);
 		return B_OK;
 	} else {
-		OutputReleaser obj = OutputReleaser(dynamic_cast<BMediaOutput*>(conn));
-		fOutputs.RemoveItem(&obj);
+		OutputReleaser obj(dynamic_cast<BMediaOutput*>(conn));
+		fOutputs.RemoveItem(&obj, false);
 		return B_OK;
 	}
 

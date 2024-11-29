@@ -20,6 +20,7 @@
 #include <Errors.h>
 #include <fs_volume.h>
 #include <KernelExport.h>
+#include <StackOrHeapArray.h>
 
 #include <ddm_userland_interface.h>
 #include <fs/devfs.h>
@@ -73,6 +74,7 @@ KPartition::KPartition(partition_id id)
 	fPartitionData.size = 0;
 	fPartitionData.content_size = 0;
 	fPartitionData.block_size = 0;
+	fPartitionData.physical_block_size = 0;
 	fPartitionData.child_count = 0;
 	fPartitionData.index = -1;
 	fPartitionData.status = B_PARTITION_UNRECOGNIZED;
@@ -202,6 +204,7 @@ KPartition::PublishDevice()
 	info.offset = Offset();
 	info.size = Size();
 	info.logical_block_size = BlockSize();
+	info.physical_block_size = PhysicalBlockSize();
 	info.session = 0;
 	info.partition = ID();
 	if (strlcpy(info.device, Device()->Path(), sizeof(info.device))
@@ -450,6 +453,21 @@ uint32
 KPartition::BlockSize() const
 {
 	return fPartitionData.block_size;
+}
+
+
+uint32
+KPartition::PhysicalBlockSize() const
+{
+	return fPartitionData.physical_block_size;
+}
+
+
+void
+KPartition::SetPhysicalBlockSize(uint32 blockSize)
+{
+	if (fPartitionData.physical_block_size != blockSize)
+		fPartitionData.physical_block_size = blockSize;
 }
 
 
@@ -712,6 +730,52 @@ KPartition::GetPath(KPath* path) const
 }
 
 
+status_t
+KPartition::GetMountPoint(KPath* mountPoint) const
+{
+	if (!mountPoint || !ContainsFileSystem())
+		return B_BAD_VALUE;
+
+	ASSERT(!IsMounted());
+		// fetching the actual mounted point isn't implemented (yet)
+
+	int nameLength = 0;
+	const char* volumeName = ContentName();
+	if (volumeName != NULL)
+		nameLength = strlen(volumeName);
+	if (nameLength == 0) {
+		volumeName = Name();
+		if (volumeName != NULL)
+			nameLength = strlen(volumeName);
+		if (nameLength == 0) {
+			volumeName = "unnamed volume";
+			nameLength = strlen(volumeName);
+		}
+	}
+
+	BStackOrHeapArray<char, 128> basePath(nameLength + 2);
+	if (!basePath.IsValid())
+		return B_NO_MEMORY;
+	int32 len = snprintf(basePath, nameLength + 2, "/%s", volumeName);
+	for (int32 i = 1; i < len; i++)
+		if (basePath[i] == '/')
+			basePath[i] = '-';
+	char* path = mountPoint->LockBuffer();
+	int32 pathLen = mountPoint->BufferSize();
+	strncpy(path, basePath, pathLen);
+
+	struct stat dummy;
+	for (int i = 1; ; i++) {
+		if (stat(path, &dummy) != 0)
+			break;
+		snprintf(path, pathLen, "%s%d", (char*)basePath, i);
+	}
+
+	mountPoint->UnlockBuffer();
+	return B_OK;
+}
+
+
 void
 KPartition::SetVolumeID(dev_t volumeID)
 {
@@ -761,22 +825,6 @@ void*
 KPartition::MountCookie() const
 {
 	return fPartitionData.mount_cookie;
-}
-
-
-status_t
-KPartition::Mount(uint32 mountFlags, const char* parameters)
-{
-	// not implemented
-	return B_ERROR;
-}
-
-
-status_t
-KPartition::Unmount()
-{
-	// not implemented
-	return B_ERROR;
 }
 
 
@@ -870,6 +918,7 @@ KPartition::AddChild(KPartition* partition, int32 index)
 
 		partition->SetParent(this);
 		partition->SetDevice(Device());
+		partition->SetPhysicalBlockSize(PhysicalBlockSize());
 
 		// publish to devfs
 		partition->PublishDevice();
@@ -1271,6 +1320,7 @@ KPartition::WriteUserData(UserDataWriter& writer, user_partition_data* data)
 		data->size = Size();
 		data->content_size = ContentSize();
 		data->block_size = BlockSize();
+		data->physical_block_size = PhysicalBlockSize();
 		data->status = Status();
 		data->flags = Flags();
 		data->volume = VolumeID();
@@ -1322,6 +1372,7 @@ KPartition::Dump(bool deep, int32 level)
 		Size() / (1024.0*1024));
 	OUT("%s  content size:      %" B_PRIdOFF "\n", prefix, ContentSize());
 	OUT("%s  block size:        %" B_PRIu32 "\n", prefix, BlockSize());
+	OUT("%s  physical block size: %" B_PRIu32 "\n", prefix, PhysicalBlockSize());
 	OUT("%s  child count:       %" B_PRId32 "\n", prefix, CountChildren());
 	OUT("%s  index:             %" B_PRId32 "\n", prefix, Index());
 	OUT("%s  status:            %" B_PRIu32 "\n", prefix, Status());

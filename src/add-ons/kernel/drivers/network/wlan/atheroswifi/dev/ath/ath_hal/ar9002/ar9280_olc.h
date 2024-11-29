@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2010-2011 Adrian Chadd, Xenion Pty Ltd.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -21,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar9002/ar9280_olc.h 219393 2011-03-08 06:59:59Z adrian $
  */
 
 #ifndef	__ATH_AR9280_OLC_H__

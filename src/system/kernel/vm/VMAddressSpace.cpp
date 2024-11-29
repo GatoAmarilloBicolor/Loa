@@ -98,7 +98,6 @@ VMAddressSpace::VMAddressSpace(team_id id, addr_t base, size_t size,
 	fDeleting(false)
 {
 	rw_lock_init(&fLock, name);
-//	rw_lock_init(&fLock, kernel ? "kernel address space" : "address space");
 }
 
 
@@ -341,8 +340,8 @@ VMAddressSpace::_DumpCommand(int argc, char** argv)
 		} else {
 			aspace->Dump();
 		}
-		return 0;
 	}
+
 	return 0;
 }
 

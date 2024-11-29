@@ -12,7 +12,7 @@
 #include <util/kernel_cpp.h>
 
 
-Handle::Handle(int handle, bool takeOwnership)
+Handle::Handle(intptr_t handle, bool takeOwnership)
 	:
 	fHandle(handle),
 	fOwnHandle(takeOwnership)
@@ -35,7 +35,7 @@ Handle::~Handle()
 
 
 void
-Handle::SetHandle(int handle, bool takeOwnership)
+Handle::SetHandle(intptr_t handle, bool takeOwnership)
 {
 	if (fHandle && fOwnHandle)
 		of_close(fHandle);
@@ -65,7 +65,7 @@ Handle::WriteAt(void *cookie, off_t pos, const void *buffer, size_t bufferSize)
 }
 
 
-off_t 
+off_t
 Handle::Size() const
 {
 	// ToDo: fix this!

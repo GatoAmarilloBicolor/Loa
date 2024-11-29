@@ -47,6 +47,29 @@ search_path_for_type(image_type type)
 {
 	const char *path = NULL;
 
+	// If "user add-ons" are disabled via safemode settings, we bypass the
+	// environment and defaults and return a different set of paths without
+	// the user or non-packaged ones.
+	if (gProgramArgs->disable_user_addons) {
+		switch (type) {
+			case B_APP_IMAGE:
+				return kGlobalBinDirectory
+					":" kSystemAppsDirectory
+					":" kSystemPreferencesDirectory;
+
+			case B_LIBRARY_IMAGE:
+				return kAppLocalLibDirectory
+					":" kSystemLibDirectory;
+
+			case B_ADD_ON_IMAGE:
+				return kAppLocalAddonsDirectory
+					":" kSystemAddonsDirectory;
+
+			default:
+				return NULL;
+		}
+	}
+
 	// TODO: The *PATH variables should not include the standard system paths.
 	// Instead those paths should always be used after the directories specified
 	// via the variables.
@@ -73,30 +96,20 @@ search_path_for_type(image_type type)
 	// Since the kernel does not set any variables, this is also needed
 	// to start the root shell.
 
-	// TODO: The user specific paths should not be used by default.
 	switch (type) {
 		case B_APP_IMAGE:
-			return kUserNonpackagedBinDirectory
-				":" kUserBinDirectory
-						// TODO: Remove!
-				":" kSystemNonpackagedBinDirectory
+			return kSystemNonpackagedBinDirectory
 				":" kGlobalBinDirectory
 				":" kSystemAppsDirectory
 				":" kSystemPreferencesDirectory;
 
 		case B_LIBRARY_IMAGE:
 			return kAppLocalLibDirectory
-				":" kUserNonpackagedLibDirectory
-				":" kUserLibDirectory
-					// TODO: Remove!
 				":" kSystemNonpackagedLibDirectory
 				":" kSystemLibDirectory;
 
 		case B_ADD_ON_IMAGE:
 			return kAppLocalAddonsDirectory
-				":" kUserNonpackagedAddonsDirectory
-				":" kUserAddonsDirectory
-					// TODO: Remove!
 				":" kSystemNonpackagedAddonsDirectory
 				":" kSystemAddonsDirectory;
 
@@ -216,7 +229,7 @@ try_open_executable(const char *dir, int dirLength, const char *name,
 
 	// Test if the target is a symbolic link, and correct the path in this case
 
-	status = _kern_read_stat(-1, path, false, &stat, sizeof(struct stat));
+	status = _kern_read_stat(AT_FDCWD, path, false, &stat, sizeof(struct stat));
 	if (status < B_OK)
 		return status;
 
@@ -226,7 +239,7 @@ try_open_executable(const char *dir, int dirLength, const char *name,
 		char *lastSlash;
 
 		// it's a link, indeed
-		status = _kern_read_link(-1, path, buffer, &length);
+		status = _kern_read_link(AT_FDCWD, path, buffer, &length);
 		if (status < B_OK)
 			return status;
 		buffer[length] = '\0';
@@ -239,7 +252,7 @@ try_open_executable(const char *dir, int dirLength, const char *name,
 			strlcpy(path, buffer, pathLength);
 	}
 
-	return _kern_open(-1, path, O_RDONLY, 0);
+	return _kern_open(AT_FDCWD, path, O_RDONLY, 0);
 }
 
 
@@ -286,7 +299,7 @@ search_executable_in_path_list(const char *name, const char *pathList,
 
 
 int
-open_executable(char *name, image_type type, const char *rpath,
+open_executable(char *name, image_type type, const char *rpath, const char* runpath,
 	const char *programPath, const char *requestingObjectPath,
 	const char *abiSpecificSubDir)
 {
@@ -295,7 +308,7 @@ open_executable(char *name, image_type type, const char *rpath,
 
 	if (strchr(name, '/')) {
 		// the name already contains a path, we don't have to search for it
-		fd = _kern_open(-1, name, O_RDONLY, 0);
+		fd = _kern_open(AT_FDCWD, name, O_RDONLY, 0);
 		if (fd >= 0 || type == B_APP_IMAGE)
 			return fd;
 
@@ -315,14 +328,17 @@ open_executable(char *name, image_type type, const char *rpath,
 		}
 	}
 
-	// try rpath (DT_RPATH)
-	if (rpath != NULL) {
+	// try runpath or rpath (DT_RUNPATH or DT_RPATH)
+	const char* pathString = runpath;
+	if (pathString == NULL)
+		pathString = rpath;
+	if (pathString != NULL) {
 		// It consists of a colon-separated search path list. Optionally a
 		// second search path list follows, separated from the first by a
 		// semicolon.
-		const char *semicolon = strchr(rpath, ';');
-		const char *firstList = (semicolon ? rpath : NULL);
-		const char *secondList = (semicolon ? semicolon + 1 : rpath);
+		const char *semicolon = strchr(pathString, ';');
+		const char *firstList = (semicolon ? pathString : NULL);
+		const char *secondList = (semicolon ? semicolon + 1 : pathString);
 			// If there is no ';', we set only secondList to simplify things.
 		if (firstList) {
 			fd = search_executable_in_path_list(name, firstList,
@@ -361,19 +377,12 @@ open_executable(char *name, image_type type, const char *rpath,
 static void
 fixup_shebang(char *invoker)
 {
-	char *current = invoker;
-	while (*current == ' ' || *current == '\t') {
-		++current;
-	}
+	while (*invoker == ' ' || *invoker == '\t')
+		++invoker;
 
-	char *commandStart = current;
-	while (*current != ' ' && *current != '\t' && *current != '\0') {
-		++current;
-	}
-
-	// replace /usr/bin/env with /bin/env
-	if (memcmp(commandStart, "/usr/bin/env", current - commandStart) == 0)
-		memmove(commandStart, commandStart + 4, strlen(commandStart + 4) + 1);
+	// replace /usr/bin/ with /bin/
+	if (memcmp(invoker, "/usr/bin/", strlen("/usr/bin/")) == 0)
+		memmove(invoker, invoker + 4, strlen(invoker + 4) + 1);
 }
 
 
@@ -398,12 +407,12 @@ test_executable(const char *name, char *invoker)
 
 	strlcpy(path, name, sizeof(path));
 
-	fd = open_executable(path, B_APP_IMAGE, NULL, NULL, NULL, NULL);
+	fd = open_executable(path, B_APP_IMAGE, NULL, NULL, NULL, NULL, NULL);
 	if (fd < B_OK)
 		return fd;
 
 	// see if it's executable at all
-	status = _kern_access(-1, path, X_OK, false);
+	status = _kern_access(AT_FDCWD, path, X_OK, false);
 	if (status != B_OK)
 		goto out;
 
@@ -689,7 +698,7 @@ get_executable_architecture(int fd, const char** _architecture)
 status_t
 get_executable_architecture(const char* path, const char** _architecture)
 {
-	int fd = _kern_open(-1, path, O_RDONLY, 0);
+	int fd = _kern_open(AT_FDCWD, path, O_RDONLY, 0);
 	if (fd < 0)
 		return fd;
 

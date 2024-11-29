@@ -18,6 +18,7 @@
 #include <Clipboard.h>
 #include <LayoutBuilder.h>
 #include <MessageRunner.h>
+#include <MimeType.h>
 #include <Path.h>
 #include <PathMonitor.h>
 #include <Roster.h>
@@ -32,6 +33,9 @@
 
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "GrepWindow"
+
+
+const char* kAppName = B_TRANSLATE_MARK_SYSTEM_NAME("TextSearch");
 
 
 using std::nothrow;
@@ -92,7 +96,7 @@ GrepWindow::GrepWindow(BMessage* message)
 	fCaseSensitive(NULL),
 	fRegularExpression(NULL),
 	fTextOnly(NULL),
-	fInvokePe(NULL),
+	fInvokeEditor(NULL),
 	fHistoryMenu(NULL),
 	fEncodingMenu(NULL),
 	fUTF8(NULL),
@@ -123,6 +127,7 @@ GrepWindow::GrepWindow(BMessage* message)
 
 	_SetWindowTitle();
 	_CreateMenus();
+	_UpdateMenus();
 	_CreateViews();
 	_LayoutViews();
 	_LoadPrefs();
@@ -190,6 +195,10 @@ void GrepWindow::MessageReceived(BMessage* message)
 			_OnRefsReceived(message);
 			break;
 
+		case MSG_SET_TARGET_TO_PARENT:
+			_OnSetTargetToParent();
+			break;
+
 		case B_CANCEL:
 			_OnOpenPanelCancel();
 			break;
@@ -218,8 +227,8 @@ void GrepWindow::MessageReceived(BMessage* message)
 			_OnTextOnly();
 			break;
 
-		case MSG_INVOKE_PE:
-			_OnInvokePe();
+		case MSG_INVOKE_EDITOR:
+			_OnInvokeEditor();
 			break;
 
 		case MSG_SEARCH_TEXT:
@@ -384,13 +393,13 @@ GrepWindow::_SetWindowTitle()
 			} else
 				title = B_TRANSLATE("%appname% : %path%");
 
-			title.ReplaceAll("%appname%", B_TRANSLATE(APP_NAME));
+			title.ReplaceAll("%appname%", B_TRANSLATE_NOCOLLECT(kAppName));
 			title.ReplaceAll("%path%", path.Path());
 		}
 	}
 
 	if (!title.Length())
-		title = B_TRANSLATE(APP_NAME);
+		title = B_TRANSLATE_NOCOLLECT(kAppName);
 
 	SetTitle(title.String());
 }
@@ -413,6 +422,10 @@ GrepWindow::_CreateMenus()
 	fOpen = new BMenuItem(
 		B_TRANSLATE("Set target" B_UTF8_ELLIPSIS), new BMessage(MSG_OPEN_PANEL), 'F');
 
+	fSetTargetToParent = new BMenuItem(
+		B_TRANSLATE("Set target to parent folder"),
+		new BMessage(MSG_SET_TARGET_TO_PARENT), B_UP_ARROW);
+
 	fClose = new BMenuItem(
 		B_TRANSLATE("Close"), new BMessage(B_QUIT_REQUESTED), 'W');
 
@@ -423,7 +436,8 @@ GrepWindow::_CreateMenus()
 		B_TRANSLATE("Search"), new BMessage(MSG_START_CANCEL), 'S');
 
 	fSelectAll = new BMenuItem(
-		B_TRANSLATE("Select all"), new BMessage(MSG_SELECT_ALL), 'A');
+		B_TRANSLATE("Select all"), new BMessage(MSG_SELECT_ALL),
+		'A', B_SHIFT_KEY);
 
 	fTrimSelection = new BMenuItem(
 		B_TRANSLATE("Trim to selection"), new BMessage(MSG_TRIM_SELECTION), 'T');
@@ -457,8 +471,8 @@ GrepWindow::_CreateMenus()
 	fTextOnly = new BMenuItem(
 		B_TRANSLATE("Text files only"), new BMessage(MSG_TEXT_ONLY));
 
-	fInvokePe = new BMenuItem(
-		B_TRANSLATE("Open files in Pe"), new BMessage(MSG_INVOKE_PE));
+	fInvokeEditor = new BMenuItem(
+		B_TRANSLATE("Open files in code editor"), new BMessage(MSG_INVOKE_EDITOR));
 
 	fUTF8 = new BMenuItem("UTF8", new BMessage('utf8'));
 	fShiftJIS = new BMenuItem("ShiftJIS", new BMessage(B_SJIS_CONVERSION));
@@ -468,6 +482,7 @@ GrepWindow::_CreateMenus()
 	fFileMenu->AddItem(fNew);
 	fFileMenu->AddSeparatorItem();
 	fFileMenu->AddItem(fOpen);
+	fFileMenu->AddItem(fSetTargetToParent);
 	fFileMenu->AddItem(fClose);
 	fFileMenu->AddSeparatorItem();
 	fFileMenu->AddItem(fQuit);
@@ -487,7 +502,7 @@ GrepWindow::_CreateMenus()
 	fPreferencesMenu->AddItem(fCaseSensitive);
 	fPreferencesMenu->AddItem(fRegularExpression);
 	fPreferencesMenu->AddItem(fTextOnly);
-	fPreferencesMenu->AddItem(fInvokePe);
+	fPreferencesMenu->AddItem(fInvokeEditor);
 
 	fEncodingMenu->AddItem(fUTF8);
 	fEncodingMenu->AddItem(fShiftJIS);
@@ -506,6 +521,15 @@ GrepWindow::_CreateMenus()
 	fMenuBar->AddItem(fEncodingMenu);
 
 	fSearch->SetEnabled(false);
+}
+
+
+void
+GrepWindow::_UpdateMenus()
+{
+	bool targetIsSingleDirectory =
+		BEntry(&(fModel->fDirectory)).InitCheck() == B_OK;
+	fSetTargetToParent->SetEnabled(targetIsSingleDirectory);
 }
 
 
@@ -608,7 +632,7 @@ GrepWindow::_LoadPrefs()
 	fCaseSensitive->SetMarked(fModel->fCaseSensitive);
 	fRegularExpression->SetMarked(fModel->fRegularExpression);
 	fTextOnly->SetMarked(fModel->fTextOnly);
-	fInvokePe->SetMarked(fModel->fInvokePe);
+	fInvokeEditor->SetMarked(fModel->fInvokeEditor);
 
 	fShowLinesCheckbox->SetValue(fModel->fShowLines);
 
@@ -652,7 +676,7 @@ GrepWindow::_StartNodeMonitoring()
 	_StopNodeMonitoring();
 
 	BMessenger messenger(this);
-	uint32 fileFlags = B_WATCH_NAME | B_WATCH_STAT | B_WATCH_ATTR;
+	uint32 fileFlags = B_WATCH_NAME | B_WATCH_STAT;
 
 
 	// watch the top level folder only, rest should be done through filtering
@@ -881,10 +905,16 @@ GrepWindow::_OnNodeMonitorEvent(BMessage* message)
 			break;
 		}
 		case B_STAT_CHANGED:
-		case B_ATTR_CHANGED:
 		{
-			TRACE_NM("%s\n", opCode == B_STAT_CHANGED ? "B_STAT_CHANGED"
-				: "B_ATTR_CHANGED");
+			int32 fields;
+			message->FindInt32("fields", &fields);
+
+			TRACE_NM("B_STAT_CHANGED (fields = 0x%" B_PRIx32 ")\n", fields);
+
+			// No point in triggering a new search if this was the only change.
+			if (fields == B_STAT_CHANGE_TIME)
+				break;
+
 			// For directly watched files, the path will include the
 			// name. When the event occurs for a file in a watched directory,
 			// the message will have an extra name field for the respective
@@ -1088,10 +1118,10 @@ GrepWindow::_OnTextOnly()
 
 
 void
-GrepWindow::_OnInvokePe()
+GrepWindow::_OnInvokeEditor()
 {
-	fModel->fInvokePe = !fModel->fInvokePe;
-	fInvokePe->SetMarked(fModel->fInvokePe);
+	fModel->fInvokeEditor = !fModel->fInvokeEditor;
+	fInvokeEditor->SetMarked(fModel->fInvokeEditor);
 	_SavePrefs();
 }
 
@@ -1179,7 +1209,7 @@ GrepWindow::_OnInvokeItem()
 
 		ResultItem* entry = dynamic_cast<ResultItem*>(item);
 		if (entry != NULL) {
-			if (fModel->fInvokePe && _OpenInPe(entry->ref, lineNum))
+			if (fModel->fInvokeEditor && _OpenInEditor(entry->ref, lineNum))
 				return;
 
 			// ask tracker to open it for us
@@ -1382,7 +1412,7 @@ GrepWindow::_OnSelectInTracker()
 	if (!_AreAllFoldersOpenInTracker(&folderList)) {
 		BString str1;
 		str1 << B_TRANSLATE("%APP_NAME couldn't open one or more folders.");
-		str1.ReplaceFirst("%APP_NAME",APP_NAME);
+		str1.ReplaceFirst("%APP_NAME", B_TRANSLATE_NOCOLLECT(kAppName));
 		BAlert* alert = new BAlert(NULL, str1.String(), B_TRANSLATE("OK"),
 			NULL, NULL, B_WIDTH_AS_USUAL, B_STOP_ALERT);
 		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
@@ -1426,6 +1456,7 @@ GrepWindow::_OnFileDrop(BMessage* message)
 	fSearchResults->MakeEmpty();
 	fOldPattern = "";
 
+	_UpdateMenus();
 	_SetWindowTitle();
 }
 
@@ -1452,8 +1483,19 @@ GrepWindow::_OnOpenPanel()
 		return;
 
 	entry_ref path;
-	if (get_ref_for_path(fModel->fFilePanelPath.String(), &path) != B_OK)
-		return;
+	if (get_ref_for_path(fModel->fFilePanelPath.String(), &path) != B_OK) {
+		printf("get_ref_for_path() failed for saved fFilePanelPath: '%s'\n",
+			fModel->fFilePanelPath.String());
+
+		BPath home;
+		if (find_directory(B_USER_DIRECTORY, &home) != B_OK)
+			home = "/boot/home";
+
+		if (get_ref_for_path(home.Path(), &path) != B_OK) {
+			printf("'get_ref_for_path()' failed for: '%s'. Bailing out.\n", home.Path());
+			return;
+		}
+	}
 
 	BMessenger messenger(this);
 	BMessage message(MSG_REFS_RECEIVED);
@@ -1499,6 +1541,23 @@ GrepWindow::_OnNewWindow()
 }
 
 
+void
+GrepWindow::_OnSetTargetToParent()
+{
+	BEntry entry(&(fModel->fDirectory));
+	BEntry parent;
+
+	if (entry.GetParent(&parent) == B_OK) {
+		entry_ref parent_ref;
+		parent.GetRef(&parent_ref);
+
+		BMessage parentRefs;
+		parentRefs.AddRef("dir_ref", &parent_ref);
+		_OnFileDrop(&parentRefs);
+	}
+}
+
+
 // #pragma mark -
 
 
@@ -1511,26 +1570,32 @@ GrepWindow::_ModelChanged()
 	_SavePrefs();
 }
 
-
 bool
-GrepWindow::_OpenInPe(const entry_ref &ref, int32 lineNum)
+GrepWindow::_OpenInEditor(const entry_ref &ref, int32 lineNum)
 {
-	BMessage message('Cmdl');
+	BMessage message(B_REFS_RECEIVED);
 	message.AddRef("refs", &ref);
 
-	if (lineNum != -1)
-		message.AddInt32("line", lineNum);
+	if (lineNum != -1) {
+		message.AddInt32("line", lineNum);	// for Pe
+		message.AddInt32("be:line", lineNum);
+	}
 
-	entry_ref pe;
-	if (be_roster->FindApp(PE_SIGNATURE, &pe) != B_OK)
+	// Find the preferred code editor
+	char editorSig[B_MIME_TYPE_LENGTH];
+	BMimeType mimeType("text/x-source-code");
+	mimeType.GetPreferredApp(editorSig);
+
+	entry_ref editor;
+	if (be_roster->FindApp(editorSig, &editor) != B_OK)
 		return false;
 
-	if (be_roster->IsRunning(&pe)) {
-		BMessenger msngr(NULL, be_roster->TeamFor(&pe));
+	if (be_roster->IsRunning(&editor)) {
+		BMessenger msngr(NULL, be_roster->TeamFor(&editor));
 		if (msngr.SendMessage(&message) != B_OK)
 			return false;
 	} else {
-		if (be_roster->Launch(&pe, &message) != B_OK)
+		if (be_roster->Launch(&editor, &message) != B_OK)
 			return false;
 	}
 

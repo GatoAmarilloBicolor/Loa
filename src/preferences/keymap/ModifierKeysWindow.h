@@ -1,40 +1,22 @@
 /*
- * Copyright 2011-2014 Haiku, Inc. All rights reserved.
+ * Copyright 2011-2023 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
  *		John Scipione, jscipione@gmail.com
+ *		Jorge Acereda, jacereda@gmail.com
  */
 #ifndef MODIFIER_KEYS_WINDOW_H
 #define MODIFIER_KEYS_WINDOW_H
 
 
-#include <View.h>
 #include <Window.h>
 
 
+class BButton;
 class BMenuField;
 class BPopUpMenu;
-
-
-class ConflictView : public BView {
-public:
-								ConflictView(const char* name);
-								~ConflictView();
-
-	virtual	void				Draw(BRect updateRect);
-
-			BBitmap*			Icon();
-			void				SetStopIcon(bool show);
-			void				SetWarnIcon(bool show);
-
-private:
-			void				_FillIcons();
-
-			BBitmap*			fIcon;
-			BBitmap*			fStopIcon;
-			BBitmap*			fWarnIcon;
-};
+class StatusMenuField;
 
 
 class ModifierKeysWindow : public BWindow {
@@ -45,29 +27,29 @@ public:
 	virtual	void					MessageReceived(BMessage* message);
 
 private:
-			BMenuField*				_CreateShiftMenuField();
-			BMenuField*				_CreateControlMenuField();
-			BMenuField*				_CreateOptionMenuField();
-			BMenuField*				_CreateCommandMenuField();
-
+			void					_CreateMenuField(BPopUpMenu** _menu, BMenuField** _field,
+										uint32 key, const char* label);
 			void					_MarkMenuItems();
+			bool					_MarkMenuItem(const char*, BPopUpMenu*, uint32 l, uint32 r);
 			const char*				_KeyToString(int32 key);
-			uint32					_KeyToKeyCode(int32 key,
-										bool right = false);
+			int32					_KeyToKeyCode(int32 key, bool right = false);
 			int32					_LastKey();
 			void					_ValidateDuplicateKeys();
+			void					_ValidateDuplicateKey(StatusMenuField*, uint32);
 			uint32					_DuplicateKeys();
-			void					_HideShowIcons();
+			void					_UpdateStatus();
 
+			BPopUpMenu*				fCapsMenu;
 			BPopUpMenu*				fShiftMenu;
 			BPopUpMenu*				fControlMenu;
 			BPopUpMenu*				fOptionMenu;
 			BPopUpMenu*				fCommandMenu;
 
-			ConflictView*			fShiftConflictView;
-			ConflictView*			fControlConflictView;
-			ConflictView*			fOptionConflictView;
-			ConflictView*			fCommandConflictView;
+			StatusMenuField*		fCapsField;
+			StatusMenuField*		fShiftField;
+			StatusMenuField*		fControlField;
+			StatusMenuField*		fOptionField;
+			StatusMenuField*		fCommandField;
 
 			BButton*				fRevertButton;
 			BButton*				fCancelButton;

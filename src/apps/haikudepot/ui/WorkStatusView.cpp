@@ -1,5 +1,6 @@
 /*
  * Copyright 2017 Julian Harnath <julian.harnath@rwth-aachen.de>
+ * Copyright 2020-2021 Andrew Lindesay <apl@lindesay.co.nz>
  * All rights reserved. Distributed under the terms of the MIT license.
  */
 
@@ -11,6 +12,7 @@
 #include <LayoutBuilder.h>
 #include <SeparatorView.h>
 #include <StatusBar.h>
+#include <StringFormat.h>
 #include <StringView.h>
 
 #include <stdio.h>
@@ -20,6 +22,12 @@
 
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "WorkStatusView"
+
+#define VIEW_INDEX_BARBER_POLE	(int32) 0
+#define VIEW_INDEX_PROGRESS_BAR	(int32) 1
+
+
+static const BSize kStatusBarSize = BSize(100,20);
 
 
 WorkStatusView::WorkStatusView(const char* name)
@@ -35,8 +43,10 @@ WorkStatusView::WorkStatusView(const char* name)
 	fProgressLayout->AddView(fBarberPole);
 	fProgressLayout->AddView(fProgressBar);
 
+	fBarberPole->SetExplicitSize(kStatusBarSize);
 	fProgressBar->SetMaxValue(1.0f);
-	fProgressBar->SetBarHeight(20);
+	fProgressBar->SetBarHeight(kStatusBarSize.Height());
+	fProgressBar->SetExplicitSize(kStatusBarSize);
 
 	fStatusText->SetFontSize(be_plain_font->Size() * 0.9f);
 
@@ -69,8 +79,8 @@ void
 WorkStatusView::SetBusy()
 {
 	fBarberPole->Start();
-	if (fProgressLayout->VisibleIndex() != 0)
-		fProgressLayout->SetVisibleItem((int32)0);
+	if (fProgressLayout->VisibleIndex() != VIEW_INDEX_BARBER_POLE)
+		fProgressLayout->SetVisibleItem(VIEW_INDEX_BARBER_POLE);
 }
 
 
@@ -78,7 +88,7 @@ void
 WorkStatusView::SetIdle()
 {
 	fBarberPole->Stop();
-	fProgressLayout->SetVisibleItem((int32)0);
+	fProgressLayout->SetVisibleItem(VIEW_INDEX_BARBER_POLE);
 	SetText(NULL);
 }
 
@@ -87,8 +97,8 @@ void
 WorkStatusView::SetProgress(float value)
 {
 	fProgressBar->SetTo(value);
-	if (fProgressLayout->VisibleIndex() != 1)
-		fProgressLayout->SetVisibleItem(1);
+	if (fProgressLayout->VisibleIndex() != VIEW_INDEX_PROGRESS_BAR)
+		fProgressLayout->SetVisibleItem(VIEW_INDEX_PROGRESS_BAR);
 }
 
 
@@ -96,73 +106,4 @@ void
 WorkStatusView::SetText(const BString& text)
 {
 	fStatusText->SetText(text);
-}
-
-
-void
-WorkStatusView::PackageStatusChanged(const PackageInfoRef& package)
-{
-	switch (package->State()) {
-		case DOWNLOADING:
-			fPendingPackages.erase(package->Name());
-			if (package->Name() != fDownloadingPackage) {
-				fDownloadingPackage = package->Name();
-				_SetTextDownloading(package->Title());
-			}
-			SetProgress(package->DownloadProgress());
-			break;
-
-		case PENDING:
-			fPendingPackages.insert(package->Name());
-			if (package->Name() == fDownloadingPackage)
-				fDownloadingPackage = "";
-			if (fDownloadingPackage.IsEmpty()) {
-				_SetTextPendingDownloads();
-				SetBusy();
-			}
-			break;
-
-		case NONE:
-		case ACTIVATED:
-		case INSTALLED:
-		case UNINSTALLED:
-			if (package->Name() == fDownloadingPackage)
-				fDownloadingPackage = "";
-			fPendingPackages.erase(package->Name());
-			if (fPendingPackages.empty())
-				SetIdle();
-			else {
-				_SetTextPendingDownloads();
-				SetBusy();
-			}
-			break;
-	}
-}
-
-
-void
-WorkStatusView::_SetTextPendingDownloads()
-{
-	BString text;
-	const size_t pendingCount = fPendingPackages.size();
-	text << pendingCount;
-	if (pendingCount > 1)
-		text << B_TRANSLATE(" packages to download");
-	else
-		text << B_TRANSLATE(" package to download");
-	SetText(text);
-}
-
-
-void
-WorkStatusView::_SetTextDownloading(const BString& title)
-{
-	BString text(B_TRANSLATE("Downloading package "));
-	text << title;
-	if (!fPendingPackages.empty()) {
-		text << " (";
-		text << fPendingPackages.size();
-		text << B_TRANSLATE(" more to download)");
-	}
-	SetText(text);
 }

@@ -10,6 +10,7 @@
 #include <Referenceable.h>
 
 #include <util/AutoLock.h>
+#include <util/ThreadAutoLock.h>
 
 #include <system_profiler_defs.h>
 
@@ -47,7 +48,10 @@ class SystemProfiler;
 
 static spinlock sProfilerLock = B_SPINLOCK_INITIALIZER;
 static SystemProfiler* sProfiler = NULL;
+
+#if SYSTEM_PROFILER
 static struct system_profiler_parameters* sRecordedParameters = NULL;
+#endif
 
 
 class SystemProfiler : public BReferenceable, private NotificationListener,
@@ -179,6 +183,7 @@ private:
 			uint32				fFlags;
 			uint32				fStackDepth;
 			bigtime_t			fInterval;
+			bool				fProfileKernel;
 			system_profiler_buffer_header* fHeader;
 			uint8*				fBufferBase;
 			size_t				fBufferCapacity;
@@ -256,6 +261,7 @@ SystemProfiler::SystemProfiler(team_id team, const area_info& userAreaInfo,
 	fFlags(parameters.flags),
 	fStackDepth(parameters.stack_depth),
 	fInterval(parameters.interval),
+	fProfileKernel(parameters.profile_kernel),
 	fHeader(NULL),
 	fBufferBase(NULL),
 	fBufferCapacity(0),
@@ -370,7 +376,7 @@ SystemProfiler::Init()
 	// clone the user area
 	void* areaBase;
 	fKernelArea = clone_area("profiling samples", &areaBase,
-		B_ANY_KERNEL_ADDRESS, B_READ_AREA | B_WRITE_AREA,
+		B_ANY_KERNEL_ADDRESS, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
 		fUserArea);
 	if (fKernelArea < 0)
 		return fKernelArea;
@@ -975,6 +981,10 @@ SystemProfiler::_ThreadAdded(Thread* thread)
 	event->team = thread->team->id;
 	event->thread = thread->id;
 	strlcpy(event->name, thread->name, sizeof(event->name));
+	{
+		SpinLocker timeLocker(thread->time_lock);
+		event->cpu_time = thread->CPUTime(false);
+	}
 
 	fHeader->size = fBufferSize;
 
@@ -1002,6 +1012,10 @@ SystemProfiler::_ThreadRemoved(Thread* thread)
 
 	event->team = thread->team->id;
 	event->thread = thread->id;
+	{
+		SpinLocker timeLocker(thread->time_lock);
+		event->cpu_time = thread->CPUTime(false);
+	}
 
 	fHeader->size = fBufferSize;
 
@@ -1275,6 +1289,7 @@ SystemProfiler::_WaitObjectUsed(addr_t object, uint32 type)
 			break;
 		}
 
+		case THREAD_BLOCK_TYPE_OTHER_OBJECT:
 		case THREAD_BLOCK_TYPE_SNOOZE:
 		case THREAD_BLOCK_TYPE_SIGNAL:
 		default:
@@ -1403,8 +1418,14 @@ SystemProfiler::_DoSample()
 	CPUProfileData& cpuData = fCPUData[cpu];
 
 	// get the samples
-	int32 count = arch_debug_get_stack_trace(cpuData.buffer, fStackDepth, 1,
-		0, STACK_TRACE_KERNEL | STACK_TRACE_USER);
+	uint32 flags = STACK_TRACE_USER;
+	int32 skipIFrames = 0;
+	if (fProfileKernel) {
+		flags |= STACK_TRACE_KERNEL;
+		skipIFrames = 1;
+	}
+	int32 count = arch_debug_get_stack_trace(cpuData.buffer, fStackDepth,
+		skipIFrames, 0, flags);
 
 	InterruptsSpinLocker locker(fLock);
 
@@ -1484,12 +1505,19 @@ start_system_profiler(size_t areaSize, uint32 stackDepth, bigtime_t interval)
 
 	sRecordedParameters->buffer_area = area;
 	sRecordedParameters->flags = B_SYSTEM_PROFILER_TEAM_EVENTS
-		| B_SYSTEM_PROFILER_THREAD_EVENTS | B_SYSTEM_PROFILER_IMAGE_EVENTS
-		| B_SYSTEM_PROFILER_IO_SCHEDULING_EVENTS
-		| B_SYSTEM_PROFILER_SAMPLING_EVENTS;
+		| B_SYSTEM_PROFILER_THREAD_EVENTS;
+	if (interval > 0 && stackDepth > 0) {
+		sRecordedParameters->flags |= B_SYSTEM_PROFILER_SAMPLING_EVENTS
+			| B_SYSTEM_PROFILER_IMAGE_EVENTS;
+	}
 	sRecordedParameters->locking_lookup_size = 4096;
 	sRecordedParameters->interval = interval;
 	sRecordedParameters->stack_depth = stackDepth;
+
+#if SYSTEM_PROFILE_SCHEDULING
+	sRecordedParameters->flags |= B_SYSTEM_PROFILER_SCHEDULING_EVENTS;
+	sRecordedParameters->locking_lookup_size = 64 * 1024;
+#endif
 
 	area_info areaInfo;
 	get_area_info(area, &areaInfo);
@@ -1543,6 +1571,9 @@ stop_system_profiler()
 status_t
 _user_system_profiler_start(struct system_profiler_parameters* userParameters)
 {
+	if (geteuid() != 0)
+		return B_PERMISSION_DENIED;
+
 	// copy params to the kernel
 	struct system_profiler_parameters parameters;
 	if (userParameters == NULL || !IS_USER_ADDRESS(userParameters)
@@ -1606,6 +1637,9 @@ _user_system_profiler_start(struct system_profiler_parameters* userParameters)
 status_t
 _user_system_profiler_next_buffer(size_t bytesRead, uint64* _droppedEvents)
 {
+	if (geteuid() != 0)
+		return B_PERMISSION_DENIED;
+
 	if (_droppedEvents != NULL && !IS_USER_ADDRESS(_droppedEvents))
 		return B_BAD_ADDRESS;
 
@@ -1620,7 +1654,7 @@ _user_system_profiler_next_buffer(size_t bytesRead, uint64* _droppedEvents)
 	BReference<SystemProfiler> reference(profiler);
 	locker.Unlock();
 
-	uint64 droppedEvents;
+	uint64 droppedEvents = 0;
 	status_t error = profiler->NextBuffer(bytesRead,
 		_droppedEvents != NULL ? &droppedEvents : NULL);
 	if (error == B_OK && _droppedEvents != NULL)
@@ -1633,6 +1667,9 @@ _user_system_profiler_next_buffer(size_t bytesRead, uint64* _droppedEvents)
 status_t
 _user_system_profiler_stop()
 {
+	if (geteuid() != 0)
+		return B_PERMISSION_DENIED;
+
 	team_id team = thread_get_current_thread()->team->id;
 
 	InterruptsSpinLocker locker(sProfilerLock);
@@ -1652,12 +1689,16 @@ _user_system_profiler_stop()
 status_t
 _user_system_profiler_recorded(system_profiler_parameters* userParameters)
 {
+	if (geteuid() != 0)
+		return B_PERMISSION_DENIED;
+
 	if (userParameters == NULL || !IS_USER_ADDRESS(userParameters))
 		return B_BAD_ADDRESS;
+
+#if SYSTEM_PROFILER
 	if (sRecordedParameters == NULL)
 		return B_ERROR;
 
-#if SYSTEM_PROFILER
 	stop_system_profiler();
 
 	// Transfer the area to the userland process

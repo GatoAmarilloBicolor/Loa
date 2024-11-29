@@ -1,5 +1,6 @@
 /*
  * Copyright 2007-2011, Ingo Weinhold, ingo_weinhold@gmx.de.
+ * Copyright 2019-2024, Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  */
 #ifndef _KERNEL_CONDITION_VARIABLE_H
@@ -16,28 +17,27 @@
 #include <util/OpenHashTable.h>
 
 
+struct mutex;
+struct recursive_lock;
 struct ConditionVariable;
 
 
 struct ConditionVariableEntry
 	: DoublyLinkedListLinkImpl<ConditionVariableEntry> {
 public:
-#if KDEBUG
-	inline						ConditionVariableEntry();
-	inline						~ConditionVariableEntry();
-#endif
+								ConditionVariableEntry();
+								~ConditionVariableEntry();
 
 			bool				Add(const void* object);
 			status_t			Wait(uint32 flags = 0, bigtime_t timeout = 0);
 			status_t			Wait(const void* object, uint32 flags = 0,
 									bigtime_t timeout = 0);
 
-	inline	status_t			WaitStatus() const { return fWaitStatus; }
-
-	inline	ConditionVariable*	Variable() const { return fVariable; }
+			ConditionVariable*	Variable() const;
 
 private:
-	inline	void				AddToVariable(ConditionVariable* variable);
+	inline	void				_AddToLockedVariable(ConditionVariable* variable);
+			void				_RemoveFromVariable();
 
 private:
 			ConditionVariable*	fVariable;
@@ -58,75 +58,61 @@ public:
 									const char* objectType);
 			void				Unpublish();
 
-	inline	void				NotifyOne(status_t result = B_OK);
-	inline	void				NotifyAll(status_t result = B_OK);
+	inline	int32				NotifyOne(status_t result = B_OK);
+	inline	int32				NotifyAll(status_t result = B_OK);
 
-	static	void				NotifyOne(const void* object, status_t result);
-	static	void				NotifyAll(const void* object, status_t result);
-									// (both methods) caller must ensure that
-									// the variable is not unpublished
-									// concurrently
+	static	int32				NotifyOne(const void* object, status_t result);
+	static	int32				NotifyAll(const void* object, status_t result);
 
 			void				Add(ConditionVariableEntry* entry);
+			int32				EntriesCount()		{ return atomic_get(&fEntriesCount); }
 
+	// Convenience methods, no ConditionVariableEntry required.
 			status_t			Wait(uint32 flags = 0, bigtime_t timeout = 0);
-									// all-in one, i.e. doesn't need a
-									// ConditionVariableEntry
+			status_t			Wait(mutex* lock, uint32 flags = 0, bigtime_t timeout = 0);
+			status_t			Wait(recursive_lock* lock, uint32 flags = 0, bigtime_t timeout = 0);
 
 			const void*			Object() const		{ return fObject; }
 			const char*			ObjectType() const	{ return fObjectType; }
 
+	// Debug methods.
 	static	void				ListAll();
 			void				Dump() const;
+	static	status_t			DebugGetType(ConditionVariable* cvar, char* name, size_t size);
 
 private:
-			void				_Notify(bool all, status_t result);
-			void				_NotifyLocked(bool all, status_t result);
+	static 	int32				_Notify(const void* object, bool all, status_t result);
+			int32				_Notify(bool all, status_t result);
+			int32				_NotifyLocked(bool all, status_t result);
 
 protected:
 			typedef DoublyLinkedList<ConditionVariableEntry> EntryList;
 
+			ConditionVariable*	fNext;
+
 			const void*			fObject;
 			const char*			fObjectType;
+
+			spinlock			fLock;
+			int32				fEntriesCount;
 			EntryList			fEntries;
-			ConditionVariable*	fNext;
 
 			friend struct ConditionVariableEntry;
 			friend struct ConditionVariableHashDefinition;
 };
 
 
-#if KDEBUG
-
-inline
-ConditionVariableEntry::ConditionVariableEntry()
-	: fVariable(NULL)
-{
-}
-
-inline
-ConditionVariableEntry::~ConditionVariableEntry()
-{
-	if (fVariable != NULL) {
-		panic("Destroying condition variable entry %p, but it's still "
-			"attached to variable %p\n", this, fVariable);
-	}
-}
-
-#endif
-
-
-inline void
+inline int32
 ConditionVariable::NotifyOne(status_t result)
 {
-	_Notify(false, result);
+	return _Notify(false, result);
 }
 
 
-inline void
+inline int32
 ConditionVariable::NotifyAll(status_t result)
 {
-	_Notify(true, result);
+	return _Notify(true, result);
 }
 
 

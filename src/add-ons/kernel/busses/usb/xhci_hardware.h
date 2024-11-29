@@ -102,6 +102,7 @@
 
 
 // Host Controller Runtime Registers
+#define XHCI_MFINDEX		0x0000
 // Section 5.5.2.1
 #define XHCI_IMAN(n)		(0x0020 + (0x20 * (n)))
 // IMAN
@@ -119,7 +120,7 @@
 #define XHCI_ERDP_LO(n)		(0x0038 + (0x20 * (n)))
 #define XHCI_ERDP_HI(n)		(0x003C + (0x20 * (n)))
 // Event Handler Busy (EHB)
-#define ERST_EHB			(1 << 3)
+#define ERDP_BUSY			(1 << 3)
 
 
 // Host Controller Doorbell Registers
@@ -150,7 +151,6 @@
 #define XHCI_SUPPORTED_PROTOCOLS_1_OFFSET(x) (((x) >> 0) & 0xff)
 
 
-
 // Port status Registers
 // Section 5.4.8
 #define XHCI_PORTSC(n)			(0x400 + (0x10 * (n)))
@@ -177,7 +177,18 @@
 
 #define PS_PLS_MASK				(0xf << 5)
 #define PS_XDEV_U0				(0x0 << 5)
+#define PS_XDEV_U1				(0x1 << 5)
+#define PS_XDEV_U2				(0x2 << 5)
 #define PS_XDEV_U3				(0x3 << 5)
+#define PS_XDEV_DISABLED		(0x4 << 5)
+#define PS_XDEV_RXDETECT		(0x5 << 5)
+#define PS_XDEV_INACTIVE		(0x6 << 5)
+#define PS_XDEV_POLLING			(0x7 << 5)
+#define PS_XDEV_RECOVERY		(0x8 << 5)
+#define PS_XDEV_HOT_RESET		(0x9 << 5)
+#define PS_XDEV_COMP_MODE		(0xa << 5)
+#define PS_XDEV_TEST_MODE		(0xb << 5)
+#define PS_XDEV_RESUME			(0xf << 5)
 
 
 // Completion Code
@@ -209,7 +220,7 @@
 #define COMP_COMMAND_RING_STOPPED	24
 #define COMP_COMMAND_ABORTED		25
 #define COMP_STOPPED				26
-#define COMP_LENGTH_INVALID			27
+#define COMP_STOPPED_LENGTH_INVALID	27
 #define COMP_MAX_EXIT_LATENCY		29
 #define COMP_ISOC_OVERRUN			31
 #define COMP_EVENT_LOST				32
@@ -273,6 +284,7 @@
 #define TRB_3_TC_BIT				(1U << 1)
 #define TRB_3_ENT_BIT				(1U << 1)
 #define TRB_3_ISP_BIT				(1U << 2)
+#define TRB_3_EVENT_DATA_BIT		(1U << 2)
 #define TRB_3_NSNOOP_BIT			(1U << 3)
 #define TRB_3_CHAIN_BIT				(1U << 4)
 #define TRB_3_IOC_BIT				(1U << 5)
@@ -292,8 +304,8 @@
 #define TRB_3_TBC_GET(x)		(((x) >> 7) & 0x3)
 #define TRB_3_TLBPC(x)			(((x) & 0xf) << 16)
 #define TRB_3_TLBPC_GET(x)		(((x) >> 16) & 0xf)
-#define TRB_3_ENDPOINT(x)		(((x) & 0xf) << 16)
-#define TRB_3_ENDPOINT_GET(x)	(((x) >> 16) & 0xf)
+#define TRB_3_ENDPOINT(x)		(((x) & 0x1f) << 16)
+#define TRB_3_ENDPOINT_GET(x)	(((x) >> 16) & 0x1f)
 #define TRB_3_FRID(x)			(((x) & 0x7ff) << 20)
 #define TRB_3_FRID_GET(x)		(((x) >> 20) & 0x7ff)
 #define TRB_3_SLOT(x)			(((x) & 0xff) << 24)
@@ -309,27 +321,13 @@
 #define XHCI_MAX_SCRATCHPADS	256
 #define XHCI_MAX_DEVICES		128
 #define XHCI_MAX_TRANSFERS		8
-#define XHCI_MAX_TRBS_PER_TD	18
 
 
 struct xhci_trb {
-	uint64	qwtrb0;
-	uint32	dwtrb2;
-	uint32	dwtrb3;
+	uint64 address;
+	uint32 status;
+	uint32 flags;
 } __attribute__((__aligned__(4)));
-
-
-struct xhci_segment {
-	xhci_trb *		trbs;
-	xhci_segment *	next;
-};
-
-
-struct xhci_ring {
-	xhci_segment *	first_seg;
-	xhci_trb *		enqueue;
-	xhci_trb *		dequeue;
-};
 
 
 // Section 6.5
@@ -398,8 +396,8 @@ struct xhci_endpoint_ctx {
 };
 
 
-#define ENDPOINT_0_STATE(x)				((x) & 0x3)
-#define ENDPOINT_0_STATE_GET(x)			((x) & 0x3)
+#define ENDPOINT_0_STATE(x)				((x) & 0x7)
+#define ENDPOINT_0_STATE_GET(x)			((x) & 0x7)
 #define ENDPOINT_0_MULT(x)				(((x) & 0x3) << 8)
 #define ENDPOINT_0_MULT_GET(x)			(((x) >> 8) & 0x3)
 #define ENDPOINT_0_MAXPSTREAMS(x)		(((x) & 0x1F) << 10)
@@ -425,6 +423,14 @@ struct xhci_endpoint_ctx {
 #define ENDPOINT_4_MAXESITPAYLOAD(x)	(((x) & 0xFFFF) << 16)
 #define ENDPOINT_4_MAXESITPAYLOAD_GET(x) (((x) >> 16) & 0xFFFF)
 
+#define ENDPOINT_STATE_DISABLED		0
+#define ENDPOINT_STATE_RUNNING		1
+#define ENDPOINT_STATE_HALTED		2
+#define ENDPOINT_STATE_STOPPED		3
+#define ENDPOINT_STATE_ERROR		4
+#define ENDPOINT_STATE_RESERVED_5	5
+#define ENDPOINT_STATE_RESERVED_6	6
+#define ENDPOINT_STATE_RESERVED_7	7
 
 struct xhci_stream_ctx {
 	uint64	qwstream0;
@@ -450,10 +456,6 @@ struct xhci_device_ctx {
 	struct xhci_slot_ctx slot;
 	struct xhci_endpoint_ctx endpoints[XHCI_MAX_ENDPOINTS - 1];
 };
-
-
-#define XHCI_ENDPOINT_ID(pipe)	(2 * pipe->EndpointAddress()	\
-		+ (pipe->Direction() != Pipe::Out ? 1 : 0))
 
 
 #endif // !XHCI_HARDWARE_H

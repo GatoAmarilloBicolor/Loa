@@ -26,6 +26,8 @@
 #include <util/KernelReferenceable.h>
 #include <util/list.h>
 
+#include <SupportDefs.h>
+
 
 enum additional_thread_state {
 	THREAD_STATE_FREE_ON_RESCHED = 7, // free the thread structure upon reschedule
@@ -63,6 +65,7 @@ struct realtime_sem_context;	// defined in realtime_sem.cpp
 struct select_info;
 struct user_thread;				// defined in libroot/user_thread.h
 struct VMAddressSpace;
+struct user_mutex_context;		// defined in user_mutex.cpp
 struct xsi_sem_context;			// defined in xsi_semaphore.cpp
 
 namespace Scheduler {
@@ -83,9 +86,8 @@ struct thread_death_entry {
 };
 
 struct team_loading_info {
-	Thread*				thread;	// the waiting thread
+	ConditionVariable	condition;
 	status_t			result;		// the result of the loading
-	bool				done;		// set when loading is done/aborted
 };
 
 struct team_watcher {
@@ -97,8 +99,6 @@ struct team_watcher {
 
 #define MAX_DEAD_CHILDREN	32
 	// this is a soft limit for the number of child death entries in a team
-#define MAX_DEAD_THREADS	32
-	// this is a soft limit for the number of thread death entries in a team
 
 
 struct job_control_entry : DoublyLinkedListLinkImpl<job_control_entry> {
@@ -199,6 +199,12 @@ typedef int32 (*thread_entry_func)(thread_func, void *);
 namespace BKernel {
 
 
+struct GroupsArray : KernelReferenceable {
+	int		count;
+	gid_t	groups[];
+};
+
+
 template<typename IDType>
 struct TeamThreadIteratorEntry
 	: DoublyLinkedListLinkImpl<TeamThreadIteratorEntry<IDType> > {
@@ -235,11 +241,11 @@ struct Team : TeamThreadIteratorEntry<team_id>, KernelReferenceable,
 	int				state;			// current team state, see above
 	int32			flags;
 	struct io_context *io_context;
+	struct user_mutex_context *user_mutex_context;
 	struct realtime_sem_context	*realtime_sem_context;
 	struct xsi_sem_context *xsi_sem_context;
 	struct team_death_entry *death_entry;	// protected by fLock
 	struct list		dead_threads;
-	int				dead_threads_count;
 
 	// protected by the team's fLock
 	team_dead_children dead_children;
@@ -271,6 +277,8 @@ struct Team : TeamThreadIteratorEntry<team_id>, KernelReferenceable,
 
 	struct team_debug_info debug_info;
 
+	bigtime_t		start_time;
+
 	// protected by time_lock
 	bigtime_t		dead_threads_kernel_time;
 	bigtime_t		dead_threads_user_time;
@@ -284,8 +292,7 @@ struct Team : TeamThreadIteratorEntry<team_id>, KernelReferenceable,
 	gid_t			saved_set_gid;
 	gid_t			real_gid;
 	gid_t			effective_gid;
-	gid_t*			supplementary_groups;
-	int				supplementary_group_count;
+	BReference<GroupsArray> supplementary_groups;
 
 	// Exit status information. Set when the first terminal event occurs,
 	// immutable afterwards. Protected by fLock.
@@ -442,6 +449,7 @@ struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
 	int32			state;			// protected by scheduler lock
 	struct cpu_ent	*cpu;			// protected by scheduler lock
 	struct cpu_ent	*previous_cpu;	// protected by scheduler lock
+	CPUSet			cpumask;
 	int32			pinned_to_cpu;	// only accessed by this thread or in the
 									// scheduler, when thread is not running
 	spinlock		scheduler_lock;
@@ -452,6 +460,10 @@ struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
 		// non-0 after a return from _user_sigsuspend(), containing the inverted
 		// original signal mask, reset in handle_signals(); only accessed by
 		// this thread
+	sigset_t		old_sig_block_mask;
+		// the old sig_block_mask to be restored when returning to userland
+		// when THREAD_FLAGS_OLD_SIGMASK is set
+
 	ucontext_t*		user_signal_context;	// only accessed by this thread
 	addr_t			signal_stack_base;		// only accessed by this thread
 	size_t			signal_stack_size;		// only accessed by this thread
@@ -479,8 +491,6 @@ struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
 		const void*	object;				// pointer to the object waited on
 		timer		unblock_timer;		// timer for block with timeout
 	} wait;
-
-	struct PrivateConditionVariableEntry *condition_variable_entry;
 
 	struct {
 		sem_id		write_sem;	// acquired by writers before writing
@@ -537,6 +547,10 @@ struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
 
 	void			(*post_interrupt_callback)(void*);
 	void*			post_interrupt_data;
+
+#if KDEBUG_RW_LOCK_DEBUG
+	rw_lock*		held_read_locks[64] = {}; // only modified by this thread
+#endif
 
 	// architecture dependent section
 	struct arch_thread arch_info;
@@ -633,8 +647,7 @@ private:
 
 struct ProcessSession : BReferenceable {
 	pid_t				id;
-	int32				controlling_tty;	// index of the controlling tty,
-											// -1 if none
+	void*				controlling_tty;
 	pid_t				foreground_group;
 
 public:
@@ -841,5 +854,7 @@ using BKernel::ProcessGroupList;
 #define	THREAD_FLAGS_COMPAT_MODE			0x2000
 	// the thread runs a compatibility mode (for instance IA32 on x86_64).
 #endif
+#define	THREAD_FLAGS_OLD_SIGMASK			0x4000
+	// the thread has an old sigmask to be restored
 
 #endif	/* _KERNEL_THREAD_TYPES_H */

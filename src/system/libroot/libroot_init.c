@@ -19,9 +19,6 @@
 #include <pthread_private.h>
 
 
-void initialize_before(image_id imageID);
-void terminate_after(image_id imageID);
-
 struct rld_export *__gRuntimeLoader = NULL;
 	// This little bugger is set to something meaningful by the runtime loader
 	// Ugly, eh?
@@ -33,6 +30,7 @@ int __libc_argc;
 char **__libc_argv;
 
 int __gABIVersion;
+int __gAPIVersion;
 int32 __gCPUCount;
 
 char _single_threaded = true;
@@ -54,6 +52,7 @@ initialize_before(image_id imageID)
 	char *programPath = __gRuntimeLoader->program_args->args[0];
 	__gCommPageAddress = __gRuntimeLoader->commpage_address;
 	__gABIVersion = __gRuntimeLoader->abi_version;
+	__gAPIVersion = __gRuntimeLoader->api_version;
 
 	if (programPath) {
 		if ((__progname = strrchr(programPath, '/')) == NULL)
@@ -63,7 +62,7 @@ initialize_before(image_id imageID)
 	}
 
 	__libc_argc = __gRuntimeLoader->program_args->arg_count;
-	__libc_argv = __gRuntimeLoader->program_args->args;
+	__libc_argv = argv_save = __gRuntimeLoader->program_args->args;
 
 	__gRuntimeLoader->call_atexit_hooks_for_range
 		= _call_atexit_hooks_for_range;
@@ -71,7 +70,7 @@ initialize_before(image_id imageID)
 	if (__gRuntimeLoader->program_args->umask != (mode_t)-1)
 		umask(__gRuntimeLoader->program_args->umask);
 
-	pthread_self()->id = find_thread(NULL);
+	__main_thread_id = pthread_self()->id = find_thread(NULL);
 
 	get_system_info(&info);
 	__gCPUCount = info.cpu_count;
@@ -81,6 +80,7 @@ initialize_before(image_id imageID)
 	__init_heap();
 	__init_env_post_heap();
 	__init_pwd_backend();
+	__init_stack_protector();
 	__set_stack_protection();
 }
 

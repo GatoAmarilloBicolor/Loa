@@ -80,12 +80,14 @@ private:
 	bool							fDevicePresent;
 	bool							fUse48BitCommands;
 	uint32							fSectorSize;
+	uint32							fPhysicalSectorSize;
 	uint64							fSectorCount;
 	bool							fIsATAPI;
 	bool							fTestUnitReadyActive;
 	bool							fPortReset;
 	bool							fError;
 	bool							fTrimSupported;
+	bool							fTrimReturnsZeros;
 	uint32							fMaxTrimRangeBlocks;
 
 	volatile fis *					fFIS;

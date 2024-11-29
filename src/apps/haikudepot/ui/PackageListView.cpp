@@ -1,4 +1,5 @@
 /*
+ * Copyright 2018-2024, Andrew Lindesay, <apl@lindesay.co.nz>.
  * Copyright 2017, Julian Harnath, <julian.harnath@rwth-aachen.de>.
  * Copyright 2015, Axel Dörfler, <axeld@pinc-software.de>.
  * Copyright 2013-2014, Stephan Aßmus <superstippi@gmx.de>.
@@ -14,13 +15,18 @@
 #include <Autolock.h>
 #include <Catalog.h>
 #include <ControlLook.h>
+#include <NumberFormat.h>
 #include <ScrollBar.h>
 #include <StringFormat.h>
 #include <StringForSize.h>
 #include <package/hpkg/Strings.h>
 #include <Window.h>
 
-#include "MainWindow.h"
+#include "LocaleUtils.h"
+#include "Logger.h"
+#include "PackageUtils.h"
+#include "RatingUtils.h"
+#include "SharedIcons.h"
 #include "WorkStatusView.h"
 
 
@@ -37,9 +43,11 @@ static const char* skPackageStatePending = B_TRANSLATE_MARK(
 
 
 inline BString
-package_state_to_string(PackageInfoRef ref)
+package_state_to_string(PackageInfoRef package)
 {
-	switch (ref->State()) {
+	static BNumberFormat numberFormat;
+
+	switch (PackageUtils::State(package)) {
 		case NONE:
 			return B_TRANSLATE(skPackageStateAvailable);
 		case INSTALLED:
@@ -51,7 +59,11 @@ package_state_to_string(PackageInfoRef ref)
 		case DOWNLOADING:
 		{
 			BString data;
-			data.SetToFormat("%3.2f%%", ref->DownloadProgress() * 100.0);
+			float fraction = PackageUtils::DownloadProgress(package);
+			if (numberFormat.FormatPercent(data, fraction) != B_OK) {
+				HDERROR("unable to format the percentage");
+				data = "???";
+			}
 			return data;
 		}
 		case PENDING:
@@ -62,24 +74,29 @@ package_state_to_string(PackageInfoRef ref)
 }
 
 
-// A field type displaying both a bitmap and a string so that the
-// tree display looks nicer (both text and bitmap are indented)
-class SharedBitmapStringField : public BStringField {
+class PackageIconAndTitleField : public BStringField {
 	typedef BStringField Inherited;
 public:
-								SharedBitmapStringField(SharedBitmap* bitmap,
-									SharedBitmap::Size size,
-									const char* string);
-	virtual						~SharedBitmapStringField();
+								PackageIconAndTitleField(
+									const char* packageName,
+									const char* string,
+									bool isActivated,
+									bool isNativeDesktop);
+	virtual						~PackageIconAndTitleField();
 
-			void				SetBitmap(SharedBitmap* bitmap,
-									SharedBitmap::Size size);
-			const BBitmap*		Bitmap() const
-									{ return fBitmap; }
+			const BString		PackageName() const
+									{ return fPackageName; }
+
+			bool				IsActivated() const
+									{ return fIsActivated; }
+
+			bool				IsNativeDesktop() const
+									{ return fIsNativeDesktop; }
 
 private:
-			BitmapRef			fReference;
-			const BBitmap*		fBitmap;
+			const BString		fPackageName;
+			const bool			fIsActivated;
+			const bool			fIsNativeDesktop;
 };
 
 
@@ -109,16 +126,34 @@ private:
 };
 
 
+class DateField : public BStringField {
+public:
+								DateField(uint64 millisSinceEpoc);
+	virtual						~DateField();
+
+			void				SetMillisSinceEpoc(uint64 millisSinceEpoc);
+			uint64				MillisSinceEpoc() const
+									{ return fMillisSinceEpoc; }
+
+private:
+			void				_SetMillisSinceEpoc(uint64 millisSinceEpoc);
+
+private:
+			uint64				fMillisSinceEpoc;
+};
+
+
 // BColumn for PackageListView which knows how to render
-// a SharedBitmapStringField
-// TODO: Code-duplication with DriveSetup PartitionList.h
+// a PackageIconAndTitleField
 class PackageColumn : public BTitledColumn {
 	typedef BTitledColumn Inherited;
 public:
-								PackageColumn(const char* title,
+								PackageColumn(Model* model,
+									const char* title,
 									float width, float minWidth,
 									float maxWidth, uint32 truncateMode,
 									alignment align = B_ALIGN_LEFT);
+	virtual						~PackageColumn();
 
 	virtual	void				DrawField(BField* field, BRect rect,
 									BView* parent);
@@ -131,35 +166,41 @@ public:
 	static	void				InitTextMargin(BView* parent);
 
 private:
+			Model*				fModel;
 			uint32				fTruncateMode;
+			RatingStarsMetrics*	fRatingsMetrics;
 	static	float				sTextMargin;
 };
 
 
-// BRow for the PartitionListView
+// BRow for the PackageListView
 class PackageRow : public BRow {
 	typedef BRow Inherited;
 public:
-								PackageRow(const PackageInfoRef& package,
+								PackageRow(
+									const PackageInfoRef& package,
 									PackageListener* listener);
 	virtual						~PackageRow();
 
 			const PackageInfoRef& Package() const
 									{ return fPackage; }
 
-			void				UpdateTitle();
+			void				UpdateIconAndTitle();
 			void				UpdateSummary();
 			void				UpdateState();
 			void				UpdateRating();
 			void				UpdateSize();
 			void				UpdateRepository();
+			void				UpdateVersion();
+			void				UpdateVersionCreateTimestamp();
 
 			PackageRow*&		NextInHash()
 									{ return fNextInHash; }
 
 private:
 			PackageInfoRef		fPackage;
-			PackageInfoListenerRef fPackageListener;
+			PackageInfoListenerRef
+								fPackageListener;
 
 			PackageRow*			fNextInHash;
 				// link for BOpenHashTable
@@ -203,31 +244,22 @@ private:
 };
 
 
-// #pragma mark - SharedBitmapStringField
+// #pragma mark - PackageIconAndTitleField
 
 
-SharedBitmapStringField::SharedBitmapStringField(SharedBitmap* bitmap,
-		SharedBitmap::Size size, const char* string)
+PackageIconAndTitleField::PackageIconAndTitleField(const char* packageName, const char* string,
+	bool isActivated, bool isNativeDesktop)
 	:
 	Inherited(string),
-	fBitmap(NULL)
-{
-	SetBitmap(bitmap, size);
-}
-
-
-SharedBitmapStringField::~SharedBitmapStringField()
+	fPackageName(packageName),
+	fIsActivated(isActivated),
+	fIsNativeDesktop(isNativeDesktop)
 {
 }
 
 
-void
-SharedBitmapStringField::SetBitmap(SharedBitmap* bitmap,
-	SharedBitmap::Size size)
+PackageIconAndTitleField::~PackageIconAndTitleField()
 {
-	fReference = bitmap;
-	fBitmap = bitmap != NULL ? bitmap->Bitmap(size) : NULL;
-	// TODO: cause a redraw?
 }
 
 
@@ -236,7 +268,7 @@ SharedBitmapStringField::SetBitmap(SharedBitmap* bitmap,
 
 RatingField::RatingField(float rating)
 	:
-	fRating(0.0f)
+	fRating(RATING_MISSING)
 {
 	SetRating(rating);
 }
@@ -250,14 +282,6 @@ RatingField::~RatingField()
 void
 RatingField::SetRating(float rating)
 {
-	if (rating < 0.0f)
-		rating = 0.0f;
-	if (rating > 5.0f)
-		rating = 5.0f;
-
-	if (rating == fRating)
-		return;
-
 	fRating = rating;
 }
 
@@ -301,6 +325,47 @@ SizeField::SetSize(double size)
 }
 
 
+// #pragma mark - DateField
+
+
+DateField::DateField(uint64 millisSinceEpoc)
+	:
+	BStringField(""),
+	fMillisSinceEpoc(0)
+{
+	_SetMillisSinceEpoc(millisSinceEpoc);
+}
+
+
+DateField::~DateField()
+{
+}
+
+
+void
+DateField::SetMillisSinceEpoc(uint64 millisSinceEpoc)
+{
+	if (millisSinceEpoc == fMillisSinceEpoc)
+		return;
+	_SetMillisSinceEpoc(millisSinceEpoc);
+}
+
+
+void
+DateField::_SetMillisSinceEpoc(uint64 millisSinceEpoc)
+{
+	BString dateString;
+
+	if (millisSinceEpoc == 0)
+		dateString = B_TRANSLATE_CONTEXT("-", "no package publish");
+	else
+		dateString = LocaleUtils::TimestampToDateString(millisSinceEpoc);
+
+	fMillisSinceEpoc = millisSinceEpoc;
+	SetString(dateString.String());
+}
+
+
 // #pragma mark - PackageColumn
 
 
@@ -310,68 +375,146 @@ SizeField::SetSize(double size)
 float PackageColumn::sTextMargin = 0.0;
 
 
-PackageColumn::PackageColumn(const char* title, float width, float minWidth,
-		float maxWidth, uint32 truncateMode, alignment align)
+PackageColumn::PackageColumn(Model* model, const char* title, float width,
+		float minWidth, float maxWidth, uint32 truncateMode, alignment align)
 	:
 	Inherited(title, width, minWidth, maxWidth, align),
+	fModel(model),
 	fTruncateMode(truncateMode)
 {
 	SetWantsEvents(true);
+
+	BSize ratingStarSize = SharedIcons::IconStarBlue12Scaled()->Bitmap()->Bounds().Size();
+	fRatingsMetrics = new RatingStarsMetrics(ratingStarSize);
+}
+
+
+PackageColumn::~PackageColumn()
+{
+	delete fRatingsMetrics;
 }
 
 
 void
 PackageColumn::DrawField(BField* field, BRect rect, BView* parent)
 {
-	SharedBitmapStringField* bitmapField
-		= dynamic_cast<SharedBitmapStringField*>(field);
+	PackageIconAndTitleField* packageIconAndTitleField
+		= dynamic_cast<PackageIconAndTitleField*>(field);
 	BStringField* stringField = dynamic_cast<BStringField*>(field);
 	RatingField* ratingField = dynamic_cast<RatingField*>(field);
 
-	if (bitmapField != NULL) {
-		const BBitmap* bitmap = bitmapField->Bitmap();
+	if (packageIconAndTitleField != NULL) {
 
-		// Scale the bitmap to 16x16
-		BRect r = BRect(0, 0, 16, 16);
+		// TODO (andponlin) factor this out as this method is getting too large.
 
-		// figure out the placement
-		float x = 0.0;
-		float y = rect.top + ((rect.Height() - r.Height()) / 2) - 1;
-		float width = 0.0;
+		BSize iconSize = BControlLook::ComposeIconSize(16);
+		BSize trailingIconSize = BControlLook::ComposeIconSize(8);
+		float trailingIconPaddingFactor = 0.2f;
+		BRect iconRect;
+		BRect titleRect;
+		float titleTextWidth = 0.0f;
+		float textMargin = 8.0f; // copied from ColumnTypes.cpp
 
-		switch (Alignment()) {
-			default:
-			case B_ALIGN_LEFT:
-			case B_ALIGN_CENTER:
-				x = rect.left + sTextMargin;
-				width = rect.right - (x + r.Width()) - (2 * sTextMargin);
-				r.Set(x + r.Width(), rect.top, rect.right - width, rect.bottom);
-				break;
+		std::vector<BitmapHolderRef> trailingIconBitmaps;
 
-			case B_ALIGN_RIGHT:
-				x = rect.right - sTextMargin - r.Width();
-				width = (x - rect.left - (2 * sTextMargin));
-				r.Set(rect.left, rect.top, rect.left + width, rect.bottom);
-				break;
+		if (packageIconAndTitleField->IsActivated())
+			trailingIconBitmaps.push_back(SharedIcons::IconInstalled16Scaled());
+
+		if (packageIconAndTitleField->IsNativeDesktop())
+			trailingIconBitmaps.push_back(SharedIcons::IconNative16Scaled());
+
+		// If there is not enough space then drop the "activated" indicator in order to make more
+		// room for the title.
+
+		float trailingIconsWidth = static_cast<float>(trailingIconBitmaps.size())
+			* (trailingIconSize.Width() * (1.0 + trailingIconPaddingFactor));
+
+		if (!trailingIconBitmaps.empty()) {
+			static float sMinimalTextPart = -1.0;
+
+			if (sMinimalTextPart < 0.0)
+				sMinimalTextPart = parent->StringWidth("M") * 5.0;
+
+			float minimalWidth
+				= iconSize.Width() + trailingIconsWidth + sTextMargin + sMinimalTextPart;
+
+			if (rect.Width() <= minimalWidth)
+				trailingIconBitmaps.clear();
 		}
 
-		if (width != bitmapField->Width()) {
-			BString truncatedString(bitmapField->String());
-			parent->TruncateString(&truncatedString, fTruncateMode, width + 2);
-			bitmapField->SetClippedString(truncatedString.String());
-			bitmapField->SetWidth(width);
+		// Calculate the location of the icon.
+
+		iconRect = BRect(BPoint(rect.left + sTextMargin,
+				rect.top + ((rect.Height() - iconSize.Height()) / 2) - 1),
+			iconSize);
+
+		// Calculate the location of the title text.
+
+		titleRect = rect;
+		titleRect.left = iconRect.right;
+		titleRect.right -= trailingIconsWidth;
+
+		// Figure out if the text needs to be truncated.
+
+		float textWidth = titleRect.Width() - (2.0 * textMargin);
+		BString truncatedString(packageIconAndTitleField->String());
+		parent->TruncateString(&truncatedString, fTruncateMode, textWidth);
+		packageIconAndTitleField->SetClippedString(truncatedString.String());
+		titleTextWidth = parent->StringWidth(truncatedString);
+
+		// Draw the icon.
+
+		BitmapHolderRef bitmapHolderRef;
+		status_t bitmapResult;
+
+		bitmapResult = fModel->GetPackageIconRepository().GetIcon(
+			packageIconAndTitleField->PackageName(), iconSize.Width() + 1, bitmapHolderRef);
+
+		if (bitmapResult == B_OK) {
+			if (bitmapHolderRef.IsSet()) {
+				const BBitmap* bitmap = bitmapHolderRef->Bitmap();
+				if (bitmap != NULL && bitmap->IsValid()) {
+					parent->SetDrawingMode(B_OP_ALPHA);
+					parent->DrawBitmap(bitmap, bitmap->Bounds(), iconRect,
+						B_FILTER_BITMAP_BILINEAR);
+					parent->SetDrawingMode(B_OP_OVER);
+				}
+			}
 		}
 
-		// draw the bitmap
-		if (bitmap != NULL) {
+		// Draw the title.
+
+		DrawString(packageIconAndTitleField->ClippedString(), parent, titleRect);
+
+		// Draw the trailing icons
+
+		if (!trailingIconBitmaps.empty()) {
+
+			BRect trailingIconRect(
+				BPoint(titleRect.left + titleTextWidth + textMargin, iconRect.top),
+				trailingIconSize);
+
 			parent->SetDrawingMode(B_OP_ALPHA);
-			BRect viewRect(x, y, x + 16, y + 16);
-			parent->DrawBitmap(bitmap, bitmap->Bounds(), viewRect);
+
+			for (std::vector<BitmapHolderRef>::iterator it = trailingIconBitmaps.begin();
+					it != trailingIconBitmaps.end(); it++) {
+				const BBitmap* bitmap = (*it)->Bitmap();
+				BRect bitmapBounds = bitmap->Bounds();
+
+				BRect trailingIconAlignedRect
+					= BRect(BPoint(ceilf(trailingIconRect.LeftTop().x) + 0.5,
+						ceilf(trailingIconRect.LeftTop().y) + 0.5),
+					trailingIconRect.Size());
+
+				parent->DrawBitmap(bitmap, bitmapBounds, trailingIconAlignedRect,
+					B_FILTER_BITMAP_BILINEAR);
+
+				trailingIconRect.OffsetBy(
+					trailingIconSize.Width() * (1.0 + trailingIconPaddingFactor), 0);
+			}
+
 			parent->SetDrawingMode(B_OP_OVER);
 		}
-
-		// draw the string
-		DrawString(bitmapField->ClippedString(), parent, r);
 
 	} else if (stringField != NULL) {
 
@@ -388,60 +531,31 @@ PackageColumn::DrawField(BField* field, BRect rect, BView* parent)
 		DrawString(stringField->ClippedString(), parent, rect);
 
 	} else if (ratingField != NULL) {
+		float width = rect.Width();
+		float padding = be_control_look->ComposeSpacing(B_USE_SMALL_SPACING);
+		bool isRatingValid = ratingField->Rating() >= RATING_MIN;
 
-		const float kDefaultTextMargin = 8;
+		if (!isRatingValid || width < fRatingsMetrics->Size().Width() + padding * 2.0) {
+			BString ratingAsText = "-";
 
-		float width = rect.Width() - (2 * kDefaultTextMargin);
+			if (isRatingValid)
+				ratingAsText.SetToFormat("%.1f", ratingField->Rating());
 
-		BString string = "★★★★★";
-		float stringWidth = parent->StringWidth(string);
-		bool drawOverlay = true;
+			float ratingAsTextWidth = parent->StringWidth(ratingAsText);
 
-		if (width < stringWidth) {
-			string.SetToFormat("%.1f", ratingField->Rating());
-			drawOverlay = false;
-			stringWidth = parent->StringWidth(string);
-		}
-
-		switch (Alignment()) {
-			default:
-			case B_ALIGN_LEFT:
-				rect.left += kDefaultTextMargin;
-				break;
-			case B_ALIGN_CENTER:
-				rect.left = rect.left + (width - stringWidth) / 2.0f;
-				break;
-
-			case B_ALIGN_RIGHT:
-				rect.left = rect.right - (stringWidth + kDefaultTextMargin);
-				break;
-		}
-
-		rect.left = floorf(rect.left);
-		rect.right = rect.left + stringWidth;
-
-		if (drawOverlay)
-			parent->SetHighColor(0, 170, 255);
-
-		font_height	fontHeight;
-		parent->GetFontHeight(&fontHeight);
-		float y = rect.top + (rect.Height()
-			- (fontHeight.ascent + fontHeight.descent)) / 2
-			+ fontHeight.ascent;
-
-		parent->DrawString(string, BPoint(rect.left, y));
-
-		if (drawOverlay) {
-			rect.left = ceilf(rect.left
-				+ (ratingField->Rating() / 5.0f) * rect.Width());
-
-			rgb_color color = parent->LowColor();
-			color.alpha = 190;
-			parent->SetHighColor(color);
-
-			parent->SetDrawingMode(B_OP_ALPHA);
-			parent->FillRect(rect, B_SOLID_HIGH);
-
+			if (ratingAsTextWidth + padding * 2.0 < width) {
+				font_height fontHeight;
+				parent->GetFontHeight(&fontHeight);
+				float fullHeight = fontHeight.ascent + fontHeight.descent;
+				float y = rect.top + (rect.Height() - fullHeight) / 2 + fontHeight.ascent;
+				parent->DrawString(ratingAsText, BPoint(rect.left + padding, y));
+			}
+		} else {
+			const BBitmap* starIcon = SharedIcons::IconStarBlue12Scaled()->Bitmap();
+			float ratingsStarsHeight = fRatingsMetrics->Size().Height();
+			BPoint starsPt(floorf(rect.LeftTop().x + padding),
+				floorf(rect.LeftTop().y + (rect.Size().Height() / 2.0) - ratingsStarsHeight / 2.0));
+			RatingUtils::Draw(parent, starsPt, ratingField->Rating(), starIcon);
 		}
 	}
 }
@@ -450,6 +564,16 @@ PackageColumn::DrawField(BField* field, BRect rect, BView* parent)
 int
 PackageColumn::CompareFields(BField* field1, BField* field2)
 {
+	DateField* dateField1 = dynamic_cast<DateField*>(field1);
+	DateField* dateField2 = dynamic_cast<DateField*>(field2);
+	if (dateField1 != NULL && dateField2 != NULL) {
+		if (dateField1->MillisSinceEpoc() > dateField2->MillisSinceEpoc())
+			return -1;
+		else if (dateField1->MillisSinceEpoc() < dateField2->MillisSinceEpoc())
+			return 1;
+		return 0;
+	}
+
 	SizeField* sizeField1 = dynamic_cast<SizeField*>(field1);
 	SizeField* sizeField2 = dynamic_cast<SizeField*>(field2);
 	if (sizeField1 != NULL && sizeField2 != NULL) {
@@ -485,22 +609,20 @@ PackageColumn::CompareFields(BField* field1, BField* field2)
 float
 PackageColumn::GetPreferredWidth(BField *_field, BView* parent) const
 {
-	SharedBitmapStringField* bitmapField
-		= dynamic_cast<SharedBitmapStringField*>(_field);
+	PackageIconAndTitleField* packageIconAndTitleField
+		= dynamic_cast<PackageIconAndTitleField*>(_field);
 	BStringField* stringField = dynamic_cast<BStringField*>(_field);
 
 	float parentWidth = Inherited::GetPreferredWidth(_field, parent);
 	float width = 0.0;
 
-	if (bitmapField) {
-		const BBitmap* bitmap = bitmapField->Bitmap();
+	if (packageIconAndTitleField) {
 		BFont font;
 		parent->GetFont(&font);
-		width = font.StringWidth(bitmapField->String()) + 3 * sTextMargin;
-		if (bitmap)
-			width += bitmap->Bounds().Width();
-		else
-			width += 16;
+		width = font.StringWidth(packageIconAndTitleField->String())
+			+ 3 * sTextMargin;
+		width += 16;
+			// for the icon; always 16px
 	} else if (stringField) {
 		BFont font;
 		parent->GetFont(&font);
@@ -536,7 +658,9 @@ enum {
 	kDescriptionColumn,
 	kSizeColumn,
 	kStatusColumn,
-	kRepositoryColumn
+	kRepositoryColumn,
+	kVersionColumn,
+	kVersionCreateTimestampColumn,
 };
 
 
@@ -548,58 +672,52 @@ PackageRow::PackageRow(const PackageInfoRef& packageRef,
 	fPackageListener(packageListener),
 	fNextInHash(NULL)
 {
-	if (packageRef.Get() == NULL)
+	if (!packageRef.IsSet())
 		return;
-
-	PackageInfo& package = *packageRef.Get();
 
 	// Package icon and title
 	// NOTE: The icon BBitmap is referenced by the fPackage member.
-	UpdateTitle();
+	UpdateIconAndTitle();
 
-	// Rating
 	UpdateRating();
-
-	// Summary
 	UpdateSummary();
-
-	// Size
 	UpdateSize();
-
-	// Status
 	UpdateState();
-
-	// Repository
 	UpdateRepository();
+	UpdateVersion();
+	UpdateVersionCreateTimestamp();
 
-	package.AddListener(fPackageListener);
+	packageRef->AddListener(fPackageListener);
 }
 
 
 PackageRow::~PackageRow()
 {
-	if (fPackage.Get() != NULL)
+	if (fPackage.IsSet())
 		fPackage->RemoveListener(fPackageListener);
 }
 
 
 void
-PackageRow::UpdateTitle()
+PackageRow::UpdateIconAndTitle()
 {
-	if (fPackage.Get() == NULL)
+	if (!fPackage.IsSet())
 		return;
 
-	SetField(new SharedBitmapStringField(fPackage->Icon(),
-			SharedBitmap::SIZE_16, fPackage->Title()), kTitleColumn);
+	BString title;
+	PackageUtils::TitleOrName(fPackage, title);
+
+	BField* field = new PackageIconAndTitleField(fPackage->Name(), title,
+		PackageUtils::State(fPackage) == ACTIVATED, PackageUtils::IsNativeDesktop(fPackage));
+	SetField(field, kTitleColumn);
 }
 
 
 void
 PackageRow::UpdateState()
 {
-	if (fPackage.Get() == NULL)
+	if (!fPackage.IsSet())
 		return;
-
 	SetField(new BStringField(package_state_to_string(fPackage)),
 		kStatusColumn);
 }
@@ -608,41 +726,70 @@ PackageRow::UpdateState()
 void
 PackageRow::UpdateSummary()
 {
-	if (fPackage.Get() == NULL)
+	if (!fPackage.IsSet())
 		return;
 
-	SetField(new BStringField(fPackage->ShortDescription()),
-		kDescriptionColumn);
+	BString summary;
+	PackageUtils::Summary(fPackage, summary);
+	// TODO; `kDescriptionColumn` seems wrong here?
+	SetField(new BStringField(summary), kDescriptionColumn);
 }
 
 
 void
 PackageRow::UpdateRating()
 {
-	if (fPackage.Get() == NULL)
+	if (!fPackage.IsSet())
 		return;
-	RatingSummary summary = fPackage->CalculateRatingSummary();
-	SetField(new RatingField(summary.averageRating), kRatingColumn);
+
+	UserRatingInfoRef userRatingInfo = fPackage->UserRatingInfo();
+	UserRatingSummaryRef userRatingSummary;
+	float averageRating = RATING_MISSING;
+
+	if (userRatingInfo.IsSet())
+		userRatingSummary = userRatingInfo->Summary();
+
+	if (userRatingSummary.IsSet())
+		averageRating = userRatingSummary->AverageRating();
+
+	SetField(new RatingField(averageRating), kRatingColumn);
 }
 
 
 void
 PackageRow::UpdateSize()
 {
-	if (fPackage.Get() == NULL)
+	if (!fPackage.IsSet())
 		return;
-
-	SetField(new SizeField(fPackage->Size()), kSizeColumn);
+	SetField(new SizeField(PackageUtils::Size(fPackage)), kSizeColumn);
 }
 
 
 void
 PackageRow::UpdateRepository()
 {
-	if (fPackage.Get() == NULL)
+	if (!fPackage.IsSet())
 		return;
-
 	SetField(new BStringField(fPackage->DepotName()), kRepositoryColumn);
+}
+
+
+void
+PackageRow::UpdateVersion()
+{
+	if (!fPackage.IsSet())
+		return;
+	SetField(new BStringField(fPackage->Version().ToString()), kVersionColumn);
+}
+
+
+void
+PackageRow::UpdateVersionCreateTimestamp()
+{
+	if (!fPackage.IsSet())
+		return;
+	SetField(new DateField(fPackage->VersionCreateTimestamp()),
+		kVersionCreateTimestampColumn);
 }
 
 
@@ -657,18 +804,22 @@ public:
 		fItemCount(0)
 	{
 		BFont font(be_plain_font);
-		font.SetSize(9.0f);
+		font.SetSize(font.Size() * 0.75f);
 		SetFont(&font);
 
 		SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
 		SetLowUIColor(ViewUIColor());
 		SetHighUIColor(LowUIColor(), B_DARKEN_4_TINT);
+
+		// constantly calculating the size is expensive so here a sensible
+		// upper limit on the number of packages is arbitrarily chosen.
+		fMinSize = BSize(StringWidth(_DeriveLabel(999999)) + 10,
+			be_control_look->GetScrollBarWidth());
 	}
 
 	virtual BSize MinSize()
 	{
-		BString label(_GetLabel());
-		return BSize(StringWidth(label) + 10, B_H_SCROLL_BAR_HEIGHT);
+		return fMinSize;
 	}
 
 	virtual BSize PreferredSize()
@@ -685,13 +836,11 @@ public:
 	{
 		FillRect(updateRect, B_SOLID_LOW);
 
-		BString label(_GetLabel());
-
 		font_height fontHeight;
 		GetFontHeight(&fontHeight);
 
 		BRect bounds(Bounds());
-		float width = StringWidth(label);
+		float width = StringWidth(fLabel);
 
 		BPoint offset;
 		offset.x = bounds.left + (bounds.Width() - width) / 2.0f;
@@ -699,32 +848,38 @@ public:
 			- (fontHeight.ascent + fontHeight.descent)) / 2.0f
 			+ fontHeight.ascent;
 
-		DrawString(label, offset);
+		DrawString(fLabel, offset);
 	}
 
 	void SetItemCount(int32 count)
 	{
 		if (count == fItemCount)
 			return;
-		BSize minSize = MinSize();
 		fItemCount = count;
-		if (minSize != MinSize())
-			InvalidateLayout();
+		fLabel = _DeriveLabel(fItemCount);
 		Invalidate();
 	}
 
 private:
-	BString _GetLabel() const
+
+/*! This method is hit quite often when the list of packages in the
+    table-view are updated.  Derivation of the plural for some
+    languages such as Russian can be slow so this method should be
+    called sparingly.
+*/
+
+	BString _DeriveLabel(int32 count) const
 	{
 		static BStringFormat format(B_TRANSLATE("{0, plural, "
 			"one{# item} other{# items}}"));
-
 		BString label;
-		format.Format(label, fItemCount);
+		format.Format(label, count);
 		return label;
 	}
 
 	int32		fItemCount;
+	BString		fLabel;
+	BSize		fMinSize;
 };
 
 
@@ -737,13 +892,12 @@ struct PackageListView::RowByNameHashDefinition {
 
 	size_t HashKey(const char* key) const
 	{
-		return BPackageKit::BHPKG::BPrivate::hash_string(key);
+		return BString::HashValue(key);
 	}
 
 	size_t Hash(PackageRow* value) const
 	{
-		return BPackageKit::BHPKG::BPrivate::hash_string(
-			value->Package()->Name().String());
+		return HashKey(value->Package()->Name().String());
 	}
 
 	bool Compare(const char* key, PackageRow* value) const
@@ -761,37 +915,57 @@ struct PackageListView::RowByNameHashDefinition {
 // #pragma mark - PackageListView
 
 
-PackageListView::PackageListView(BLocker* modelLock)
+PackageListView::PackageListView(Model* model)
 	:
-	BColumnListView("package list view", 0, B_FANCY_BORDER, true),
-	fModelLock(modelLock),
+	BColumnListView(B_TRANSLATE("All packages"), 0, B_FANCY_BORDER, true),
+	fModel(model),
 	fPackageListener(new(std::nothrow) PackageListener(this)),
 	fRowByNameTable(new RowByNameTable()),
-	fWorkStatusView(NULL)
+	fWorkStatusView(NULL),
+	fIgnoreSelectionChanged(false)
 {
 	float scale = be_plain_font->Size() / 12.f;
 	float spacing = be_control_look->DefaultItemSpacing() * 2;
 
-	AddColumn(new PackageColumn(B_TRANSLATE("Name"), 150 * scale, 50 * scale,
-		300 * scale, B_TRUNCATE_MIDDLE), kTitleColumn);
-	AddColumn(new PackageColumn(B_TRANSLATE("Rating"), 80 * scale, 50 * scale,
-		100 * scale, B_TRUNCATE_MIDDLE), kRatingColumn);
-	AddColumn(new PackageColumn(B_TRANSLATE("Description"), 300 * scale,
-		80 * scale, 1000 * scale,
+	AddColumn(new PackageColumn(fModel, B_TRANSLATE("Name"),
+		150 * scale, 50 * scale, 300 * scale,
+		B_TRUNCATE_MIDDLE), kTitleColumn);
+	AddColumn(new PackageColumn(fModel, B_TRANSLATE("Rating"),
+		80 * scale, 50 * scale, 100 * scale,
+		B_TRUNCATE_MIDDLE), kRatingColumn);
+	AddColumn(new PackageColumn(fModel, B_TRANSLATE("Description"),
+		300 * scale, 80 * scale, 1000 * scale,
 		B_TRUNCATE_MIDDLE), kDescriptionColumn);
-	PackageColumn* sizeColumn = new PackageColumn(B_TRANSLATE("Size"),
-		spacing + StringWidth(B_TRANSLATE("9999.99 KiB")), 50 * scale,
+	PackageColumn* sizeColumn = new PackageColumn(fModel, B_TRANSLATE("Size"),
+		spacing + StringWidth("9999.99 KiB"), 50 * scale,
 		140 * scale, B_TRUNCATE_END);
 	sizeColumn->SetAlignment(B_ALIGN_RIGHT);
 	AddColumn(sizeColumn, kSizeColumn);
-	AddColumn(new PackageColumn(B_TRANSLATE("Status"),
+	AddColumn(new PackageColumn(fModel, B_TRANSLATE("Status"),
 		spacing + StringWidth(B_TRANSLATE("Available")), 60 * scale,
 		140 * scale, B_TRUNCATE_END), kStatusColumn);
 
-	AddColumn(new PackageColumn(B_TRANSLATE("Repository"), 120 * scale,
-		50 * scale, 200 * scale, B_TRUNCATE_MIDDLE), kRepositoryColumn);
+	AddColumn(new PackageColumn(fModel, B_TRANSLATE("Repository"),
+		120 * scale, 50 * scale, 200 * scale,
+		B_TRUNCATE_MIDDLE), kRepositoryColumn);
 	SetColumnVisible(kRepositoryColumn, false);
 		// invisible by default
+
+	float widthWithPlacboVersion = spacing
+		+ StringWidth("8.2.3176-2");
+		// average sort of version length as model
+	AddColumn(new PackageColumn(fModel, B_TRANSLATE("Version"),
+		widthWithPlacboVersion, widthWithPlacboVersion,
+		widthWithPlacboVersion + (50 * scale),
+		B_TRUNCATE_MIDDLE), kVersionColumn);
+
+	float widthWithPlaceboDate = spacing
+		+ StringWidth(LocaleUtils::TimestampToDateString(
+			static_cast<uint64>(1000)));
+	AddColumn(new PackageColumn(fModel, B_TRANSLATE("Date"),
+		widthWithPlaceboDate, widthWithPlaceboDate,
+		widthWithPlaceboDate + (50 * scale),
+		B_TRUNCATE_END), kVersionCreateTimestampColumn);
 
 	fItemCountView = new ItemCountView();
 	AddStatusView(fItemCountView);
@@ -836,24 +1010,24 @@ PackageListView::MessageReceived(BMessage* message)
 				|| message->FindUInt32("changes", &changes) != B_OK) {
 				break;
 			}
-
-			BAutolock _(fModelLock);
+			BAutolock _(fModel->Lock());
 			PackageRow* row = _FindRow(name);
 			if (row != NULL) {
-				if ((changes & PKG_CHANGED_TITLE) != 0)
-					row->UpdateTitle();
-				if ((changes & PKG_CHANGED_SUMMARY) != 0)
+				if ((changes & PKG_CHANGED_LOCALIZED_TEXT) != 0
+					|| (changes & PKG_CHANGED_LOCAL_INFO) != 0) {
+					row->UpdateIconAndTitle();
 					row->UpdateSummary();
+				}
 				if ((changes & PKG_CHANGED_RATINGS) != 0)
 					row->UpdateRating();
-				if ((changes & PKG_CHANGED_STATE) != 0)
+				if ((changes & PKG_CHANGED_LOCAL_INFO) != 0) {
 					row->UpdateState();
-				if ((changes & PKG_CHANGED_SIZE) != 0)
 					row->UpdateSize();
+				}
 				if ((changes & PKG_CHANGED_ICON) != 0)
-					row->UpdateTitle();
-				if ((changes & PKG_CHANGED_DEPOT) != 0)
-					row->UpdateRepository();
+					row->UpdateIconAndTitle();
+				if ((changes & PKG_CHANGED_VERSION_CREATE_TIMESTAMP) != 0)
+					row->UpdateVersionCreateTimestamp();
 			}
 			break;
 		}
@@ -869,6 +1043,9 @@ void
 PackageListView::SelectionChanged()
 {
 	BColumnListView::SelectionChanged();
+
+	if (fIgnoreSelectionChanged)
+		return;
 
 	BMessage message(MSG_PACKAGE_SELECTED);
 
@@ -898,7 +1075,7 @@ PackageListView::AddPackage(const PackageInfoRef& package)
 	if (packageRow != NULL)
 		return;
 
-	BAutolock _(fModelLock);
+	BAutolock _(fModel->Lock());
 
 	// create the row for this package
 	packageRow = new PackageRow(package, fPackageListener);
@@ -935,6 +1112,8 @@ PackageListView::RemovePackage(const PackageInfoRef& package)
 void
 PackageListView::SelectPackage(const PackageInfoRef& package)
 {
+	fIgnoreSelectionChanged = true;
+
 	PackageRow* row = _FindRow(package);
 	BRow* selected = CurrentSelection();
 	if (row != selected)
@@ -944,6 +1123,8 @@ PackageListView::SelectPackage(const PackageInfoRef& package)
 		SetFocusRow(row, false);
 		ScrollTo(row);
 	}
+
+	fIgnoreSelectionChanged = false;
 }
 
 
@@ -957,7 +1138,7 @@ PackageListView::AttachWorkStatusView(WorkStatusView* view)
 PackageRow*
 PackageListView::_FindRow(const PackageInfoRef& package)
 {
-	if (package.Get() == NULL)
+	if (!package.IsSet())
 		return NULL;
 	return fRowByNameTable->Lookup(package->Name().String());
 }

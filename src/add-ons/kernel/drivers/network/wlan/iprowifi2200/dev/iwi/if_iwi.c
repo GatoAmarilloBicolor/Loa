@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2004, 2005
  *      Damien Bergamini <damien.bergamini@free.fr>. All rights reserved.
  * Copyright (c) 2005-2006 Sam Leffler, Errno Consulting
@@ -28,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: releng/11.2/sys/dev/iwi/if_iwi.c 332288 2018-04-08 16:54:07Z brooks $");
-
 /*-
  * Intel(R) PRO/Wireless 2200BG/2225BG/2915ABG driver
  * http://www.intel.com/network/connectivity/products/wireless/prowireless_mobile.htm
@@ -130,8 +130,6 @@ static const struct iwi_ident iwi_ident_table[] = {
 	{ 0, 0, NULL }
 };
 
-static const uint8_t def_chan_2ghz[] =
-	{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 };
 static const uint8_t def_chan_5ghz_band1[] =
 	{ 36, 40, 44, 48, 52, 56, 60, 64 };
 static const uint8_t def_chan_5ghz_band2[] =
@@ -160,7 +158,7 @@ static void	iwi_free_rx_ring(struct iwi_softc *, struct iwi_rx_ring *);
 static struct ieee80211_node *iwi_node_alloc(struct ieee80211vap *,
 		    const uint8_t [IEEE80211_ADDR_LEN]);
 static void	iwi_node_free(struct ieee80211_node *);
-static void	iwi_media_status(struct ifnet *, struct ifmediareq *);
+static void	iwi_media_status(if_t, struct ifmediareq *);
 static int	iwi_newstate(struct ieee80211vap *, enum ieee80211_state, int);
 static void	iwi_wme_init(struct iwi_softc *);
 static int	iwi_wme_setparams(struct iwi_softc *);
@@ -173,7 +171,7 @@ static void	iwi_rx_intr(struct iwi_softc *);
 static void	iwi_tx_intr(struct iwi_softc *, struct iwi_tx_ring *);
 static void	iwi_intr(void *);
 static int	iwi_cmd(struct iwi_softc *, uint8_t, void *, uint8_t);
-static void	iwi_write_ibssnode(struct iwi_softc *, const u_int8_t [], int);
+static void	iwi_write_ibssnode(struct iwi_softc *, const u_int8_t [IEEE80211_ADDR_LEN], int);
 static int	iwi_tx_start(struct iwi_softc *, struct mbuf *,
 		    struct ieee80211_node *, int);
 static int	iwi_raw_xmit(struct ieee80211_node *, struct mbuf *,
@@ -242,9 +240,7 @@ static driver_t iwi_driver = {
 	sizeof (struct iwi_softc)
 };
 
-static devclass_t iwi_devclass;
-
-DRIVER_MODULE(iwi, pci, iwi_driver, iwi_devclass, NULL, NULL);
+DRIVER_MODULE(iwi, pci, iwi_driver, NULL, NULL);
 
 MODULE_VERSION(iwi, 1);
 
@@ -555,7 +551,7 @@ iwi_alloc_cmd_ring(struct iwi_softc *sc, struct iwi_cmd_ring *ring, int count)
 
 	error = bus_dma_tag_create(bus_get_dma_tag(sc->sc_dev), 4, 0,
 	    BUS_SPACE_MAXADDR_32BIT, BUS_SPACE_MAXADDR, NULL, NULL,
-	    count * IWI_CMD_DESC_SIZE, 1, count * IWI_CMD_DESC_SIZE, 0,
+	    count * IWI_CMD_DESC_SIZE, 1, count * IWI_CMD_DESC_SIZE, 0, 
 	    NULL, NULL, &ring->desc_dmat);
 	if (error != 0) {
 		device_printf(sc->sc_dev, "could not create desc DMA tag\n");
@@ -600,7 +596,7 @@ iwi_free_cmd_ring(struct iwi_softc *sc, struct iwi_cmd_ring *ring)
 	}
 
 	if (ring->desc_dmat != NULL)
-		bus_dma_tag_destroy(ring->desc_dmat);
+		bus_dma_tag_destroy(ring->desc_dmat);	
 }
 
 static int
@@ -617,7 +613,7 @@ iwi_alloc_tx_ring(struct iwi_softc *sc, struct iwi_tx_ring *ring, int count,
 
 	error = bus_dma_tag_create(bus_get_dma_tag(sc->sc_dev), 4, 0,
 	    BUS_SPACE_MAXADDR_32BIT, BUS_SPACE_MAXADDR, NULL, NULL,
-	    count * IWI_TX_DESC_SIZE, 1, count * IWI_TX_DESC_SIZE, 0, NULL,
+	    count * IWI_TX_DESC_SIZE, 1, count * IWI_TX_DESC_SIZE, 0, NULL, 
 	    NULL, &ring->desc_dmat);
 	if (error != 0) {
 		device_printf(sc->sc_dev, "could not create desc DMA tag\n");
@@ -894,7 +890,7 @@ iwi_node_free(struct ieee80211_node *ni)
 	sc->sc_node_free(ni);
 }
 
-/*
+/* 
  * Convert h/w rate code to IEEE rate code.
  */
 static int
@@ -922,9 +918,9 @@ iwi_cvtrate(int iwirate)
  * value here.
  */
 static void
-iwi_media_status(struct ifnet *ifp, struct ifmediareq *imr)
+iwi_media_status(if_t ifp, struct ifmediareq *imr)
 {
-	struct ieee80211vap *vap = ifp->if_softc;
+	struct ieee80211vap *vap = if_getsoftc(ifp);
 	struct ieee80211com *ic = vap->iv_ic;
 	struct iwi_softc *sc = ic->ic_softc;
 	struct ieee80211_node *ni;
@@ -1048,12 +1044,15 @@ static int
 iwi_wme_setparams(struct iwi_softc *sc)
 {
 	struct ieee80211com *ic = &sc->sc_ic;
+	struct chanAccParams chp;
 	const struct wmeParams *wmep;
 	int ac;
 
+	ieee80211_wme_ic_getparams(ic, &chp);
+
 	for (ac = 0; ac < WME_NUM_AC; ac++) {
 		/* set WME values for current operating mode */
-		wmep = &ic->ic_wme.wme_chanParams.cap_wmeParams[ac];
+		wmep = &chp.cap_wmeParams[ac];
 		sc->wme[0].aifsn[ac] = wmep->wmep_aifsn;
 		sc->wme[0].cwmin[ac] = IWI_EXP2(wmep->wmep_logcwmin);
 		sc->wme[0].cwmax[ac] = IWI_EXP2(wmep->wmep_logcwmax);
@@ -1304,7 +1303,7 @@ iwi_checkforqos(struct ieee80211vap *vap,
 #define	SUBTYPE(wh)	((wh)->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK)
 	const uint8_t *frm, *efrm, *wme;
 	struct ieee80211_node *ni;
-	uint16_t capinfo, status, associd;
+	uint16_t capinfo, associd;
 
 	/* NB: +8 for capinfo, status, associd, and first ie */
 	if (!(sizeof(*wh)+8 < len && len < IEEE80211_MAX_LEN) ||
@@ -1324,7 +1323,7 @@ iwi_checkforqos(struct ieee80211vap *vap,
 
 	capinfo = le16toh(*(const uint16_t *)frm);
 	frm += 2;
-	status = le16toh(*(const uint16_t *)frm);
+	/* status */
 	frm += 2;
 	associd = le16toh(*(const uint16_t *)frm);
 	frm += 2;
@@ -1773,11 +1772,9 @@ iwi_tx_start(struct iwi_softc *sc, struct mbuf *m0, struct ieee80211_node *ni,
     int ac)
 {
 	struct ieee80211vap *vap = ni->ni_vap;
-	struct ieee80211com *ic = ni->ni_ic;
 	struct iwi_node *in = (struct iwi_node *)ni;
 	const struct ieee80211_frame *wh;
 	struct ieee80211_key *k;
-	const struct chanAccParams *cap;
 	struct iwi_tx_ring *txq = &sc->txq[ac];
 	struct iwi_tx_data *data;
 	struct iwi_tx_desc *desc;
@@ -1799,8 +1796,7 @@ iwi_tx_start(struct iwi_softc *sc, struct mbuf *m0, struct ieee80211_node *ni,
 		flags |= IWI_DATA_FLAG_SHPREAMBLE;
 	if (IEEE80211_QOS_HAS_SEQ(wh)) {
 		xflags |= IWI_DATA_XFLAG_QOS;
-		cap = &ic->ic_wme.wme_chanParams;
-		if (!cap->cap_wmeParams[ac].wmep_noackPolicy)
+		if (ieee80211_wme_vap_ac_is_noack(vap, ac))
 			flags &= ~IWI_DATA_FLAG_NEED_ACK;
 	}
 
@@ -2554,19 +2550,46 @@ iwi_setwepkeys(struct iwi_softc *sc, struct ieee80211vap *vap)
 }
 
 static int
+iwi_set_rateset(struct iwi_softc *sc, const struct ieee80211_rateset *net_rs,
+    int mode, int type)
+{
+	struct iwi_rateset rs;
+
+	memset(&rs, 0, sizeof(rs));
+	rs.mode = mode;
+	rs.type = type;
+	rs.nrates = net_rs->rs_nrates;
+	if (rs.nrates > nitems(rs.rates)) {
+		DPRINTF(("Truncating negotiated rate set from %u\n",
+		    rs.nrates));
+		rs.nrates = nitems(rs.rates);
+	}
+	memcpy(rs.rates, net_rs->rs_rates, rs.nrates);
+	DPRINTF(("Setting .11%c%s %s rates (%u)\n",
+	    mode == IWI_MODE_11A ? 'a' : 'b',
+	    mode == IWI_MODE_11G ? "g" : "",
+	    type == IWI_RATESET_TYPE_SUPPORTED ? "supported" : "negotiated",
+	    rs.nrates));
+
+	return (iwi_cmd(sc, IWI_CMD_SET_RATES, &rs, sizeof(rs)));
+}
+
+static int
 iwi_config(struct iwi_softc *sc)
 {
 	struct ieee80211com *ic = &sc->sc_ic;
+	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
 	struct iwi_configuration config;
-	struct iwi_rateset rs;
 	struct iwi_txpower power;
+	uint8_t *macaddr;
 	uint32_t data;
 	int error, i;
 
 	IWI_LOCK_ASSERT(sc);
 
-	DPRINTF(("Setting MAC address to %6D\n", ic->ic_macaddr, ":"));
-	error = iwi_cmd(sc, IWI_CMD_SET_MAC_ADDRESS, ic->ic_macaddr,
+	macaddr = vap ? vap->iv_myaddr : ic->ic_macaddr;
+	DPRINTF(("Setting MAC address to %6D\n", macaddr, ":"));
+	error = iwi_cmd(sc, IWI_CMD_SET_MAC_ADDRESS, macaddr,
 	    IEEE80211_ADDR_LEN);
 	if (error != 0)
 		return error;
@@ -2607,25 +2630,13 @@ iwi_config(struct iwi_softc *sc)
 			return error;
 	}
 
-	memset(&rs, 0, sizeof rs);
-	rs.mode = IWI_MODE_11G;
-	rs.type = IWI_RATESET_TYPE_SUPPORTED;
-	rs.nrates = ic->ic_sup_rates[IEEE80211_MODE_11G].rs_nrates;
-	memcpy(rs.rates, ic->ic_sup_rates[IEEE80211_MODE_11G].rs_rates,
-	    rs.nrates);
-	DPRINTF(("Setting .11bg supported rates (%u)\n", rs.nrates));
-	error = iwi_cmd(sc, IWI_CMD_SET_RATES, &rs, sizeof rs);
+	error = iwi_set_rateset(sc, &ic->ic_sup_rates[IEEE80211_MODE_11G],
+	    IWI_MODE_11G, IWI_RATESET_TYPE_SUPPORTED);
 	if (error != 0)
 		return error;
 
-	memset(&rs, 0, sizeof rs);
-	rs.mode = IWI_MODE_11A;
-	rs.type = IWI_RATESET_TYPE_SUPPORTED;
-	rs.nrates = ic->ic_sup_rates[IEEE80211_MODE_11A].rs_nrates;
-	memcpy(rs.rates, ic->ic_sup_rates[IEEE80211_MODE_11A].rs_rates,
-	    rs.nrates);
-	DPRINTF(("Setting .11a supported rates (%u)\n", rs.nrates));
-	error = iwi_cmd(sc, IWI_CMD_SET_RATES, &rs, sizeof rs);
+	error = iwi_set_rateset(sc, &ic->ic_sup_rates[IEEE80211_MODE_11A],
+	    IWI_MODE_11A, IWI_RATESET_TYPE_SUPPORTED);
 	if (error != 0)
 		return error;
 
@@ -2815,23 +2826,22 @@ static int
 iwi_auth_and_assoc(struct iwi_softc *sc, struct ieee80211vap *vap)
 {
 	struct ieee80211com *ic = vap->iv_ic;
-	struct ifnet *ifp = vap->iv_ifp;
+	if_t ifp = vap->iv_ifp;
 	struct ieee80211_node *ni;
 	struct iwi_configuration config;
 	struct iwi_associate *assoc = &sc->assoc;
-	struct iwi_rateset rs;
 	uint16_t capinfo;
 	uint32_t data;
 	int error, mode;
 
 	IWI_LOCK_ASSERT(sc);
 
-	ni = ieee80211_ref_node(vap->iv_bss);
-
 	if (sc->flags & IWI_FLAG_ASSOCIATED) {
 		DPRINTF(("Already associated\n"));
 		return (-1);
 	}
+
+	ni = ieee80211_ref_node(vap->iv_bss);
 
 	IWI_STATE_BEGIN(sc, IWI_FW_ASSOCIATING);
 	error = 0;
@@ -2889,18 +2899,8 @@ iwi_auth_and_assoc(struct iwi_softc *sc, struct ieee80211vap *vap)
 		goto done;
 
 	/* the rate set has already been "negotiated" */
-	memset(&rs, 0, sizeof rs);
-	rs.mode = mode;
-	rs.type = IWI_RATESET_TYPE_NEGOTIATED;
-	rs.nrates = ni->ni_rates.rs_nrates;
-	if (rs.nrates > IWI_RATESET_SIZE) {
-		DPRINTF(("Truncating negotiated rate set from %u\n",
-		    rs.nrates));
-		rs.nrates = IWI_RATESET_SIZE;
-	}
-	memcpy(rs.rates, ni->ni_rates.rs_rates, rs.nrates);
-	DPRINTF(("Setting negotiated rates (%u)\n", rs.nrates));
-	error = iwi_cmd(sc, IWI_CMD_SET_RATES, &rs, sizeof rs);
+	error = iwi_set_rateset(sc, &ni->ni_rates, mode,
+	    IWI_RATESET_TYPE_NEGOTIATED);
 	if (error != 0)
 		goto done;
 
@@ -2940,7 +2940,7 @@ iwi_auth_and_assoc(struct iwi_softc *sc, struct ieee80211vap *vap)
 		 * key setup.  This typically is due to a user app bug
 		 * but if we blindly grab the key the firmware will
 		 * barf so avoid it for now.
-		 */
+		 */ 
 		if (vap->iv_def_txkey != IEEE80211_KEYIX_NONE)
 			assoc->auth |= vap->iv_def_txkey << 4;
 
@@ -2973,7 +2973,7 @@ iwi_auth_and_assoc(struct iwi_softc *sc, struct ieee80211vap *vap)
 	assoc->intval = htole16(ni->ni_intval);
 	IEEE80211_ADDR_COPY(assoc->bssid, ni->ni_bssid);
 	if (vap->iv_opmode == IEEE80211_M_IBSS)
-		IEEE80211_ADDR_COPY(assoc->dst, ifp->if_broadcastaddr);
+		IEEE80211_ADDR_COPY(assoc->dst, if_getbroadcastaddr(ifp));
 	else
 		IEEE80211_ADDR_COPY(assoc->dst, ni->ni_bssid);
 
@@ -3333,12 +3333,13 @@ iwi_sysctlattach(struct iwi_softc *sc)
 	struct sysctl_oid *tree = device_get_sysctl_tree(sc->sc_dev);
 
 	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO, "radio",
-	    CTLTYPE_INT | CTLFLAG_RD, sc, 0, iwi_sysctl_radio, "I",
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_NEEDGIANT, sc, 0,
+	    iwi_sysctl_radio, "I",
 	    "radio transmitter switch state (0=off, 1=on)");
 
 	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO, "stats",
-	    CTLTYPE_OPAQUE | CTLFLAG_RD, sc, 0, iwi_sysctl_stats, "S",
-	    "statistics");
+	    CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_NEEDGIANT, sc, 0,
+	    iwi_sysctl_stats, "S", "statistics");
 
 	sc->bluetooth = 0;
 	SYSCTL_ADD_INT(ctx, SYSCTL_CHILDREN(tree), OID_AUTO, "bluetooth",
@@ -3512,8 +3513,8 @@ iwi_ledattach(struct iwi_softc *sc)
 	callout_init_mtx(&sc->sc_ledtimer, &sc->sc_mtx, 0);
 
 	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
-		"softled", CTLTYPE_INT | CTLFLAG_RW, sc, 0,
-		iwi_sysctl_softled, "I", "enable/disable software LED support");
+	    "softled", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT, sc, 0,
+	    iwi_sysctl_softled, "I", "enable/disable software LED support");
 	SYSCTL_ADD_UINT(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
 		"ledpin", CTLFLAG_RW, &sc->sc_ledpin, 0,
 		"pin setting to turn activity LED on");
@@ -3607,8 +3608,8 @@ iwi_getradiocaps(struct ieee80211com *ic,
 	iwi_collect_bands(ic, bands, sizeof(bands));
 	*nchans = 0;
 	if (isset(bands, IEEE80211_MODE_11B) || isset(bands, IEEE80211_MODE_11G))
-		ieee80211_add_channel_list_2ghz(chans, maxchans, nchans,
-		    def_chan_2ghz, nitems(def_chan_2ghz), bands, 0);
+		ieee80211_add_channels_default_2ghz(chans, maxchans, nchans,
+		    bands, 0);
 	if (isset(bands, IEEE80211_MODE_11A)) {
 		ieee80211_add_channel_list_5ghz(chans, maxchans, nchans,
 		    def_chan_5ghz_band1, nitems(def_chan_5ghz_band1),

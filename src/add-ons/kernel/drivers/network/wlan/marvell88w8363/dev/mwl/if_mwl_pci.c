@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2007-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2007-2009 Marvell Semiconductor, Inc.
  * All rights reserved.
@@ -30,7 +32,6 @@
 
 #include <sys/cdefs.h>
 #ifdef __FreeBSD__
-__FBSDID("$FreeBSD: releng/11.1/sys/dev/mwl/if_mwl_pci.c 287197 2015-08-27 08:56:39Z glebius $");
 #endif
 
 /*
@@ -53,7 +54,7 @@ __FBSDID("$FreeBSD: releng/11.1/sys/dev/mwl/if_mwl_pci.c 287197 2015-08-27 08:56
 #include <sys/rman.h>
 
 #include <sys/socket.h>
- 
+
 #include <net/ethernet.h>
 #include <net/if.h>
 #include <net/if_media.h>
@@ -96,7 +97,6 @@ static const struct mwl_pci_ident mwl_pci_ids[] = {
 	{ 0x11ab, 0x2a0c, "Marvell 88W8363" },
 	{ 0x11ab, 0x2a21, "Marvell 88W8363" },
 	{ 0x11ab, 0x2a24, "Marvell 88W8363" },
-
 	{ 0, 0, NULL }
 };
 
@@ -278,16 +278,16 @@ static device_method_t mwl_pci_methods[] = {
 	DEVMETHOD(device_shutdown,	mwl_pci_shutdown),
 	DEVMETHOD(device_suspend,	mwl_pci_suspend),
 	DEVMETHOD(device_resume,	mwl_pci_resume),
-
 	{ 0,0 }
 };
+
 static driver_t mwl_pci_driver = {
 	"mwl",
 	mwl_pci_methods,
 	sizeof (struct mwl_pci_softc)
 };
-static	devclass_t mwl_devclass;
-DRIVER_MODULE(mwl, pci, mwl_pci_driver, mwl_devclass, 0, 0);
+
+DRIVER_MODULE(mwl, pci, mwl_pci_driver, 0, 0);
 MODULE_VERSION(mwl, 1);
 MODULE_DEPEND(mwl, wlan, 1, 1, 1);		/* 802.11 media layer */
 MODULE_DEPEND(mwl, firmware, 1, 1, 1);

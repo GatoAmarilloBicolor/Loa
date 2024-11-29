@@ -10,11 +10,12 @@
 #include "usb_private.h"
 
 
-BusManager::BusManager(Stack *stack)
+BusManager::BusManager(Stack *stack, device_node* node)
 	:	fInitOK(false),
 		fStack(stack),
 		fRootHub(NULL),
-		fUSBID(fStack->IndexOfBusManager(this))
+		fStackIndex((uint32)-1),
+		fNode(node)
 {
 	mutex_init(&fLock, "usb busmanager lock");
 
@@ -219,6 +220,8 @@ BusManager::AllocateDevice(Hub *parent, int8 hubAddress, uint8 hubPort,
 			return NULL;
 		}
 
+		hub->RegisterNode();
+
 		return (Device *)hub;
 	}
 
@@ -238,6 +241,8 @@ BusManager::AllocateDevice(Hub *parent, int8 hubAddress, uint8 hubPort,
 		return NULL;
 	}
 
+	device->RegisterNode();
+
 	return device;
 }
 
@@ -253,6 +258,9 @@ BusManager::FreeDevice(Device *device)
 status_t
 BusManager::Start()
 {
+	fStack->AddBusManager(this);
+	fStackIndex = fStack->IndexOfBusManager(this);
+	fStack->Explore();
 	return B_OK;
 }
 
@@ -329,3 +337,4 @@ BusManager::_GetDefaultPipe(usb_speed speed)
 	Unlock();
 	return fDefaultPipes[speed];
 }
+

@@ -134,7 +134,7 @@ get_interface_name_or_index(net_domain* domain, int32 option, void* value,
 	ASSERT(option == SIOCGIFINDEX || option == SIOCGIFNAME);
 
 	size_t expected = option == SIOCGIFINDEX ? IF_NAMESIZE : sizeof(ifreq);
-	if (*_length < expected)
+	if (*_length > 0 && *_length < expected)
 		return B_BAD_VALUE;
 
 	ifreq request;
@@ -191,6 +191,18 @@ fill_address(const sockaddr* from, sockaddr* to, size_t maxLength)
 }
 
 
+static void
+update_device_send_stats(struct net_device* device, status_t status, size_t packetSize)
+{
+	if (status == B_OK) {
+		atomic_add((int32*)&device->stats.send.packets, 1);
+		atomic_add64((int64*)&device->stats.send.bytes, packetSize);
+	} else {
+		atomic_add((int32*)&device->stats.send.errors, 1);
+	}
+}
+
+
 //	#pragma mark - datalink module
 
 
@@ -215,7 +227,7 @@ datalink_control(net_domain* _domain, int32 option, void* value,
 		case SIOCAIFADDR:	/* same as B_SOCKET_ADD_ALIAS */
 		{
 			// add new interface address
-			if (*_length < sizeof(struct ifaliasreq))
+			if (*_length > 0 && *_length < sizeof(struct ifaliasreq))
 				return B_BAD_VALUE;
 
 			struct ifaliasreq request;
@@ -320,10 +332,9 @@ datalink_control(net_domain* _domain, int32 option, void* value,
 		default:
 		{
 			// We also accept partial ifreqs as long as the name is complete.
-			if (*_length < IF_NAMESIZE)
-				return B_BAD_VALUE;
-
-			size_t length = min_c(sizeof(struct ifreq), *_length);
+			size_t length = sizeof(struct ifreq);
+			if (*_length > 0 && *_length >= IF_NAMESIZE)
+				length = min_c(length, *_length);
 
 			// try to pass the request to an existing interface
 			struct ifreq request;
@@ -361,6 +372,14 @@ datalink_send_routed_data(struct net_route* route, net_buffer* buffer)
 		return ENETUNREACH;
 	}
 
+	if ((route->flags & RTF_HOST) != 0) {
+		TRACE("  host route\n");
+		// We set the interface address here, so the buffer is delivered
+		// directly to the domain in interfaces.cpp:device_consumer_thread()
+		address->AcquireReference();
+		set_interface_address(buffer->interface_address, address);
+	}
+
 	if ((route->flags & RTF_LOCAL) != 0) {
 		TRACE("  local route\n");
 
@@ -369,9 +388,16 @@ datalink_send_routed_data(struct net_route* route, net_buffer* buffer)
 		address->AcquireReference();
 		set_interface_address(buffer->interface_address, address);
 
+		if (atomic_get(&interface->DeviceInterface()->monitor_count) > 0)
+			device_interface_monitor_receive(interface->DeviceInterface(), buffer);
+
 		// this one goes back to the domain directly
-		return fifo_enqueue_buffer(
+		const size_t packetSize = buffer->size;
+		status_t status = fifo_enqueue_buffer(
 			&interface->DeviceInterface()->receive_queue, buffer);
+		update_device_send_stats(interface->DeviceInterface()->device,
+			status, packetSize);
+		return status;
 	}
 
 	if ((route->flags & RTF_GATEWAY) != 0) {
@@ -680,7 +706,10 @@ interface_protocol_send_data(net_datalink_protocol* _protocol,
 	if (atomic_get(&interface->DeviceInterface()->monitor_count) > 0)
 		device_interface_monitor_receive(interface->DeviceInterface(), buffer);
 
-	return protocol->device_module->send_data(protocol->device, buffer);
+	const size_t packetSize = buffer->size;
+	status_t status = protocol->device_module->send_data(protocol->device, buffer);
+	update_device_send_stats(protocol->device, status, packetSize);
+	return status;
 }
 
 
@@ -754,7 +783,9 @@ interface_protocol_control(net_datalink_protocol* _protocol, int32 option,
 		case SIOCGIFBRDADDR:
 		case SIOCGIFDSTADDR:
 		{
-			if (length < sizeof(ifreq))
+			if (length == 0)
+				length = sizeof(ifreq);
+			else if (length < sizeof(ifreq))
 				return B_BAD_VALUE;
 
 			ifreq request;
@@ -855,9 +886,19 @@ interface_protocol_control(net_datalink_protocol* _protocol, int32 option,
 		case SIOCGIFSTATS:
 		{
 			// get stats
+			struct ifreq_stats stats = interface->DeviceInterface()->device->stats;
+
+			struct ifreq_stats deviceStats;
+			if (protocol->device_module->control(protocol->device, SIOCGIFSTATS,
+					&deviceStats, sizeof(struct ifreq_stats)) == B_OK) {
+				stats.receive.dropped += deviceStats.receive.dropped;
+				stats.receive.errors += deviceStats.receive.errors;
+				stats.send = deviceStats.send;
+				stats.collisions += deviceStats.collisions;
+			}
+
 			return user_memcpy(&((struct ifreq*)argument)->ifr_stats,
-				&interface->DeviceInterface()->device->stats,
-				sizeof(struct ifreq_stats));
+				&stats, sizeof(struct ifreq_stats));
 		}
 
 		case SIOCGIFTYPE:
@@ -874,7 +915,7 @@ interface_protocol_control(net_datalink_protocol* _protocol, int32 option,
 		{
 			// get MTU
 			struct ifreq request;
-			request.ifr_mtu = interface->mtu;
+			request.ifr_mtu = interface->device->mtu;
 
 			return user_memcpy(&((struct ifreq*)argument)->ifr_mtu,
 				&request.ifr_mtu, sizeof(request.ifr_mtu));
@@ -883,17 +924,14 @@ interface_protocol_control(net_datalink_protocol* _protocol, int32 option,
 		{
 			// set MTU
 			struct ifreq request;
-			if (user_memcpy(&request, argument, sizeof(struct ifreq)) < B_OK)
+			if (user_memcpy(&request, argument, sizeof(struct ifreq)) != B_OK)
 				return B_BAD_ADDRESS;
 
-			// check for valid bounds
-			if (request.ifr_mtu < 100
-				|| (uint32)request.ifr_mtu > interface->device->mtu)
-				return B_BAD_VALUE;
-
-			interface->mtu = request.ifr_mtu;
-			notify_interface_changed(interface);
-			return B_OK;
+			status_t status = interface->device->module->set_mtu(
+				interface->device, request.ifr_mtu);
+			if (status == B_OK)
+				notify_interface_changed(interface);
+			return status;
 		}
 
 		case SIOCSIFMEDIA:
@@ -920,23 +958,16 @@ interface_protocol_control(net_datalink_protocol* _protocol, int32 option,
 		case SIOCGIFMEDIA:
 		{
 			// get media
-			if (length < sizeof(ifmediareq))
+			const size_t copylen = offsetof(ifreq, ifr_media) + sizeof(ifreq::ifr_media);
+			if (length > 0 && length < copylen)
 				return B_BAD_VALUE;
 
-			struct ifmediareq request;
-			if (user_memcpy(&request, argument, sizeof(ifmediareq)) != B_OK)
+			struct ifreq request;
+			if (user_memcpy(&request, argument, copylen) != B_OK)
 				return B_BAD_ADDRESS;
 
-			// TODO: see above.
-			if (interface->device->module->control(interface->device,
-					SIOCGIFMEDIA, &request,
-					sizeof(struct ifmediareq)) != B_OK) {
-				memset(&request, 0, sizeof(struct ifmediareq));
-				request.ifm_active = request.ifm_current
-					= interface->device->media;
-			}
-
-			return user_memcpy(argument, &request, sizeof(struct ifmediareq));
+			request.ifr_media = interface->device->media;
+			return user_memcpy(argument, &request, copylen);
 		}
 
 		case SIOCGIFMETRIC:

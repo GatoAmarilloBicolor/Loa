@@ -89,6 +89,14 @@ public:
 	virtual	bool				Visit(BPartition* partition, int32 level);
 
 private:
+		enum {
+			MATCHES_VOLUME_NAME	= (1 << 0),
+			MATCHES_DEVICE_NAME	= (1 << 1),
+			MATCHES_FS_NAME		= (1 << 2),
+			MATCHES_BLOCK_SIZE	= (1 << 3),
+			MATCHES_CAPACITY	= (1 << 4),
+		};
+
 			int					_Score(BPartition* partition);
 
 private:
@@ -210,10 +218,9 @@ MountVisitor::_WasPreviouslyMounted(const BPath& path,
 	// We only check the legacy config data here; the current method
 	// is implemented in ArchivedVolumeVisitor -- this can be removed
 	// some day.
-	const char* volumeName = NULL;
-	if (partition->ContentName() == NULL
-		|| fPrevious.FindString(path.Path(), &volumeName) != B_OK
-		|| strcmp(volumeName, partition->ContentName()) != 0)
+	BString volumeName;
+	if (fPrevious.FindString(path.Path(), &volumeName) != B_OK
+		|| volumeName != partition->ContentName())
 		return false;
 
 	return true;
@@ -236,12 +243,17 @@ MountArchivedVisitor::MountArchivedVisitor(const BDiskDeviceList& devices,
 
 MountArchivedVisitor::~MountArchivedVisitor()
 {
-	if (fBestScore >= 6) {
-		uint32 mountFlags = fArchived.GetUInt32("mountFlags", 0);
-		BPartition* partition = fDevices.PartitionWithID(fBestID);
-		if (partition != NULL)
-			partition->Mount(NULL, mountFlags);
-	}
+	// At least these fields, plus one other besides, must match for us to auto-mount.
+	const int requiredMatches = MATCHES_FS_NAME | MATCHES_CAPACITY | MATCHES_BLOCK_SIZE;
+	if ((fBestScore & requiredMatches) != requiredMatches)
+		return;
+	if ((fBestScore & ~requiredMatches) == 0)
+		return;
+
+	uint32 mountFlags = fArchived.GetUInt32("mountFlags", 0);
+	BPartition* partition = fDevices.PartitionWithID(fBestID);
+	if (partition != NULL)
+		partition->Mount(NULL, mountFlags);
 }
 
 
@@ -273,29 +285,29 @@ MountArchivedVisitor::_Score(BPartition* partition)
 {
 	BPath path;
 	if (partition->GetPath(&path) != B_OK)
-		return false;
+		return 0;
 
 	int score = 0;
 
-	int64 capacity = fArchived.GetInt64("capacity", 0);
-	if (capacity == partition->ContentSize())
-		score += 4;
+	BString volumeName = fArchived.GetString("volumeName");
+	if (volumeName == partition->ContentName())
+		score |= MATCHES_VOLUME_NAME;
 
 	BString deviceName = fArchived.GetString("deviceName");
 	if (deviceName == path.Path())
-		score += 3;
-
-	BString volumeName = fArchived.GetString("volumeName");
-	if (volumeName == partition->ContentName())
-		score += 2;
+		score |= MATCHES_DEVICE_NAME;
 
 	BString fsName = fArchived.FindString("fsName");
 	if (fsName == partition->ContentType())
-		score += 1;
+		score |= MATCHES_FS_NAME;
+
+	int64 capacity = fArchived.GetInt64("capacity", 0);
+	if (capacity == partition->ContentSize())
+		score |= MATCHES_CAPACITY;
 
 	uint32 blockSize = fArchived.GetUInt32("blockSize", 0);
 	if (blockSize == partition->BlockSize())
-		score += 1;
+		score |= MATCHES_BLOCK_SIZE;
 
 	return score;
 }
@@ -339,6 +351,15 @@ ArchiveVisitor::Visit(BPartition* partition, int32 level)
 	info.AddString("deviceName", path.Path());
 	info.AddString("volumeName", partition->ContentName());
 	info.AddString("fsName", partition->ContentType());
+	BVolume volume;
+	partition->GetVolume(&volume);
+	fs_info fsInfo;
+	if (fs_stat_dev(volume.Device(), &fsInfo) == 0) {
+		if ((fsInfo.flags & B_FS_IS_READONLY) != 0)
+			info.AddUInt32("mountFlags", B_MOUNT_READ_ONLY);
+		else
+			info.AddUInt32("mountFlags", 0);
+	}
 
 	fMessage.AddMessage("info", &info);
 	return false;
@@ -350,7 +371,7 @@ ArchiveVisitor::Visit(BPartition* partition, int32 level)
 
 AutoMounter::AutoMounter()
 	:
-	BServer(kMountServerSignature, true, NULL),
+	BServer(kMountServerSignature, false, NULL),
 	fNormalMode(kRestorePreviousVolumes),
 	fRemovableMode(kAllVolumes),
 	fEjectWhenUnmounting(true)
@@ -597,7 +618,7 @@ AutoMounter::_MountVolume(const BMessage* message)
 		return;
 
 	status_t status = partition->Mount(NULL, mountFlags);
-	if (status < B_OK) {
+	if (status < B_OK && InitGUIContext() == B_OK) {
 		char text[512];
 		snprintf(text, sizeof(text),
 			B_TRANSLATE("Error mounting volume:\n\n%s"), strerror(status));
@@ -612,6 +633,9 @@ AutoMounter::_MountVolume(const BMessage* message)
 bool
 AutoMounter::_SuggestForceUnmount(const char* name, status_t error)
 {
+	if (InitGUIContext() != B_OK)
+		return false;
+
 	char text[1024];
 	snprintf(text, sizeof(text),
 		B_TRANSLATE("Could not unmount disk \"%s\":\n\t%s\n\n"
@@ -633,6 +657,9 @@ AutoMounter::_SuggestForceUnmount(const char* name, status_t error)
 void
 AutoMounter::_ReportUnmountError(const char* name, status_t error)
 {
+	if (InitGUIContext() != B_OK)
+		return;
+
 	char text[512];
 	snprintf(text, sizeof(text), B_TRANSLATE("Could not unmount disk "
 		"\"%s\":\n\t%s"), name, strerror(error));
@@ -955,14 +982,10 @@ AutoMounter::_SuggestMountFlags(const BPartition* partition, uint32* _flags)
 	uint32 mountFlags = 0;
 
 	bool askReadOnly = true;
-	bool isBFS = false;
 
 	if (partition->ContentType() != NULL
 		&& strcmp(partition->ContentType(), kPartitionTypeBFS) == 0) {
-#if 0
 		askReadOnly = false;
-#endif
-		isBFS = true;
 	}
 
 	BDiskSystem diskSystem;
@@ -973,29 +996,23 @@ AutoMounter::_SuggestMountFlags(const BPartition* partition, uint32* _flags)
 	if (partition->IsReadOnly())
 		askReadOnly = false;
 
+	if (askReadOnly && ((BServer*)be_app)->InitGUIContext() != B_OK) {
+		// Mount read-only, just to be safe.
+		mountFlags |= B_MOUNT_READ_ONLY;
+		askReadOnly = false;
+	}
+
 	if (askReadOnly) {
 		// Suggest to the user to mount read-only until Haiku is more mature.
 		BString string;
-		if (partition->ContentName() != NULL) {
-			char buffer[512];
-			snprintf(buffer, sizeof(buffer),
-				B_TRANSLATE("Mounting volume '%s'\n\n"),
-				partition->ContentName());
-			string << buffer;
-		} else
-			string << B_TRANSLATE("Mounting volume <unnamed volume>\n\n");
+		string.SetToFormat(B_TRANSLATE("Mounting volume '%s'\n\n"),
+			partition->ContentName().String());
 
 		// TODO: Use distro name instead of "Haiku"...
-		if (!isBFS) {
-			string << B_TRANSLATE("The file system on this volume is not the "
-				"Haiku file system. It is strongly suggested to mount it in "
-				"read-only mode. This will prevent unintentional data loss "
-				"because of errors in Haiku.");
-		} else {
-			string << B_TRANSLATE("It is suggested to mount all additional "
-				"Haiku volumes in read-only mode. This will prevent "
-				"unintentional data loss because of errors in Haiku.");
-		}
+		string << B_TRANSLATE("The file system on this volume is not the "
+			"Be file system. It is recommended to mount it in read-only "
+			"mode, to prevent unintentional data loss because of bugs "
+			"in Haiku.");
 
 		BAlert* alert = new BAlert(B_TRANSLATE("Mount warning"),
 			string.String(), B_TRANSLATE("Mount read/write"),

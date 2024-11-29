@@ -39,7 +39,7 @@
 #ifdef EOF
 #	undef EOF
 #endif
-#define EOF -1
+#define EOF (-1)
 
 #ifndef SEEK_SET
 #	define SEEK_SET 0
@@ -70,7 +70,7 @@ extern FILE		*fopen(const char *name, const char *mode);
 extern FILE		*freopen(const char *name, const char *mode, FILE *stream);
 extern FILE		*fdopen(int fd, const char *mode);
 extern int		fclose(FILE *stream);
-#ifdef _GNU_SOURCE
+#ifdef _DEFAULT_SOURCE
 extern int		fcloseall(void);
 #endif
 
@@ -103,7 +103,7 @@ extern FILE		*fmemopen(void *buf, size_t size, const char *mode);
 extern FILE		*open_memstream(char **buf, size_t *size);
 
 /* callback streams */
-#ifdef _GNU_SOURCE
+#ifdef _DEFAULT_SOURCE
 typedef ssize_t (*cookie_read_function_t)(void *cookie, char *buf, size_t size);
 typedef ssize_t (*cookie_write_function_t)(void *cookie, const char *buf, size_t size);
 typedef ssize_t (*cookie_seek_function_t)(void *cookie, off_t *offset, int whence);
@@ -115,7 +115,7 @@ typedef struct {
 	cookie_close_function_t *close;
 } cookie_io_functions_t;
 extern FILE		*fopencookie(void *cookie, const char *mode, cookie_io_functions_t io_funcs);
-#endif /*_GNU_SOURCE*/
+#endif /* _DEFAULT_SOURCE */
 
 /* file I/O */
 extern int		fflush(FILE *stream);
@@ -170,15 +170,16 @@ extern ssize_t	getline(char **_line, size_t *_length, FILE *stream);
 
 /* formatted I/O */
 extern int		printf(char const *format, ...) __PRINTFLIKE(1,2);
+#if !defined(_KERNEL_MODE) && !defined(_BOOT_MODE) && !defined(_LOADER_MODE)
+extern int		dprintf(int fd, char const *format, ...) __PRINTFLIKE(2,3);
+#endif
 extern int		fprintf(FILE *stream, char const *format, ...) __PRINTFLIKE(2,3);
 extern int		sprintf(char *string, char const *format, ...) __PRINTFLIKE(2,3);
 extern int		snprintf(char *string, size_t size, char const *format, ...) __PRINTFLIKE(3,4);
-extern int		asprintf(char **ret, char const *format, ...) __PRINTFLIKE(2,3);
 extern int		vprintf(char const *format, va_list ap);
 extern int		vfprintf(FILE *stream, char const *format, va_list ap);
 extern int		vsprintf(char *string, char const *format, va_list ap);
 extern int		vsnprintf(char *string, size_t size, char const *format, va_list ap);
-extern int		vasprintf(char **ret, char const *format, va_list ap);
 
 extern int		scanf(char const *format, ...);
 extern int		fscanf(FILE *stream, char const *format, ...);

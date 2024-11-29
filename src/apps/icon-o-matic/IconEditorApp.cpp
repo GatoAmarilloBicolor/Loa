@@ -1,6 +1,10 @@
 /*
  * Copyright 2006, 2011, Stephan Aßmus <superstippi@gmx.de>.
+ * Copyright 2023 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
+ *
+ * Authors:
+ *		Zardshard
  */
 
 
@@ -26,6 +30,7 @@
 #include "Defines.h"
 #include "MainWindow.h"
 #include "SavePanel.h"
+#include "ShapeListView.h"
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -123,6 +128,9 @@ IconEditorApp::MessageReceived(BMessage* message)
 			MainWindow* window;
 			if (message->FindPointer("window", (void**)&window) == B_OK)
 				openMessage.AddPointer("window", window);
+			bool referenceImage;
+			if (message->FindBool("reference image", &referenceImage) == B_OK)
+				openMessage.AddBool("reference image", referenceImage);
 			fOpenPanel->SetMessage(&openMessage);
 			fOpenPanel->Show();
 			break;
@@ -171,6 +179,9 @@ IconEditorApp::MessageReceived(BMessage* message)
 			const char* saveText;
 			if (message->FindString("save text", &saveText) == B_OK)
 				fSavePanel->SetSaveText(saveText);
+			entry_ref saveDirectory;
+			if (message->FindRef("save directory", &saveDirectory) == B_OK)
+				fSavePanel->SetPanelDirectory(&saveDirectory);
 			fSavePanel->SetTarget(messenger);
 			fSavePanel->Show();
 			break;
@@ -216,6 +227,9 @@ IconEditorApp::RefsReceived(BMessage* message)
 	bool append;
 	if (message->FindBool("append", &append) != B_OK)
 		append = false;
+	bool referenceImage;
+	if (message->FindBool("reference image", &referenceImage) != B_OK)
+		referenceImage = false;
 	MainWindow* window;
 	if (message->FindPointer("window", (void**)&window) != B_OK)
 		window = NULL;
@@ -223,11 +237,15 @@ IconEditorApp::RefsReceived(BMessage* message)
 	if (append && window == NULL)
 		return;
 	entry_ref ref;
-	if (append) {
+	if (append || referenceImage) {
 		if (!window->Lock())
 			return;
-		for (int32 i = 0; message->FindRef("refs", i, &ref) == B_OK; i++)
-			window->Open(ref, true);
+		for (int32 i = 0; message->FindRef("refs", i, &ref) == B_OK; i++) {
+			if (append)
+				window->Open(ref, true);
+			if (referenceImage)
+				window->AddReferenceImage(ref);
+		}
 		window->Unlock();
 	} else {
 		for (int32 i = 0; message->FindRef("refs", i, &ref) == B_OK; i++) {
@@ -276,6 +294,9 @@ IconEditorApp::_NewWindow()
 	MainWindow* window = new MainWindow(fLastWindowFrame, this,
 		&fLastWindowSettings);
 	fWindowCount++;
+
+	window->MoveOnScreen(B_MOVE_IF_PARTIALLY_OFFSCREEN);
+
 	return window;
 }
 

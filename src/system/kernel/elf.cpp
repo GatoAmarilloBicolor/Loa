@@ -24,7 +24,9 @@
 #include <algorithm>
 
 #include <AutoDeleter.h>
+#include <BytePointer.h>
 #include <commpage.h>
+#include <driver_settings.h>
 #include <boot/kernel_args.h>
 #include <debug.h>
 #include <image_defs.h>
@@ -35,6 +37,7 @@
 #include <thread.h>
 #include <runtime_loader.h>
 #include <util/AutoLock.h>
+#include <StackOrHeapArray.h>
 #include <vfs.h>
 #include <vm/vm.h>
 #include <vm/vm_types.h>
@@ -93,6 +96,7 @@ static mutex sImageMutex = MUTEX_INITIALIZER("kimages_lock");
 static mutex sImageLoadMutex = MUTEX_INITIALIZER("kimages_load_lock");
 	// serializes loading/unloading add-ons locking order
 	// sImageLoadMutex -> sImageMutex
+static bool sLoadElfSymbols = false;
 static bool sInitialized = false;
 
 
@@ -297,22 +301,6 @@ delete_elf_image(struct elf_image_info *image)
 }
 
 
-static uint32
-elf_hash(const char *name)
-{
-	uint32 hash = 0;
-	uint32 temp;
-
-	while (*name) {
-		hash = (hash << 4) + (uint8)*name++;
-		if ((temp = hash & 0xf0000000) != 0)
-			hash ^= temp >> 24;
-		hash &= ~temp;
-	}
-	return hash;
-}
-
-
 static const char *
 get_symbol_type_string(elf_sym *symbol)
 {
@@ -374,7 +362,8 @@ dump_symbol(int argc, char **argv)
 				if (symbol->st_value > 0 && strstr(name, pattern) != 0) {
 					symbolAddress
 						= (void*)(symbol->st_value + image->text_region.delta);
-					kprintf("%p %5lu %s:%s\n", symbolAddress, symbol->st_size,
+					kprintf("%p %5lu %s:%s\n", symbolAddress,
+						(long unsigned int)(symbol->st_size),
 						image->name, name);
 				}
 			}
@@ -390,7 +379,8 @@ dump_symbol(int argc, char **argv)
 						symbolAddress = (void*)(symbol->st_value
 							+ image->text_region.delta);
 						kprintf("%p %5lu %s:%s\n", symbolAddress,
-							symbol->st_size, image->name, name);
+							(long unsigned int)(symbol->st_size),
+							image->name, name);
 					}
 				}
 			}
@@ -479,7 +469,8 @@ dump_symbols(int argc, char **argv)
 			kprintf("%0*lx %s/%s %5ld %s\n", B_PRINTF_POINTER_WIDTH,
 				symbol->st_value + image->text_region.delta,
 				get_symbol_type_string(symbol), get_symbol_bind_string(symbol),
-				symbol->st_size, image->debug_string_table + symbol->st_name);
+				(long unsigned int)(symbol->st_size),
+				image->debug_string_table + symbol->st_name);
 		}
 	} else {
 		int32 j;
@@ -498,7 +489,8 @@ dump_symbols(int argc, char **argv)
 					symbol->st_value + image->text_region.delta,
 					get_symbol_type_string(symbol),
 					get_symbol_bind_string(symbol),
-					symbol->st_size, SYMNAME(image, symbol));
+					(long unsigned int)(symbol->st_size),
+					SYMNAME(image, symbol));
 			}
 		}
 	}
@@ -596,6 +588,20 @@ void dump_symbol(struct elf_image_info *image, elf_sym *sym)
 
 
 #endif // ELF32_COMPAT
+
+
+static uint32
+elf_hash(const char* _name)
+{
+	const uint8* name = (const uint8*)_name;
+
+	uint32 h = 0;
+	while (*name != '\0') {
+		h = (h << 4) + *name++;
+		h ^= (h >> 24) & 0xf0;
+	}
+	return (h & 0x0fffffff);
+}
 
 
 static elf_sym *
@@ -827,7 +833,7 @@ assert_defined_image_version(elf_image_info* dependentImage,
 	}
 
 	// iterate through the defined versions to find the given one
-	elf_verdef* definition = image->version_definitions;
+	BytePointer<elf_verdef> definition(image->version_definitions);
 	for (uint32 i = 0; i < image->num_version_definitions; i++) {
 		uint32 versionIndex = VER_NDX(definition->vd_ndx);
 		elf_version_info& info = image->versions[versionIndex];
@@ -837,8 +843,7 @@ assert_defined_image_version(elf_image_info* dependentImage,
 			return B_OK;
 		}
 
-		definition = (elf_verdef*)
-			((uint8*)definition + definition->vd_next);
+		definition += definition->vd_next;
 	}
 
 	// version not found -- fail, if not weak
@@ -861,7 +866,7 @@ init_image_version_infos(elf_image_info* image)
 	uint32 maxIndex = 0;
 
 	if (image->version_definitions != NULL) {
-		elf_verdef* definition = image->version_definitions;
+		BytePointer<elf_verdef> definition(image->version_definitions);
 		for (uint32 i = 0; i < image->num_version_definitions; i++) {
 			if (definition->vd_version != 1) {
 				dprintf("Unsupported version definition revision: %u\n",
@@ -873,13 +878,12 @@ init_image_version_infos(elf_image_info* image)
 			if (versionIndex > maxIndex)
 				maxIndex = versionIndex;
 
-			definition = (elf_verdef*)
-				((uint8*)definition	+ definition->vd_next);
+			definition += definition->vd_next;
 		}
 	}
 
 	if (image->needed_versions != NULL) {
-		elf_verneed* needed = image->needed_versions;
+		BytePointer<elf_verneed> needed(image->needed_versions);
 		for (uint32 i = 0; i < image->num_needed_versions; i++) {
 			if (needed->vn_version != 1) {
 				dprintf("Unsupported version needed revision: %u\n",
@@ -887,17 +891,16 @@ init_image_version_infos(elf_image_info* image)
 				return B_BAD_VALUE;
 			}
 
-			elf_vernaux* vernaux
-				= (elf_vernaux*)((uint8*)needed + needed->vn_aux);
+			BytePointer<elf_vernaux> vernaux(needed + needed->vn_aux);
 			for (uint32 k = 0; k < needed->vn_cnt; k++) {
 				uint32 versionIndex = VER_NDX(vernaux->vna_other);
 				if (versionIndex > maxIndex)
 					maxIndex = versionIndex;
 
-				vernaux = (elf_vernaux*)((uint8*)vernaux + vernaux->vna_next);
+				vernaux += vernaux->vna_next;
 			}
 
-			needed = (elf_verneed*)((uint8*)needed + needed->vn_next);
+			needed += needed->vn_next;
 		}
 	}
 
@@ -917,12 +920,12 @@ init_image_version_infos(elf_image_info* image)
 
 	// version definitions
 	if (image->version_definitions != NULL) {
-		elf_verdef* definition = image->version_definitions;
+		BytePointer<elf_verdef> definition(image->version_definitions);
 		for (uint32 i = 0; i < image->num_version_definitions; i++) {
 			if (definition->vd_cnt > 0
 				&& (definition->vd_flags & VER_FLG_BASE) == 0) {
-				elf_verdaux* verdaux
-					= (elf_verdaux*)((uint8*)definition + definition->vd_aux);
+				BytePointer<elf_verdaux> verdaux(definition
+					+ definition->vd_aux);
 
 				uint32 versionIndex = VER_NDX(definition->vd_ndx);
 				elf_version_info& info = image->versions[versionIndex];
@@ -931,19 +934,17 @@ init_image_version_infos(elf_image_info* image)
 				info.file_name = NULL;
 			}
 
-			definition = (elf_verdef*)
-				((uint8*)definition + definition->vd_next);
+			definition += definition->vd_next;
 		}
 	}
 
 	// needed versions
 	if (image->needed_versions != NULL) {
-		elf_verneed* needed = image->needed_versions;
+		BytePointer<elf_verneed> needed(image->needed_versions);
 		for (uint32 i = 0; i < image->num_needed_versions; i++) {
 			const char* fileName = STRING(image, needed->vn_file);
 
-			elf_vernaux* vernaux
-				= (elf_vernaux*)((uint8*)needed + needed->vn_aux);
+			BytePointer<elf_vernaux> vernaux(needed + needed->vn_aux);
 			for (uint32 k = 0; k < needed->vn_cnt; k++) {
 				uint32 versionIndex = VER_NDX(vernaux->vna_other);
 				elf_version_info& info = image->versions[versionIndex];
@@ -951,10 +952,10 @@ init_image_version_infos(elf_image_info* image)
 				info.name = STRING(image, vernaux->vna_name);
 				info.file_name = fileName;
 
-				vernaux = (elf_vernaux*)((uint8*)vernaux + vernaux->vna_next);
+				vernaux += vernaux->vna_next;
 			}
 
-			needed = (elf_verneed*)((uint8*)needed + needed->vn_next);
+			needed += needed->vn_next;
 		}
 	}
 
@@ -968,12 +969,11 @@ check_needed_image_versions(elf_image_info* image)
 	if (image->needed_versions == NULL)
 		return B_OK;
 
-	elf_verneed* needed = image->needed_versions;
+	BytePointer<elf_verneed> needed(image->needed_versions);
 	for (uint32 i = 0; i < image->num_needed_versions; i++) {
 		elf_image_info* dependency = sKernelImage;
 
-		elf_vernaux* vernaux
-			= (elf_vernaux*)((uint8*)needed + needed->vn_aux);
+		BytePointer<elf_vernaux> vernaux(needed + needed->vn_aux);
 		for (uint32 k = 0; k < needed->vn_cnt; k++) {
 			uint32 versionIndex = VER_NDX(vernaux->vna_other);
 			elf_version_info& info = image->versions[versionIndex];
@@ -983,10 +983,10 @@ check_needed_image_versions(elf_image_info* image)
 			if (error != B_OK)
 				return error;
 
-			vernaux = (elf_vernaux*)((uint8*)vernaux + vernaux->vna_next);
+			vernaux += vernaux->vna_next;
 		}
 
-		needed = (elf_verneed*)((uint8*)needed + needed->vn_next);
+		needed += needed->vn_next;
 	}
 
 	return B_OK;
@@ -1829,21 +1829,16 @@ status_t
 elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 {
 	elf_ehdr elfHeader;
-	elf_phdr *programHeaders = NULL;
 	char baseName[B_OS_NAME_LENGTH];
 	status_t status;
 	ssize_t length;
-	int fd;
-	int i;
-	addr_t delta = 0;
-	uint32 addressSpec = B_RANDOMIZED_BASE_ADDRESS;
-	area_id* mappedAreas = NULL;
 
 	TRACE(("elf_load: entry path '%s', team %p\n", path, team));
 
-	fd = _kern_open(-1, path, O_RDONLY, 0);
+	int fd = _kern_open(-1, path, O_RDONLY, 0);
 	if (fd < 0)
 		return fd;
+	FileDescriptorCloser fdCloser(fd);
 
 	struct stat st;
 	status = _kern_read_stat(fd, NULL, false, &st, sizeof(st));
@@ -1853,19 +1848,16 @@ elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 	// read and verify the ELF header
 
 	length = _kern_read(fd, 0, &elfHeader, sizeof(elfHeader));
-	if (length < B_OK) {
-		status = length;
-		goto error;
-	}
+	if (length < B_OK)
+		return length;
 
 	if (length != sizeof(elfHeader)) {
 		// short read
-		status = B_NOT_AN_EXECUTABLE;
-		goto error;
+		return B_NOT_AN_EXECUTABLE;
 	}
 	status = verify_eheader(&elfHeader);
 	if (status < B_OK)
-		goto error;
+		return status;
 
 #ifdef ELF_LOAD_USER_IMAGE_TEST_EXECUTABLE
 	if ((flags & ELF_LOAD_USER_IMAGE_TEST_EXECUTABLE) != 0)
@@ -1874,35 +1866,45 @@ elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 
 	struct elf_image_info* image;
 	image = create_image_struct();
-	if (image == NULL) {
-		status = B_NO_MEMORY;
-		goto error;
-	}
+	if (image == NULL)
+		return B_NO_MEMORY;
+	CObjectDeleter<elf_image_info, void, delete_elf_image> imageDeleter(image);
+
+	struct ElfHeaderUnsetter {
+		ElfHeaderUnsetter(elf_image_info* image)
+			: fImage(image)
+		{
+		}
+		~ElfHeaderUnsetter()
+		{
+			fImage->elf_header = NULL;
+		}
+
+		elf_image_info* fImage;
+	} headerUnsetter(image);
 	image->elf_header = &elfHeader;
 
 	// read program header
 
-	programHeaders = (elf_phdr *)malloc(
+	elf_phdr *programHeaders = (elf_phdr *)malloc(
 		elfHeader.e_phnum * elfHeader.e_phentsize);
 	if (programHeaders == NULL) {
 		dprintf("error allocating space for program headers\n");
-		status = B_NO_MEMORY;
-		goto error2;
+		return B_NO_MEMORY;
 	}
+	MemoryDeleter headersDeleter(programHeaders);
 
 	TRACE(("reading in program headers at 0x%lx, length 0x%x\n",
 		elfHeader.e_phoff, elfHeader.e_phnum * elfHeader.e_phentsize));
 	length = _kern_read(fd, elfHeader.e_phoff, programHeaders,
 		elfHeader.e_phnum * elfHeader.e_phentsize);
 	if (length < B_OK) {
-		status = length;
 		dprintf("error reading in program headers\n");
-		goto error2;
+		return length;
 	}
 	if (length != elfHeader.e_phnum * elfHeader.e_phentsize) {
 		dprintf("short read while reading in program headers\n");
-		status = -1;
-		goto error2;
+		return B_ERROR;
 	}
 
 	// construct a nice name for the region we have to create below
@@ -1916,8 +1918,8 @@ elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 			leaf++;
 
 		length = strlen(leaf);
-		if (length > B_OS_NAME_LENGTH - 8)
-			sprintf(baseName, "...%s", leaf + length + 8 - B_OS_NAME_LENGTH);
+		if (length > B_OS_NAME_LENGTH - 16)
+			snprintf(baseName, B_OS_NAME_LENGTH, "...%s", leaf + length + 16 - B_OS_NAME_LENGTH);
 		else
 			strcpy(baseName, leaf);
 	}
@@ -1925,16 +1927,16 @@ elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 	// map the program's segments into memory, initially with rw access
 	// correct area protection will be set after relocation
 
-	mappedAreas = (area_id*)malloc(sizeof(area_id) * elfHeader.e_phnum);
-	if (mappedAreas == NULL) {
-		status = B_NO_MEMORY;
-		goto error2;
-	}
+	BStackOrHeapArray<area_id, 8> mappedAreas(elfHeader.e_phnum);
+	if (!mappedAreas.IsValid())
+		return B_NO_MEMORY;
 
 	extended_image_info imageInfo;
 	memset(&imageInfo, 0, sizeof(imageInfo));
 
-	for (i = 0; i < elfHeader.e_phnum; i++) {
+	addr_t delta = 0;
+	uint32 addressSpec = B_RANDOMIZED_BASE_ADDRESS;
+	for (int i = 0; i < elfHeader.e_phnum; i++) {
 		char regionName[B_OS_NAME_LENGTH];
 		char *regionAddress;
 		char *originalRegionAddress;
@@ -1964,7 +1966,7 @@ elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 			memUpperBound = ROUNDUP(memUpperBound, B_PAGE_SIZE);
 			fileUpperBound = ROUNDUP(fileUpperBound, B_PAGE_SIZE);
 
-			sprintf(regionName, "%s_seg%drw", baseName, i);
+			snprintf(regionName, B_OS_NAME_LENGTH, "%s_seg%drw", baseName, i);
 
 			id = vm_map_file(team->id, regionName, (void **)&regionAddress,
 				addressSpec, fileUpperBound,
@@ -1972,8 +1974,7 @@ elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 				fd, ROUNDDOWN(programHeaders[i].p_offset, B_PAGE_SIZE));
 			if (id < B_OK) {
 				dprintf("error mapping file data: %s!\n", strerror(id));
-				status = B_NOT_AN_EXECUTABLE;
-				goto error2;
+				return B_NOT_AN_EXECUTABLE;
 			}
 			mappedAreas[i] = id;
 
@@ -1991,9 +1992,9 @@ elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 			size_t amount = fileUpperBound
 				- (programHeaders[i].p_vaddr % B_PAGE_SIZE)
 				- (programHeaders[i].p_filesz);
-			set_ac();
+			arch_cpu_enable_user_access();
 			memset((void *)start, 0, amount);
-			clear_ac();
+			arch_cpu_disable_user_access();
 
 			// Check if we need extra storage for the bss - we have to do this if
 			// the above region doesn't already comprise the memory size, too.
@@ -2013,8 +2014,7 @@ elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 					&physicalRestrictions, (void**)&regionAddress);
 				if (id < B_OK) {
 					dprintf("error allocating bss area: %s!\n", strerror(id));
-					status = B_NOT_AN_EXECUTABLE;
-					goto error2;
+					return B_NOT_AN_EXECUTABLE;
 				}
 			}
 		} else {
@@ -2030,8 +2030,7 @@ elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 				ROUNDDOWN(programHeaders[i].p_offset, B_PAGE_SIZE));
 			if (id < B_OK) {
 				dprintf("error mapping file text: %s!\n", strerror(id));
-				status = B_NOT_AN_EXECUTABLE;
-				goto error2;
+				return B_NOT_AN_EXECUTABLE;
 			}
 
 			mappedAreas[i] = id;
@@ -2055,19 +2054,23 @@ elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 	// modify the dynamic ptr by the delta of the regions
 	image->dynamic_section += image->text_region.delta;
 
-	set_ac();
+	arch_cpu_enable_user_access();
 	status = elf_parse_dynamic_section(image);
-	if (status != B_OK)
-		goto error2;
+	if (status != B_OK) {
+		arch_cpu_disable_user_access();
+		return status;
+	}
 
 	status = elf_relocate(image, image);
-	if (status != B_OK)
-		goto error2;
+	if (status != B_OK) {
+		arch_cpu_disable_user_access();
+		return status;
+	}
 
-	clear_ac();
+	arch_cpu_disable_user_access();
 
 	// set correct area protection
-	for (i = 0; i < elfHeader.e_phnum; i++) {
+	for (int i = 0; i < elfHeader.e_phnum; i++) {
 		if (mappedAreas[i] == -1)
 			continue;
 
@@ -2083,7 +2086,7 @@ elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 		status = vm_set_area_protection(team->id, mappedAreas[i], protection,
 			true);
 		if (status != B_OK)
-			goto error2;
+			return status;
 	}
 
 	// register the loaded image
@@ -2112,20 +2115,7 @@ elf_load_user_image(const char *path, Team *team, uint32 flags, addr_t *entry)
 	TRACE(("elf_load: done!\n"));
 
 	*entry = elfHeader.e_entry + delta;
-	status = B_OK;
-
-error2:
-	clear_ac();
-	free(mappedAreas);
-
-	image->elf_header = NULL;
-	delete_elf_image(image);
-
-error:
-	free(programHeaders);
-	_kern_close(fd);
-
-	return status;
+	return B_OK;
 }
 
 
@@ -2283,7 +2273,16 @@ load_kernel_add_on(const char *path)
 				// should check here for appropriate interpreter
 				continue;
 			case PT_PHDR:
+			case PT_STACK:
 				// we don't use it
+				continue;
+			case PT_EH_FRAME:
+				// not implemented yet, but can be ignored
+				continue;
+			case PT_ARM_UNWIND:
+				continue;
+			case PT_RISCV_ATTRIBUTES:
+				// TODO: check ABI compatibility attributes
 				continue;
 			default:
 				dprintf("%s: unhandled pheader type %#" B_PRIx32 "\n", fileName,
@@ -2392,8 +2391,7 @@ load_kernel_add_on(const char *path)
 	vm_unreserve_address_range(VMAddressSpace::KernelID(), reservedAddress,
 		reservedSize);
 
-	// ToDo: this should be enabled by kernel settings!
-	if (1)
+	if (sLoadElfSymbols)
 		load_elf_symbol_table(fd, image);
 
 	free(programHeaders);
@@ -2720,11 +2718,18 @@ elf_read_kernel_image_symbols(image_id id, elf_sym* symbolTable,
 
 
 status_t
-elf_init(kernel_args *args)
+elf_init(kernel_args* args)
 {
-	struct preloaded_image *image;
+	struct preloaded_image* image;
 
 	image_init();
+
+	if (void* handle = load_driver_settings("kernel")) {
+		sLoadElfSymbols = get_driver_boolean_parameter(handle, "load_symbols",
+			false, false);
+
+		unload_driver_settings(handle);
+	}
 
 	sImagesHash = new(std::nothrow) ImageHash();
 	if (sImagesHash == NULL)

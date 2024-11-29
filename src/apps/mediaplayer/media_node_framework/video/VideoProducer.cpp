@@ -357,14 +357,22 @@ VideoProducer::PrepareToConnect(const media_source& source,
 		return B_MEDIA_BAD_FORMAT;
 	}
 
-	if (format->u.raw_video.display.line_width == 0)
-		format->u.raw_video.display.line_width = 384;
-	if (format->u.raw_video.display.line_count == 0)
-		format->u.raw_video.display.line_count = 288;
-	if (format->u.raw_video.field_rate == 0)
-		format->u.raw_video.field_rate = 25.0;
-	if (format->u.raw_video.display.bytes_per_row == 0)
-		format->u.raw_video.display.bytes_per_row = format->u.raw_video.display.line_width * 4;
+	if (format->u.raw_video.display.line_width == 0) {
+		format->u.raw_video.display.line_width
+			= fSupplier->Format().u.raw_video.display.line_width;
+	}
+	if (format->u.raw_video.display.line_count == 0) {
+		format->u.raw_video.display.line_count
+			= fSupplier->Format().u.raw_video.display.line_count;
+	}
+	if (format->u.raw_video.field_rate == 0) {
+		format->u.raw_video.field_rate
+			= fSupplier->Format().u.raw_video.field_rate;
+	}
+	if (format->u.raw_video.display.bytes_per_row == 0) {
+		format->u.raw_video.display.bytes_per_row
+			= fSupplier->Format().u.raw_video.display.bytes_per_row;
+	}
 
 	*outSource = fOutput.source;
 	strcpy(outName, fOutput.name);
@@ -547,7 +555,7 @@ void
 VideoProducer::_HandleStart(bigtime_t performanceTime)
 {
 	// Start producing frames, even if the output hasn't been connected yet.
-	TRACE("_HandleStart(%Ld)\n", performanceTime);
+	TRACE("_HandleStart(%lld)\n", performanceTime);
 
 	if (fRunning) {
 		TRACE("_HandleStart: Node already started\n");
@@ -629,7 +637,7 @@ VideoProducer::_FrameGeneratorThread()
 	const int32 kMaxDroppedFrames = 15;
 	bool running = true;
 	while (running) {
-		TRACE("_FrameGeneratorThread: loop: %Ld\n", fFrame);
+		TRACE("_FrameGeneratorThread: loop: %lld\n", fFrame);
 		// lock the node manager
 		status_t err = fManager->LockWithTimeout(10000);
 		bool ignoreEvent = false;
@@ -658,7 +666,7 @@ VideoProducer::_FrameGeneratorThread()
 				bool newPlayingState;
 				playlistFrame = fManager->PlaylistFrameAtFrame(fFrame,
 					playingDirection, newPlayingState);
-				TRACE("_FrameGeneratorThread: performance time: %Ld, "
+				TRACE("_FrameGeneratorThread: performance time: %lld, "
 					"playlist frame: %lld\n", performanceTime, playlistFrame);
 				forceSendingBuffer |= newPlayingState;
 				fManager->SetCurrentVideoTime(nextPerformanceTime);
@@ -680,7 +688,7 @@ VideoProducer::_FrameGeneratorThread()
 				return B_OK;
 		}
 
-		TRACE("_FrameGeneratorThread: waiting (%Ld)...\n", waitUntil);
+		TRACE("_FrameGeneratorThread: waiting (%lld)...\n", waitUntil);
 		// wait until...
 		err = acquire_sem_etc(fFrameSync, 1, B_ABSOLUTE_TIMEOUT, waitUntil);
 		// The only acceptable responses are B_OK and B_TIMED_OUT. Everything
@@ -747,8 +755,8 @@ VideoProducer::_FrameGeneratorThread()
 					h->u.raw_video.line_count
 						= fConnectedFormat.display.line_count;
 					// Fill in a frame
-					TRACE("_FrameGeneratorThread: frame: %Ld, "
-						"playlistFrame: %Ld\n", fFrame, playlistFrame);
+					TRACE("_FrameGeneratorThread: frame: %lld, "
+						"playlistFrame: %lld\n", fFrame, playlistFrame);
 					bool wasCached = false;
 					err = fSupplier->FillBuffer(playlistFrame,
 						buffer->Data(), fConnectedFormat, forceSendingBuffer,
@@ -762,15 +770,20 @@ VideoProducer::_FrameGeneratorThread()
 						err = B_OK;
 					}
 					// clean the buffer if something went wrong
-					if (err != B_OK) {
+					if (err != B_OK && err != B_LAST_BUFFER_ERROR) {
 						// TODO: should use "back value" according
 						// to color space!
 						memset(buffer->Data(), 0, h->size_used);
 						err = B_OK;
+					} else if (err == B_LAST_BUFFER_ERROR) {
+						wasCached = true;
+							// Don't send the buffer: we don't have a buffer
+						err = B_OK;
+						running = false;
 					}
 					// Send the buffer on down to the consumer
-					if (wasCached || (err = SendBuffer(buffer, fOutput.source,
-							fOutput.destination) != B_OK)) {
+					if (wasCached || ((err = SendBuffer(buffer, fOutput.source,
+							fOutput.destination)) != B_OK)) {
 						// If there is a problem sending the buffer,
 						// or if we don't send the buffer because its
 						// contents are the same as the last one,
@@ -806,6 +819,7 @@ VideoProducer::_FrameGeneratorThread()
 				break;
 		}
 	}
+	fManager->SetCurrentVideoTime(INT64_MAX);
 	TRACE("_FrameGeneratorThread: frame generator thread done.\n");
 	return B_OK;
 }

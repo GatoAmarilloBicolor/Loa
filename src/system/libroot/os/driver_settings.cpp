@@ -28,6 +28,7 @@
 #	undef _KERNEL_MODE
 #endif
 
+#include <BeBuild.h>
 #include <directories.h>
 #include <driver_settings.h>
 #include <FindDirectory.h>
@@ -457,8 +458,6 @@ load_driver_settings_from_file(int file, const char *driverName)
 				// everything went fine!
 				return handle;
 			}
-
-			free(handle);
 		}
 		// "text" might be NULL here, but that's allowed
 		free(text);
@@ -765,7 +764,10 @@ load_driver_settings(const char *driverName)
 					return NULL;
 
 				memcpy(text, settings->buffer, settings->size + 1);
-				return new_settings(text, driverName);
+				settings_handle *handle =  new_settings(text, driverName);
+				if (handle == NULL)
+					free(text);
+				return handle;
 			}
 			settings = settings->next;
 		}
@@ -956,8 +958,11 @@ get_driver_settings(void *handle)
 }
 
 
-status_t
-delete_driver_settings(void *_handle)
-{
-	return unload_driver_settings(_handle);
-}
+#if defined(HAIKU_TARGET_PLATFORM_HAIKU) \
+	&& (defined(__i386__) || defined(__x86_64__))
+
+// Obsolete function, use unload_driver_settings instead. Introduced by
+// accident in hrev3530 (2003) and present in public headers for a long time.
+B_DEFINE_WEAK_ALIAS(unload_driver_settings, delete_driver_settings);
+
+#endif

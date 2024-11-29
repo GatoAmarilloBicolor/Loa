@@ -3,6 +3,11 @@ resource(1, "BEOS:APP_SIG") #'MIMS' "application/x-vnd.Haiku-Debugger";
 
 resource app_name_catalog_entry "x-vnd.Haiku-Debugger:System name:Debugger";
 
+resource file_types message {
+  "types" = "application/x-vnd.Be-elfexecutable",
+  "types" = "application/x-vnd.haiku-core-file"
+};
+
 resource app_version {
 	major  = 1,
 	middle = 0,
@@ -17,7 +22,7 @@ resource app_version {
 
 resource app_flags B_SINGLE_LAUNCH;
 
-resource vector_icon {
+resource(1) vector_icon {
 	$"6E6369660B03000100010001005A02000604BC00000000000000003C00004940"
 	$"004B000000FF9E063FF7F378D7FFEA97FFFFB94B02000604BC00000000000000"
 	$"003C00004940004B00000038BC382B279127D253ED53FF2EAA2E020006023A9D"

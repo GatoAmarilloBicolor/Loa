@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1997, 1998, 1999
  *	Bill Paul <wpaul@ctr.columbia.edu>.  All rights reserved.
  *
@@ -31,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: releng/11.1/sys/dev/an/if_an_pci.c 299544 2016-05-12 17:47:30Z scottl $");
+__FBSDID("$FreeBSD$");
 
 /*
  * This is a PCI shim for the Aironet PC4500/4800 wireless network
@@ -268,8 +270,8 @@ static driver_t an_pci_driver = {
 	sizeof(struct an_softc),
 };
 
-static devclass_t an_devclass;
-
-DRIVER_MODULE(an, pci, an_pci_driver, an_devclass, 0, 0);
+DRIVER_MODULE(an, pci, an_pci_driver, 0, 0);
+MODULE_PNP_INFO("U16:vendor;U16:device;D:#", pci, an,
+    an_devs, nitems(an_devs) - 1);
 MODULE_DEPEND(an, pci, 1, 1, 1);
 MODULE_DEPEND(an, wlan, 1, 1, 1);

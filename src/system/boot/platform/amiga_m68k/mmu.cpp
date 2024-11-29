@@ -663,25 +663,50 @@ platform_free_region(void *address, size_t size)
 }
 
 
-void
-platform_release_heap(struct stage2_args *args, void *base)
+ssize_t
+platform_allocate_heap_region(size_t size, void **_base)
 {
-	// It will be freed automatically, since it is in the
-	// identity mapped region, and not stored in the kernel's
-	// page tables.
+	size = ROUNDUP(size, B_PAGE_SIZE);
+	addr_t base = get_next_physical_address(size);
+	if (base == 0)
+		return B_NO_MEMORY;
+
+	if ((base + size) > (32 * 1024 * 1024))
+		panic("platform_allocate_heap_region: region end is beyond identity map");
+
+	*_base = (void*)base;
+	return size;
 }
 
 
-status_t
-platform_init_heap(struct stage2_args *args, void **_base, void **_top)
+void
+platform_free_heap_region(void *_base, size_t size)
 {
-	void *heap = (void *)get_next_physical_address(args->heap_size);
-	if (heap == NULL)
-		return B_NO_MEMORY;
+	addr_t base = (addr_t)_base;
+	remove_physical_allocated_range(base, size);
+	if (sNextPhysicalAddress == (base + size))
+		sNextPhysicalAddress -= size;
 
-	*_base = heap;
-	*_top = (void *)((int8 *)heap + args->heap_size);
+	// Failures don't matter very much as regions should be freed automatically,
+	// since they're in the identity map and not stored in the kernel's page tables.
+}
+
+
+extern "C" status_t
+platform_bootloader_address_to_kernel_address(void *address, addr_t *_result)
+{
+	TRACE(("%s: called\n", __func__));
+	// amiga_m68k really doesn't need an address conversion
+	*_result = (addr_t)address;
 	return B_OK;
 }
 
 
+extern "C" status_t
+platform_kernel_address_to_bootloader_address(addr_t address, void **_result)
+{
+	TRACE(("%s: called\n", __func__));
+	// amiga_m68k really doesn't need an address conversion
+	*_result = (void*)address;
+	return B_OK;
+}

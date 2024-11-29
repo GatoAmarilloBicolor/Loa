@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2006, Haiku Inc. All rights reserved.
+ * Copyright 2004-2020, Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -21,7 +21,10 @@ Pipe::Pipe(Object *parent)
 
 Pipe::~Pipe()
 {
-	CancelQueuedTransfers(true);
+	PutUSBID(false);
+	Pipe::CancelQueuedTransfers(true);
+	WaitForIdle();
+
 	GetBusManager()->NotifyPipeChange(this, USB_CHANGE_DESTROYED);
 }
 
@@ -40,7 +43,18 @@ Pipe::InitCommon(int8 deviceAddress, uint8 endpointAddress, usb_speed speed,
 	fHubAddress = hubAddress;
 	fHubPort = hubPort;
 
+	fMaxBurst = 0;
+	fBytesPerInterval = 0;
+
 	GetBusManager()->NotifyPipeChange(this, USB_CHANGE_CREATED);
+}
+
+
+void
+Pipe::InitSuperSpeed(uint8 maxBurst, uint16 bytesPerInterval)
+{
+	fMaxBurst = maxBurst;
+	fBytesPerInterval = bytesPerInterval;
 }
 
 
@@ -55,6 +69,9 @@ Pipe::SetHubInfo(int8 address, uint8 port)
 status_t
 Pipe::SubmitTransfer(Transfer *transfer)
 {
+	if (USBID() == UINT32_MAX)
+		return B_NO_INIT;
+
 	// ToDo: keep track of all submited transfers to be able to cancel them
 	return GetBusManager()->SubmitTransfer(transfer);
 }
@@ -170,9 +187,19 @@ BulkPipe::InitCommon(int8 deviceAddress, uint8 endpointAddress,
 	usb_speed speed, pipeDirection direction, size_t maxPacketSize,
 	uint8 interval, int8 hubAddress, uint8 hubPort)
 {
-	// some devices have bogus descriptors
-	if (speed == USB_SPEED_HIGHSPEED && maxPacketSize != 512)
-		maxPacketSize = 512;
+	// See comments in ControlPipe::InitCommon.
+	switch (speed) {
+		case USB_SPEED_HIGHSPEED:
+			maxPacketSize = 512;
+			break;
+		case USB_SPEED_SUPERSPEED:
+		case USB_SPEED_SUPERSPEEDPLUS:
+			maxPacketSize = 1024;
+			break;
+
+		default:
+			break;
+	}
 
 	Pipe::InitCommon(deviceAddress, endpointAddress, speed, direction,
 		maxPacketSize, interval, hubAddress, hubPort);
@@ -202,7 +229,7 @@ BulkPipe::QueueBulk(void *data, size_t dataLength, usb_callback_func callback,
 
 status_t
 BulkPipe::QueueBulkV(iovec *vector, size_t vectorCount,
-	usb_callback_func callback, void *callbackCookie, bool physical)
+	usb_callback_func callback, void *callbackCookie)
 {
 	if (vectorCount > 0 && vector == NULL)
 		return B_BAD_VALUE;
@@ -211,7 +238,27 @@ BulkPipe::QueueBulkV(iovec *vector, size_t vectorCount,
 	if (!transfer)
 		return B_NO_MEMORY;
 
-	transfer->SetPhysical(physical);
+	transfer->SetVector(vector, vectorCount);
+	transfer->SetCallback(callback, callbackCookie);
+
+	status_t result = GetBusManager()->SubmitTransfer(transfer);
+	if (result < B_OK)
+		delete transfer;
+	return result;
+}
+
+
+status_t
+BulkPipe::QueueBulkV(physical_entry *vector, size_t vectorCount,
+	usb_callback_func callback, void *callbackCookie)
+{
+	if (vectorCount > 0 && vector == NULL)
+		return B_BAD_VALUE;
+
+	Transfer *transfer = new(std::nothrow) Transfer(this);
+	if (!transfer)
+		return B_NO_MEMORY;
+
 	transfer->SetVector(vector, vectorCount);
 	transfer->SetCallback(callback, callbackCookie);
 
@@ -256,6 +303,11 @@ IsochronousPipe::QueueIsochronous(void *data, size_t dataLength,
 	isochronousData->packet_count = packetCount;
 	isochronousData->starting_frame_number = startingFrameNumber;
 	isochronousData->flags = flags;
+
+	for (uint32 i = 0; i < isochronousData->packet_count; i++) {
+		isochronousData->packet_descriptors[i].actual_length = 0;
+		isochronousData->packet_descriptors[i].status = B_NO_INIT;
+	}
 
 	Transfer *transfer = new(std::nothrow) Transfer(this);
 	if (!transfer) {
@@ -321,6 +373,11 @@ ControlPipe::ControlPipe(Object *parent)
 
 ControlPipe::~ControlPipe()
 {
+	// We do this here in case a submitted request is still running.
+	PutUSBID(false);
+	ControlPipe::CancelQueuedTransfers(true);
+	WaitForIdle();
+
 	if (fNotifySem >= 0)
 		delete_sem(fNotifySem);
 	mutex_lock(&fSendRequestLock);
@@ -334,8 +391,8 @@ ControlPipe::InitCommon(int8 deviceAddress, uint8 endpointAddress,
 	uint8 interval, int8 hubAddress, uint8 hubPort)
 {
 	// The USB 2.0 spec section 5.5.3 gives fixed max packet sizes for the
-	// different speeds. The USB 3.1 specs defines the max packet size to a
-	// fixed 512 for control endpoints in 9.6.6. Some devices ignore these
+	// different speeds. The USB 3.1 specs defines some fixed max packet sizes,
+	// including for control endpoints in 9.6.6. Some devices ignore these
 	// values and use bogus ones, so we restrict them here.
 	switch (speed) {
 		case USB_SPEED_LOWSPEED:
@@ -344,7 +401,8 @@ ControlPipe::InitCommon(int8 deviceAddress, uint8 endpointAddress,
 		case USB_SPEED_HIGHSPEED:
 			maxPacketSize = 64;
 			break;
-		case USB_SPEED_SUPER:
+		case USB_SPEED_SUPERSPEED:
+		case USB_SPEED_SUPERSPEEDPLUS:
 			maxPacketSize = 512;
 			break;
 
@@ -391,7 +449,7 @@ ControlPipe::SendRequest(uint8 requestType, uint8 request, uint16 value,
 		// After the above cancel returns it is guaranteed that the callback
 		// has been invoked. Therefore we can simply grab that released
 		// semaphore again to clean up.
-		acquire_sem_etc(fNotifySem, 1, B_RELATIVE_TIMEOUT, 0);
+		acquire_sem(fNotifySem);
 
 		if (actualLength)
 			*actualLength = 0;
@@ -427,6 +485,9 @@ ControlPipe::QueueRequest(uint8 requestType, uint8 request, uint16 value,
 	if (dataLength > 0 && data == NULL)
 		return B_BAD_VALUE;
 
+	if (USBID() == UINT32_MAX)
+		return B_NO_INIT;
+
 	usb_request_data *requestData = new(std::nothrow) usb_request_data;
 	if (!requestData)
 		return B_NO_MEMORY;
@@ -451,4 +512,19 @@ ControlPipe::QueueRequest(uint8 requestType, uint8 request, uint16 value,
 	if (result < B_OK)
 		delete transfer;
 	return result;
+}
+
+
+status_t
+ControlPipe::CancelQueuedTransfers(bool force)
+{
+	if (force && fNotifySem >= 0) {
+		// There is likely a transfer currently running; we need to cancel it
+		// manually, as callbacks are not invoked when force-cancelling.
+		fTransferStatus = B_CANCELED;
+		fActualLength = 0;
+		release_sem_etc(fNotifySem, 1, B_RELEASE_IF_WAITING_ONLY);
+	}
+
+	return Pipe::CancelQueuedTransfers(force);
 }

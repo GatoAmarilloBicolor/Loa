@@ -80,9 +80,9 @@ static const char* const kUsage =
 static void
 print_usage_and_exit(bool error)
 {
-    fprintf(error ? stderr : stdout, kUsage, kProgramName, kProgramName,
-    	kProgramName, kProgramName, kProgramName);
-    exit(error ? 1 : 0);
+	fprintf(error ? stderr : stdout, kUsage, kProgramName, kProgramName,
+	kProgramName, kProgramName, kProgramName);
+	exit(error ? 1 : 0);
 }
 
 
@@ -254,6 +254,7 @@ private:
 	virtual	void				TeamDebuggerCountChanged(int32 count);
 
 private:
+			status_t			_ShowStartTeamWindow(TargetHostInterface* interface);
 			status_t			_StartNewTeam(TargetHostInterface* interface,
 									const char* teamPath, const char* args);
 			status_t			_HandleOptions(const Options& options);
@@ -371,19 +372,13 @@ Debugger::MessageReceived(BMessage* message)
 					->ActiveInterfaceAt(0);
 			}
 
-			BMessenger messenger(fStartTeamWindow);
-			if (!messenger.IsValid()) {
-				fStartTeamWindow = StartTeamWindow::Create(hostInterface);
-				if (fStartTeamWindow == NULL)
-					break;
-				fStartTeamWindow->Show();
-			} else
-				fStartTeamWindow->Activate();
+			_ShowStartTeamWindow(hostInterface);
 			break;
 		}
 		case MSG_START_TEAM_WINDOW_CLOSED:
 		{
 			fStartTeamWindow = NULL;
+			Quit();
 			break;
 		}
 		case MSG_SHOW_CONNECTION_CONFIG_WINDOW:
@@ -414,10 +409,20 @@ Debugger::MessageReceived(BMessage* message)
 			if (message->FindInt32("team", &teamID) != B_OK)
 				break;
 
-			TargetHostInterface* interface;
+			TargetHostInterface* interface = NULL;
 			if (message->FindPointer("interface", reinterpret_cast<void**>(
 					&interface)) != B_OK) {
-				break;
+				// No interface specified: presume local.
+				TargetHostInterfaceRoster* roster = TargetHostInterfaceRoster::Default();
+				for (int32 i = 0; i < roster->CountActiveInterfaces(); i++) {
+					TargetHostInterface* iface = roster->ActiveInterfaceAt(i);
+					if (iface->IsLocal()) {
+						interface = iface;
+						break;
+					}
+				}
+				if (interface == NULL)
+					break;
 			}
 
 			TeamDebuggerOptions options;
@@ -427,12 +432,14 @@ Debugger::MessageReceived(BMessage* message)
 			options.userInterface = new(std::nothrow) GraphicalUserInterface;
 			if (options.userInterface == NULL) {
 				// TODO: notify user.
+				fprintf(stderr, "Error: Failed to create GUI\n");
 				break;
 			}
 			BReference<UserInterface> uiReference(options.userInterface, true);
 			status_t error = interface->StartTeamDebugger(options);
 			if (error != B_OK) {
 				// TODO: notify user.
+				fprintf(stderr, "Error: Failed to start team debugger\n");
 			}
 			break;
 		}
@@ -489,7 +496,7 @@ Debugger::ReadyToRun()
 {
 	TargetHostInterfaceRoster* roster = TargetHostInterfaceRoster::Default();
 	AutoLocker<TargetHostInterfaceRoster> lock(roster);
-	if (roster->CountRunningTeamDebuggers() == 0)
+	if (roster->CountRunningTeamDebuggers() == 0 && fStartTeamWindow == NULL)
 		PostMessage(MSG_SHOW_TEAMS_WINDOW);
 }
 
@@ -517,17 +524,35 @@ Debugger::RefsReceived(BMessage* message)
 		if (path.SetTo(&ref) != B_OK)
 			continue;
 
-		// check, whether this is a core file
-		{
-			ElfFile elfFile;
-			if (elfFile.Init(path.Path()) != B_OK || elfFile.Type() != ET_CORE)
-				continue;
-		}
+		ElfFile elfFile;
+		if (elfFile.Init(path.Path()) != B_OK)
+			continue;
 
-		// handle the core file
-		Options options;
-		options.coreFilePath = path.Path();
-		_HandleOptions(options);
+		switch (elfFile.Type()) {
+			case ET_CORE:
+			{
+				// open the core file
+				Options options;
+				options.coreFilePath = path.Path();
+				_HandleOptions(options);
+				break;
+			}
+			case ET_EXEC:
+			case ET_DYN:
+			{
+				// ask the user for arguments to pass to the executable
+				TargetHostInterface* hostInterface = TargetHostInterfaceRoster::Default()
+						->ActiveInterfaceAt(0);
+				status_t error = _ShowStartTeamWindow(hostInterface);
+				if (error != B_OK)
+					continue;
+
+				BMessage message(MSG_SET_TEAM_PATH);
+				message.AddRef("refs", &ref);
+				fStartTeamWindow->PostMessage(&message);
+				break;
+			}
+		}
 	}
 }
 
@@ -567,6 +592,23 @@ Debugger::TeamDebuggerCountChanged(int32 count)
 		AutoLocker<Debugger> lock(this);
 		Quit();
 	}
+}
+
+
+status_t
+Debugger::_ShowStartTeamWindow(TargetHostInterface* interface)
+{
+	if (fStartTeamWindow == NULL) {
+		TargetHostInterface* hostInterface = TargetHostInterfaceRoster::Default()
+			->ActiveInterfaceAt(0);
+		fStartTeamWindow = StartTeamWindow::Create(hostInterface);
+		if (fStartTeamWindow == NULL)
+			return B_NO_MEMORY;
+		fStartTeamWindow->Show();
+	} else
+		fStartTeamWindow->Activate();
+
+	return B_OK;
 }
 
 
@@ -644,6 +686,14 @@ CliDebugger::~CliDebugger()
 bool
 CliDebugger::Run(const Options& options)
 {
+	if (options.commandLineArgc == 0
+		&& options.team < 0
+		&& options.thread < 0
+		&& options.coreFilePath == NULL) {
+		fprintf(stderr, "No target specified to debug\n");
+		return false;
+	}
+
 	// Block SIGINT, in this thread so all threads created by it inherit the
 	// a block mask with the signal blocked. In the input loop the signal will
 	// be unblocked again.

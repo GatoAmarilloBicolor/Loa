@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2024, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -244,12 +244,23 @@ AcpiExLoadTableOp (
     ACPI_NAMESPACE_NODE     *ParentNode;
     ACPI_NAMESPACE_NODE     *StartNode;
     ACPI_NAMESPACE_NODE     *ParameterNode = NULL;
+    ACPI_OPERAND_OBJECT     *ReturnObj;
     ACPI_OPERAND_OBJECT     *DdbHandle;
     UINT32                  TableIndex;
 
 
     ACPI_FUNCTION_TRACE (ExLoadTableOp);
 
+
+    /* Create the return object */
+
+    ReturnObj = AcpiUtCreateIntegerObject ((UINT64) 0);
+    if (!ReturnObj)
+    {
+        return_ACPI_STATUS (AE_NO_MEMORY);
+    }
+
+    *ReturnDesc = ReturnObj;
 
     /* Find the ACPI table in the RSDT/XSDT */
 
@@ -268,13 +279,6 @@ AcpiExLoadTableOp (
 
         /* Table not found, return an Integer=0 and AE_OK */
 
-        DdbHandle = AcpiUtCreateIntegerObject ((UINT64) 0);
-        if (!DdbHandle)
-        {
-            return_ACPI_STATUS (AE_NO_MEMORY);
-        }
-
-        *ReturnDesc = DdbHandle;
         return_ACPI_STATUS (AE_OK);
     }
 
@@ -342,6 +346,12 @@ AcpiExLoadTableOp (
         return_ACPI_STATUS (Status);
     }
 
+    /* Complete the initialization/resolution of new objects */
+
+    AcpiExExitInterpreter();
+    AcpiNsInitializeObjects();
+    AcpiExEnterInterpreter();
+
     /* Parameter Data (optional) */
 
     if (ParameterNode)
@@ -359,7 +369,13 @@ AcpiExLoadTableOp (
         }
     }
 
-    *ReturnDesc = DdbHandle;
+    /* Remove the reference to DdbHandle created by AcpiExAddTable above */
+
+    AcpiUtRemoveReference (DdbHandle);
+
+    /* Return -1 (non-zero) indicates success */
+
+    ReturnObj->Integer.Value = 0xFFFFFFFFFFFFFFFF;
     return_ACPI_STATUS (Status);
 }
 
@@ -417,7 +433,7 @@ AcpiExRegionRead (
  *
  * PARAMETERS:  ObjDesc         - Region or Buffer/Field where the table will be
  *                                obtained
- *              Target          - Where a handle to the table will be stored
+ *              Target          - Where the status of the load will be stored
  *              WalkState       - Current state
  *
  * RETURN:      Status
@@ -448,6 +464,18 @@ AcpiExLoadOp (
 
     ACPI_FUNCTION_TRACE (ExLoadOp);
 
+
+    if (Target->Common.DescriptorType == ACPI_DESC_TYPE_NAMED)
+    {
+        Target = AcpiNsGetAttachedObject (ACPI_CAST_PTR (ACPI_NAMESPACE_NODE, Target));
+    }
+    if (Target->Common.Type != ACPI_TYPE_INTEGER)
+    {
+        ACPI_ERROR ((AE_INFO, "Type not integer: %X", Target->Common.Type));
+        return_ACPI_STATUS (AE_AML_OPERAND_TYPE);
+    }
+
+    Target->Integer.Value = 0;
 
     /* Source Object can be either an OpRegion or a Buffer/Field */
 
@@ -590,7 +618,7 @@ AcpiExLoadOp (
     ACPI_INFO (("Dynamic OEM Table Load:"));
     AcpiExExitInterpreter ();
     Status = AcpiTbInstallAndLoadTable (ACPI_PTR_TO_PHYSADDR (Table),
-        ACPI_TABLE_ORIGIN_INTERNAL_VIRTUAL, TRUE, &TableIndex);
+        ACPI_TABLE_ORIGIN_INTERNAL_VIRTUAL, Table, TRUE, &TableIndex);
     AcpiExEnterInterpreter ();
     if (ACPI_FAILURE (Status))
     {
@@ -610,27 +638,22 @@ AcpiExLoadOp (
     Status = AcpiExAddTable (TableIndex, &DdbHandle);
     if (ACPI_FAILURE (Status))
     {
-        /* On error, TablePtr was deallocated above */
-
         return_ACPI_STATUS (Status);
     }
 
-    /* Store the DdbHandle into the Target operand */
+    /* Complete the initialization/resolution of new objects */
 
-    Status = AcpiExStore (DdbHandle, Target, WalkState);
-    if (ACPI_FAILURE (Status))
-    {
-        (void) AcpiExUnloadTable (DdbHandle);
+    AcpiExExitInterpreter ();
+    AcpiNsInitializeObjects ();
+    AcpiExEnterInterpreter ();
 
-        /* TablePtr was deallocated above */
-
-        AcpiUtRemoveReference (DdbHandle);
-        return_ACPI_STATUS (Status);
-    }
-
-    /* Remove the reference by added by AcpiExStore above */
+    /* Remove the reference to DdbHandle created by AcpiExAddTable above */
 
     AcpiUtRemoveReference (DdbHandle);
+
+    /* Return -1 (non-zero) indicates success */
+
+    Target->Integer.Value = 0xFFFFFFFFFFFFFFFF;
     return_ACPI_STATUS (Status);
 }
 
@@ -666,6 +689,17 @@ AcpiExUnloadTable (
      */
     ACPI_WARNING ((AE_INFO,
         "Received request to unload an ACPI table"));
+
+    /*
+     * May 2018: Unload is no longer supported for the following reasons:
+     * 1) A correct implementation on some hosts may not be possible.
+     * 2) Other ACPI implementations do not correctly/fully support it.
+     * 3) It requires host device driver support which does not exist.
+     *    (To properly support namespace unload out from underneath.)
+     * 4) This AML operator has never been seen in the field.
+     */
+    ACPI_EXCEPTION ((AE_INFO, AE_NOT_IMPLEMENTED,
+        "AML Unload operator is not supported"));
 
     /*
      * Validate the handle

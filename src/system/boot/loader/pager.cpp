@@ -150,8 +150,8 @@ pager(const PagerTextSource& textSource)
 		console_set_cursor(0, height - 1);
 		console_set_color(BLACK, GRAY);
 		int32 bottomLine = std::min(topLine + height - 2, lineCount - 1);
-		printf("%" B_PRIuSIZE " - %" B_PRIuSIZE "  %" B_PRIuSIZE "%%",
-			topLine, bottomLine, (bottomLine + 1) * 100 / lineCount);
+		printf("%" B_PRId32 " - %" B_PRId32 "  %" B_PRId32 "%%",
+			topLine, bottomLine, (int32)((bottomLine + 1) * 100 / lineCount));
 		console_set_color(WHITE, BLACK);
 
 		// wait for a key that changes the position
@@ -168,11 +168,15 @@ pager(const PagerTextSource& textSource)
 
 				case TEXT_CONSOLE_KEY_DOWN:
 				case TEXT_CONSOLE_KEY_RETURN:
+				case 'j':
+				case 'J':
 					// next line
 					topLine++;
 					break;
 
 				case TEXT_CONSOLE_KEY_UP:
+				case 'k':
+				case 'K':
 					// previous line
 					topLine--;
 					break;

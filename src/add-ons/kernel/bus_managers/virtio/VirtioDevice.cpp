@@ -8,11 +8,13 @@
 
 
 const char *
-virtio_get_feature_name(uint32 feature)
+virtio_get_feature_name(uint64 feature)
 {
 	switch (feature) {
 		case VIRTIO_FEATURE_NOTIFY_ON_EMPTY:
 			return "notify on empty";
+		case VIRTIO_FEATURE_ANY_LAYOUT:
+			return "any layout";
 		case VIRTIO_FEATURE_RING_INDIRECT_DESC:
 			return "ring indirect";
 		case VIRTIO_FEATURE_RING_EVENT_IDX:
@@ -60,6 +62,7 @@ VirtioDevice::VirtioDevice(device_node *node)
 	fQueues(NULL),
 	fFeatures(0),
 	fAlignment(0),
+	fVirtio1(false),
 	fConfigHandler(NULL),
 	fDriverCookie(NULL)
 {
@@ -78,6 +81,9 @@ VirtioDevice::VirtioDevice(device_node *node)
 		ERROR("alignment missing\n");
 		return;
 	}
+	uint8 version = 0;
+	if (gDeviceManager->get_attr_uint8(fNode, VIRTIO_VERSION_ITEM, &version, true) == B_OK)
+		fVirtio1 = version == 1;
 
 	fController->set_sim(fCookie, this);
 
@@ -102,8 +108,8 @@ VirtioDevice::InitCheck()
 
 
 status_t
-VirtioDevice::NegotiateFeatures(uint32 supported, uint32* negotiated,
-	const char* (*get_feature_name)(uint32))
+VirtioDevice::NegotiateFeatures(uint64 supported, uint64* negotiated,
+	const char* (*get_feature_name)(uint64))
 {
 	fFeatures = 0;
 	status_t status = fController->read_host_features(fCookie, &fFeatures);
@@ -112,16 +118,45 @@ VirtioDevice::NegotiateFeatures(uint32 supported, uint32* negotiated,
 
 	_DumpFeatures("read features", fFeatures, get_feature_name);
 
+	if (fVirtio1) {
+		supported |= VIRTIO_FEATURE_VERSION_1;
+		supported &= ~VIRTIO_FEATURE_NOTIFY_ON_EMPTY;
+	}
+
 	fFeatures &= supported;
 
 	// filter our own features
 	fFeatures &= (VIRTIO_FEATURE_TRANSPORT_MASK
-		| VIRTIO_FEATURE_RING_INDIRECT_DESC | VIRTIO_FEATURE_RING_EVENT_IDX);
-
-	*negotiated = fFeatures;
+		| VIRTIO_FEATURE_RING_INDIRECT_DESC | VIRTIO_FEATURE_RING_EVENT_IDX
+		| VIRTIO_FEATURE_VERSION_1);
 
 	_DumpFeatures("negotiated features", fFeatures, get_feature_name);
 
+	status = fController->write_guest_features(fCookie, fFeatures);
+	if (status != B_OK)
+		return status;
+
+	if (fVirtio1) {
+		fController->set_status(fCookie, VIRTIO_CONFIG_STATUS_FEATURES_OK);
+		if ((fController->get_status(fCookie) & VIRTIO_CONFIG_STATUS_FEATURES_OK) == 0) {
+			fController->set_status(fCookie, VIRTIO_CONFIG_STATUS_FAILED);
+			return B_BAD_VALUE;
+		}
+		if ((fFeatures & VIRTIO_FEATURE_VERSION_1) == 0) {
+			fController->set_status(fCookie, VIRTIO_CONFIG_STATUS_FAILED);
+			return B_BAD_VALUE;
+		}
+	}
+	*negotiated = fFeatures;
+
+	return B_OK;
+}
+
+
+status_t
+VirtioDevice::ClearFeature(uint64 feature)
+{
+	fFeatures &= ~feature;
 	return fController->write_guest_features(fCookie, fFeatures);
 }
 
@@ -144,7 +179,8 @@ VirtioDevice::WriteDeviceConfig(uint8 offset, const void* buffer,
 
 
 status_t
-VirtioDevice::AllocateQueues(size_t count, virtio_queue *queues)
+VirtioDevice::AllocateQueues(size_t count, virtio_queue *queues,
+	uint16 *requestedSizes)
 {
 	if (count > VIRTIO_VIRTQUEUES_MAX_COUNT || queues == NULL)
 		return B_BAD_VALUE;
@@ -157,11 +193,24 @@ VirtioDevice::AllocateQueues(size_t count, virtio_queue *queues)
 	fQueueCount = count;
 	for (size_t index = 0; index < count; index++) {
 		uint16 size = fController->get_queue_ring_size(fCookie, index);
-		fQueues[index] = new(std::nothrow) VirtioQueue(this, index, size);
-		queues[index] = fQueues[index];
-		status = B_NO_MEMORY;
-		if (fQueues[index] != NULL)
-			status = fQueues[index]->InitCheck();
+
+		uint16 requestedSize
+			= requestedSizes != NULL ? requestedSizes[index] : 0;
+		if (requestedSize != 0) {
+			if (requestedSize > size)
+				status = B_BUFFER_OVERFLOW;
+			else
+				size = requestedSize;
+		}
+
+		if (status == B_OK) {
+			fQueues[index] = new(std::nothrow) VirtioQueue(this, index, size);
+			queues[index] = fQueues[index];
+			status = B_NO_MEMORY;
+			if (fQueues[index] != NULL)
+				status = fQueues[index]->InitCheck();
+		}
+
 		if (status != B_OK) {
 			_DestroyQueues(index + 1);
 			return status;
@@ -214,9 +263,10 @@ VirtioDevice::FreeInterrupts()
 
 
 status_t
-VirtioDevice::SetupQueue(uint16 queueNumber, phys_addr_t physAddr)
+VirtioDevice::SetupQueue(uint16 queueNumber, phys_addr_t physAddr, phys_addr_t phyAvail,
+	phys_addr_t phyUsed)
 {
-	return fController->setup_queue(fCookie, queueNumber, physAddr);
+	return fController->setup_queue(fCookie, queueNumber, physAddr, phyAvail, phyUsed);
 }
 
 
@@ -268,20 +318,21 @@ VirtioDevice::_DestroyQueues(size_t count)
 
 
 void
-VirtioDevice::_DumpFeatures(const char* title, uint32 features,
-	const char* (*get_feature_name)(uint32))
+VirtioDevice::_DumpFeatures(const char* title, uint64 features,
+	const char* (*get_feature_name)(uint64))
 {
 	char features_string[512] = "";
-	for (uint32 i = 0; i < 32; i++) {
-		uint32 feature = features & (1 << i);
+	for (uint32 i = 0; i < 64; i++) {
+		uint64 feature = features & (1ULL << i);
 		if (feature == 0)
 			continue;
 		const char* name = virtio_get_feature_name(feature);
 		if (name == NULL)
 			name = get_feature_name(feature);
 		if (name != NULL) {
-			snprintf(features_string, sizeof(features_string), "%s[%s] ",
-			features_string, name);
+			strlcat(features_string, "[", sizeof(features_string));
+			strlcat(features_string, name, sizeof(features_string));
+			strlcat(features_string, "] ", sizeof(features_string));
 		}
 	}
 	TRACE("%s: %s\n", title, features_string);

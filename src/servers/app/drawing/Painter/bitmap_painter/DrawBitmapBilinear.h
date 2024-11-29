@@ -250,12 +250,12 @@ struct BilinearDefault :
 			const uint16 wBottom = 255 - this->fWeightsY[y1].weight;
 
 			// buffer offset into source (top row)
-			register const uint8* src = this->fSource->row_ptr(
+			const uint8* src = this->fSource->row_ptr(
 				this->fWeightsY[y1].index);
 
 			// buffer handle for destination to be incremented per
 			// pixel
-			register uint8* d = this->fDestination;
+			uint8* d = this->fDestination;
 
 			for (int32 x = xIndexL; x <= xIndexMax; x++) {
 				const uint8* s = src + this->fWeightsX[x].index;
@@ -291,10 +291,10 @@ struct BilinearDefault :
 
 		// last row of pixels if necessary
 		// buffer offset into source (bottom row)
-		register const uint8* src
+		const uint8* src
 			= this->fSource->row_ptr(this->fWeightsY[y2].index);
 		// buffer handle for destination to be incremented per pixel
-		register uint8* d = this->fDestination;
+		uint8* d = this->fDestination;
 
 		if (yMax < y2) {
 			for (int32 x = xIndexL; x <= xIndexMax; x++) {
@@ -332,10 +332,10 @@ struct BilinearLowFilterRatio :
 			const uint16 wBottom = 255 - fWeightsY[y1].weight;
 
 			// buffer offset into source (top row)
-			register const uint8* src = fSource->row_ptr(fWeightsY[y1].index);
+			const uint8* src = fSource->row_ptr(fWeightsY[y1].index);
 			// buffer handle for destination to be incremented per
 			// pixel
-			register uint8* d = fDestination;
+			uint8* d = fDestination;
 
 			if (wTop == 255) {
 				for (int32 x = xIndexL; x <= xIndexR; x++) {
@@ -405,7 +405,7 @@ struct BilinearLowFilterRatio :
 };
 
 
-#ifdef __INTEL__
+#ifdef __i386__
 
 struct BilinearSimd : DrawBitmapBilinearOptimized<BilinearSimd> {
 	void DrawToClipRect(int32 xIndexL, int32 xIndexR, int32 y1, int32 y2)
@@ -451,9 +451,9 @@ struct BilinearSimd : DrawBitmapBilinearOptimized<BilinearSimd> {
 
 		// last row of pixels if necessary
 		// buffer offset into source (bottom row)
-		register const uint8* src = fSource->row_ptr(fWeightsY[y2].index);
+		const uint8* src = fSource->row_ptr(fWeightsY[y2].index);
 		// buffer handle for destination to be incremented per pixel
-		register uint8* d = fDestination;
+		uint8* d = fDestination;
 
 		if (yMax < y2) {
 			for (int32 x = xIndexL; x <= xIndexMax; x++) {
@@ -475,7 +475,7 @@ struct BilinearSimd : DrawBitmapBilinearOptimized<BilinearSimd> {
 	}
 };
 
-#endif	// __INTEL__
+#endif	// __i386__
 
 
 template<class ColorType, class DrawMode>
@@ -626,7 +626,7 @@ struct DrawBitmapBilinear {
 				break;
 			}
 
-#ifdef __INTEL__
+#ifdef __i386__
 			case kUseSIMDVersion:
 			{
 				BilinearSimd bilinearPainter;
@@ -634,7 +634,7 @@ struct DrawBitmapBilinear {
 					filterData);
 				break;
 			}
-#endif	// __INTEL__
+#endif	// __i386__
 		}
 
 #ifdef FILTER_INFOS_ON_HEAP

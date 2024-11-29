@@ -10,6 +10,7 @@ SEARCH on $(repoInfo) = $(HAIKU_TOP)/src/data/repository_infos ;
 local secondaryArchs = $(TARGET_PACKAGING_ARCHS[2-]) ;
 local packages = [ FFilterByBuildFeatures
 	haiku
+	haiku_datatranslators
 	haiku_devel
 	haiku_loader
 
@@ -17,31 +18,16 @@ local packages = [ FFilterByBuildFeatures
 	haiku_$(secondaryArchs)_devel
 	] ;
 
-if $(HAIKU_IS_BOOTSTRAP) != 1 {
+if $(HAIKU_IS_BOOTSTRAP) != 1 && $(HAIKU_BUILD_TYPE) != minimum {
 	packages += [ FFilterByBuildFeatures
-		haiku_source
-		haiku_userguide_ca
-		haiku_userguide_de
-		haiku_userguide_en
-		haiku_userguide_es
-		haiku_userguide_fi
-		haiku_userguide_fr
-		haiku_userguide_hu
-		haiku_userguide_it
-		haiku_userguide_jp
-		haiku_userguide_pl
-		haiku_userguide_pt_BR
-		haiku_userguide_pt_PT
-		haiku_userguide_ru
-		haiku_userguide_sk
-		haiku_userguide_sv_SE
-		haiku_userguide_uk
-		haiku_userguide_zh_CN
-		haiku_welcome
+		haiku_extras
 		makefile_engine
-		netfs@!x86_64
+		netfs
 		userland_fs
 		] ;
+	if $(HAIKU_INCLUDE_SOURCES) = 1 {
+		packages += haiku_source ;
+	}
 }
 
 local webPositiveIsAvailable ;

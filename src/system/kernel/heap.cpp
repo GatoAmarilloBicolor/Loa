@@ -295,7 +295,7 @@ get_caller()
 		STACK_TRACE_KERNEL);
 	for (int32 i = 0; i < depth; i++) {
 		if (returnAddresses[i] < (addr_t)&get_caller
-			|| returnAddresses[i] > (addr_t)&malloc_referenced_release) {
+			|| returnAddresses[i] > (addr_t)&deferred_delete) {
 			return returnAddresses[i];
 		}
 	}
@@ -601,7 +601,7 @@ dump_allocations(int argc, char **argv)
 							&& (address == 0 || base == address)) {
 							// interesting...
 							if (!statsOnly) {
-								kprintf("team: % 6ld; thread: % 6ld; "
+								kprintf("team: % 6" B_PRId32 "; thread: % 6" B_PRId32 "; "
 									"address: 0x%08lx; size: %lu bytes; "
 									"caller: %#lx\n", info->team, info->thread,
 									base, info->size, info->caller);
@@ -631,7 +631,7 @@ dump_allocations(int argc, char **argv)
 						&& (address == 0 || base == address)) {
 						// interesting...
 						if (!statsOnly) {
-							kprintf("team: % 6ld; thread: % 6ld;"
+							kprintf("team: % 6" B_PRId32 "; thread: % 6" B_PRId32 ";"
 								" address: 0x%08lx; size: %lu bytes;"
 								" caller: %#lx\n", info->team, info->thread,
 								base, info->size, info->caller);
@@ -650,8 +650,8 @@ dump_allocations(int argc, char **argv)
 		}
 	}
 
-	kprintf("total allocations: %lu; total bytes: %lu\n", totalCount,
-		totalSize);
+	kprintf("total allocations: %" B_PRIu32 "; total bytes: %" B_PRIuSIZE "\n",
+		totalCount, totalSize);
 	return 0;
 }
 
@@ -815,14 +815,14 @@ dump_allocations_per_caller(int argc, char **argv)
 	qsort(sCallerInfoTable, sCallerInfoCount, sizeof(caller_info),
 		sortBySize ? &caller_info_compare_size : &caller_info_compare_count);
 
-	kprintf("%ld different callers, sorted by %s...\n\n", sCallerInfoCount,
-		sortBySize ? "size" : "count");
+	kprintf("%" B_PRId32 " different callers, sorted by %s...\n\n",
+		sCallerInfoCount, sortBySize ? "size" : "count");
 
 	kprintf("     count        size      caller\n");
 	kprintf("----------------------------------\n");
 	for (int32 i = 0; i < sCallerInfoCount; i++) {
 		caller_info& info = sCallerInfoTable[i];
-		kprintf("%10ld  %10ld  %#08lx", info.count, info.size, info.caller);
+		kprintf("%10" B_PRId32 "  %10" B_PRId32 "  %#08lx", info.count, info.size, info.caller);
 
 		const char *symbol;
 		const char *imageName;
@@ -1773,7 +1773,7 @@ heap_set_get_caller(heap_allocator* heap, addr_t (*getCaller)())
 
 static status_t
 heap_realloc(heap_allocator *heap, void *address, void **newAddress,
-	size_t newSize)
+	size_t newSize, uint32 flags)
 {
 	ReadLocker areaReadLocker(heap->area_lock);
 	heap_area *area = heap->all_areas;
@@ -1864,7 +1864,7 @@ heap_realloc(heap_allocator *heap, void *address, void **newAddress,
 #endif
 
 	// if not, allocate a new chunk of memory
-	*newAddress = memalign(0, newSize);
+	*newAddress = malloc_etc(newSize, flags);
 	T(Reallocate((addr_t)address, (addr_t)*newAddress, newSize));
 	if (*newAddress == NULL) {
 		// we tried but it didn't work out, but still the operation is done
@@ -2349,7 +2349,7 @@ free_etc(void *address, uint32 flags)
 void *
 malloc(size_t size)
 {
-	return memalign(0, size);
+	return memalign_etc(0, size, 0);
 }
 
 
@@ -2402,7 +2402,7 @@ free(void *address)
 
 
 void *
-realloc(void *address, size_t newSize)
+realloc_etc(void *address, size_t newSize, uint32 flags)
 {
 	if (!gKernelStartup && !are_interrupts_enabled()) {
 		panic("realloc(): called with interrupts disabled\n");
@@ -2410,10 +2410,10 @@ realloc(void *address, size_t newSize)
 	}
 
 	if (address == NULL)
-		return memalign(0, newSize);
+		return malloc_etc(newSize, flags);
 
 	if (newSize == 0) {
-		free(address);
+		free_etc(address, flags);
 		return NULL;
 	}
 
@@ -2421,7 +2421,7 @@ realloc(void *address, size_t newSize)
 	int32 offset = smp_get_current_cpu() * HEAP_CLASS_COUNT;
 	for (uint32 i = 0; i < sHeapCount; i++) {
 		heap_allocator *heap = sHeaps[(i + offset) % sHeapCount];
-		if (heap_realloc(heap, address, &newAddress, newSize) == B_OK) {
+		if (heap_realloc(heap, address, &newAddress, newSize, flags) == B_OK) {
 #if PARANOID_HEAP_VALIDATION
 			heap_validate_heap(heap);
 #endif
@@ -2430,7 +2430,7 @@ realloc(void *address, size_t newSize)
 	}
 
 	// maybe it was allocated from the dedicated grow heap
-	if (heap_realloc(sGrowHeap, address, &newAddress, newSize) == B_OK)
+	if (heap_realloc(sGrowHeap, address, &newAddress, newSize, flags) == B_OK)
 		return newAddress;
 
 	// or maybe it was a huge allocation using an area
@@ -2455,7 +2455,7 @@ realloc(void *address, size_t newSize)
 			}
 
 			// have to allocate/copy/free - TODO maybe resize the area instead?
-			newAddress = memalign(0, newSize);
+			newAddress = malloc(newSize);
 			if (newAddress == NULL) {
 				dprintf("realloc(): failed to allocate new block of %ld bytes\n",
 					newSize);
@@ -2476,17 +2476,37 @@ realloc(void *address, size_t newSize)
 }
 
 
+void *
+realloc(void *address, size_t newSize)
+{
+	return realloc_etc(address, newSize, 0);
+}
+
+
 #endif	// USE_DEBUG_HEAP_FOR_MALLOC
 
 
 void *
 calloc(size_t numElements, size_t size)
 {
-	void *address = memalign(0, numElements * size);
+	if (size != 0 && numElements > (((size_t)(-1)) / size))
+		return NULL;
+
+	void *address = malloc(numElements * size);
 	if (address != NULL)
 		memset(address, 0, numElements * size);
 
 	return address;
+}
+
+
+void *
+aligned_alloc(size_t alignment, size_t size)
+{
+	if ((size % alignment) != 0)
+		return NULL;
+
+	return memalign(alignment, size);
 }
 
 
@@ -2500,42 +2520,6 @@ deferred_free(void *block)
 
 	InterruptsSpinLocker _(sDeferredFreeListLock);
 	sDeferredFreeList.Add(entry);
-}
-
-
-void *
-malloc_referenced(size_t size)
-{
-	int32 *referencedData = (int32 *)malloc(size + 4);
-	if (referencedData == NULL)
-		return NULL;
-
-	*referencedData = 1;
-	return referencedData + 1;
-}
-
-
-void *
-malloc_referenced_acquire(void *data)
-{
-	if (data != NULL) {
-		int32 *referencedData = (int32 *)data - 1;
-		atomic_add(referencedData, 1);
-	}
-
-	return data;
-}
-
-
-void
-malloc_referenced_release(void *data)
-{
-	if (data == NULL)
-		return;
-
-	int32 *referencedData = (int32 *)data - 1;
-	if (atomic_add(referencedData, -1) < 1)
-		free(referencedData);
 }
 
 

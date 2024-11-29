@@ -8,15 +8,16 @@
 #include <pthread.h>
 #include "pthread_private.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <syscalls.h>
 #include <user_mutex_defs.h>
+#include <time_private.h>
 
 
-#define MUTEX_FLAG_SHARED	0x80000000
 #define MUTEX_TYPE_BITS		0x0000000f
 #define MUTEX_TYPE(mutex)	((mutex)->flags & MUTEX_TYPE_BITS)
 
@@ -49,8 +50,8 @@ pthread_mutex_destroy(pthread_mutex_t* mutex)
 }
 
 
-static status_t
-mutex_lock(pthread_mutex_t* mutex, bigtime_t timeout)
+status_t
+__pthread_mutex_lock(pthread_mutex_t* mutex, uint32 flags, bigtime_t timeout)
 {
 	thread_id thisThread = find_thread(NULL);
 
@@ -73,20 +74,18 @@ mutex_lock(pthread_mutex_t* mutex, bigtime_t timeout)
 	}
 
 	// set the locked flag
-	int32 oldValue = atomic_or((int32*)&mutex->lock, B_USER_MUTEX_LOCKED);
-
-	if ((oldValue & (B_USER_MUTEX_LOCKED | B_USER_MUTEX_WAITING)) != 0) {
+	const int32 oldValue = atomic_test_and_set((int32*)&mutex->lock, B_USER_MUTEX_LOCKED, 0);
+	if (oldValue != 0) {
 		// someone else has the lock or is at least waiting for it
 		if (timeout < 0)
 			return EBUSY;
+		if ((mutex->flags & MUTEX_FLAG_SHARED) != 0)
+			flags |= B_USER_MUTEX_SHARED;
 
 		// we have to call the kernel
 		status_t error;
 		do {
-			error = _kern_mutex_lock((int32*)&mutex->lock, NULL,
-				timeout == B_INFINITE_TIMEOUT
-					? 0 : B_ABSOLUTE_REAL_TIME_TIMEOUT,
-				timeout);
+			error = _kern_mutex_lock((int32*)&mutex->lock, NULL, flags, timeout);
 		} while (error == B_INTERRUPTED);
 
 		if (error != B_OK)
@@ -94,6 +93,7 @@ mutex_lock(pthread_mutex_t* mutex, bigtime_t timeout)
 	}
 
 	// we have locked the mutex for the first time
+	assert(mutex->owner == -1);
 	mutex->owner = thisThread;
 	mutex->owner_count = 1;
 
@@ -104,36 +104,51 @@ mutex_lock(pthread_mutex_t* mutex, bigtime_t timeout)
 int
 pthread_mutex_lock(pthread_mutex_t* mutex)
 {
-	return mutex_lock(mutex, B_INFINITE_TIMEOUT);
+	return __pthread_mutex_lock(mutex, 0, B_INFINITE_TIMEOUT);
 }
 
 
 int
 pthread_mutex_trylock(pthread_mutex_t* mutex)
 {
-	return mutex_lock(mutex, -1);
+	return __pthread_mutex_lock(mutex, B_ABSOLUTE_REAL_TIME_TIMEOUT, -1);
 }
 
 
 int
-pthread_mutex_timedlock(pthread_mutex_t* mutex, const struct timespec* tv)
+pthread_mutex_clocklock(pthread_mutex_t* mutex, clockid_t clock_id,
+	const struct timespec* abstime)
 {
-	// translate the timeout
-	bool invalidTime = false;
 	bigtime_t timeout = 0;
-	if (tv && tv->tv_nsec < 1000 * 1000 * 1000 && tv->tv_nsec >= 0)
-		timeout = tv->tv_sec * 1000000LL + tv->tv_nsec / 1000LL;
-	else
+	bool invalidTime = false;
+	if (abstime == NULL || !timespec_to_bigtime(*abstime, timeout))
 		invalidTime = true;
 
-	status_t status = mutex_lock(mutex, timeout);
-	if (status != B_OK && invalidTime) {
-		// The timespec was not valid and the mutex could not be locked
-		// immediately.
-		return EINVAL;
+	uint32 flags = 0;
+	switch (clock_id) {
+		case CLOCK_REALTIME:
+			flags = B_ABSOLUTE_REAL_TIME_TIMEOUT;
+			break;
+		case CLOCK_MONOTONIC:
+			flags = B_ABSOLUTE_TIMEOUT;
+			break;
+		default:
+			invalidTime = true;
+			break;
 	}
 
+	status_t status = __pthread_mutex_lock(mutex, flags, timeout);
+
+	if (status != B_OK && invalidTime)
+		return EINVAL;
 	return status;
+}
+
+
+int
+pthread_mutex_timedlock(pthread_mutex_t* mutex, const struct timespec* abstime)
+{
+	return pthread_mutex_clocklock(mutex, CLOCK_REALTIME, abstime);
 }
 
 
@@ -154,8 +169,16 @@ pthread_mutex_unlock(pthread_mutex_t* mutex)
 	// clear the locked flag
 	int32 oldValue = atomic_and((int32*)&mutex->lock,
 		~(int32)B_USER_MUTEX_LOCKED);
-	if ((oldValue & B_USER_MUTEX_WAITING) != 0)
-		_kern_mutex_unlock((int32*)&mutex->lock, 0);
+	if ((oldValue & B_USER_MUTEX_WAITING) != 0) {
+		_kern_mutex_unblock((int32*)&mutex->lock,
+			(mutex->flags & MUTEX_FLAG_SHARED) ? B_USER_MUTEX_SHARED : 0);
+	}
+
+	if (MUTEX_TYPE(mutex) == PTHREAD_MUTEX_ERRORCHECK
+		|| MUTEX_TYPE(mutex) == PTHREAD_MUTEX_DEFAULT) {
+		if ((oldValue & B_USER_MUTEX_LOCKED) == 0)
+			return EPERM;
+	}
 
 	return 0;
 }

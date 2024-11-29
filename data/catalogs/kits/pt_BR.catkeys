@@ -1,42 +1,39 @@
-1	portuguese (brazil)	x-vnd.Haiku-libbe	3337473349
+1	portuguese (brazil)	x-vnd.Haiku-libbe	1337497439
+All Rights Reserved.	AboutWindow		Todos os direitos reservados.
+gold master	AboutWindow		cópia mestra
+Undo	TextView		Desfazer
+OK	PrintJob		OK
+OK	Dragger		OK
 gamma	AboutWindow		gama
-beta	AboutWindow		beta
-%3.2f GiB	StringForSize		%3.2f GB
-Written by:	AboutWindow		Escrito por:
+development	AboutWindow		desenvolvimento
+Print Server is not responding.	PrintJob		Servidor de impressão não está respondendo.
 About %app%	AboutMenuItem		Sobre %app%
+Warning	Dragger		Aviso
+Green:	ColorControl		Verde:
+Redo	TextView		Refazer
+No pages to print!	PrintJob		Nenhuma página para imprimir!
+beta	AboutWindow		beta
+OK	ZombieReplicantView		OK
 Cut	TextView		Cortar
+Default	Default decorator about box		Padrão
+Can't delete this replicant from its original application. Life goes on.	Dragger		Não é possível excluir este replicante de seu aplicativo original. A vida continua.
+Error	ZombieReplicantView		Erro
+Paste	TextView		Colar
+OK	AboutWindow		OK
+Special Thanks:	AboutWindow		Agradecimentos Especiais
+Default Haiku window decorator.	Default decorator about box		Decorador de janela padrão do Haiku.
+Remove replicant	Dragger		Remover replicante
 Version	AboutWindow		Versão
-Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Não é possível criar o replicante para \"%description\".\n%error
+Red:	ColorControl		Vermelho:
+<empty>	Menu		<vazio>
 Copy	TextView		Copiar
-%3.2f KiB	StringForSize		%3.2f KB
+Select all	TextView		Selecionar tudo
 alpha	AboutWindow		alfa
 Error	PrintJob		Erro
-All Rights Reserved.	AboutWindow		Todos os direitos reservados.
-{0, plural, one{# byte} other{# bytes}}	StringForSize		{0, plural, um{# byte} outros{# bytes}}
-About %app%	AboutWindow		Sobre %app%
-No pages to print!	PrintJob		Nenhuma página para imprimir!
-OK	Dragger		OK
-OK	PrintJob		OK
-Green:	ColorControl		Verde:
-Version history:	AboutWindow		Histórico de versões
-Remove replicant	Dragger		Remover replicante
-Select all	TextView		Selecionar tudo
-OK	AboutWindow		OK
-OK	ZombieReplicantView		OK
-Print Server is not responding.	PrintJob		Servidor de impressão não está respondendo.
-Paste	TextView		Colar
-Special Thanks:	AboutWindow		Agradecimentos Especiais
-%.2f TiB	StringForSize		%.2f TB
-Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		Não é possível localizar o aplicativo para o replicante. Nenhuma assinatura de aplicativo fornecida.\n%error
-Redo	TextView		Refazer
-<empty>	Menu		<vazio>
-Warning	Dragger		Aviso
-Undo	TextView		Desfazer
-Red:	ColorControl		Vermelho:
-%3.2f MiB	StringForSize		%3.2f MB
 About %app…	Dragger		Sobre %app…
-development	AboutWindow		desenvolvimento
-Error	ZombieReplicantView		Erro
+About %app%	AboutWindow		Sobre %app%
+Version history:	AboutWindow		Histórico de versões
+Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		Não é possível localizar o aplicativo para o replicante. Nenhuma assinatura de aplicativo fornecida.\n%error
 Blue:	ColorControl		Azul:
-gold master	AboutWindow		cópia mestra
-Can't delete this replicant from its original application. Life goes on.	Dragger		Não é possível excluir este replicante de seu aplicativo original. A vida continua.
+Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Não é possível criar o replicante para \"%description\".\n%error
+Written by:	AboutWindow		Escrito por:

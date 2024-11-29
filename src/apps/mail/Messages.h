@@ -34,6 +34,10 @@ All rights reserved.
 #ifndef _MESSAGES_H
 #define _MESSAGES_H
 
+
+// as defined by the People app
+#define M_LAUNCH_PEOPLE	'newp'
+
 enum MESSAGES {
 	REFS_RECEIVED = 64,
 	LIST_INVOKED,
@@ -90,8 +94,8 @@ enum MENUS {
 
 	// edit
 	M_SELECT,
-	M_QUOTE,
-	M_REMOVE_QUOTE,
+	M_ADD_QUOTE_LEVEL,
+	M_SUB_QUOTE_LEVEL,
 	M_CHECK_SPELLING,
 	M_SIGNATURE,
 	M_RANDOM_SIG,
@@ -103,6 +107,9 @@ enum MENUS {
 	// queries
 	M_EDIT_QUERIES,
 	M_EXECUTE_QUERY,
+	M_QUERY_RECIPIENT,
+	M_QUERY_SENDER,
+	M_QUERY_SUBJECT,
 
 	// encls
 	M_ADD,
@@ -126,6 +133,7 @@ enum MENUS {
 
 	M_REDO
 };
+
 
 #endif // _MESSAGES_H
 

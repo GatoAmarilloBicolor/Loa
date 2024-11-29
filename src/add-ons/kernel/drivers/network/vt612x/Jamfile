@@ -1,3 +1,0 @@
-SubDir HAIKU_TOP src add-ons kernel drivers network vt612x ;
-
-SubInclude HAIKU_TOP src add-ons kernel drivers network vt612x dev ;

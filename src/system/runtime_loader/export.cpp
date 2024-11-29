@@ -18,7 +18,7 @@ static image_id
 export_load_add_on(char const *name, uint32 flags)
 {
 	void* handle;
-	return load_library(name, flags, true, &handle);
+	return load_library(name, flags, true, NULL, &handle);
 }
 
 
@@ -30,9 +30,10 @@ export_unload_add_on(image_id id)
 
 
 static image_id
-export_load_library(char const *name, uint32 flags, void **_handle)
+export_load_library(char const *name, uint32 flags, void* caller,
+	void **_handle)
 {
-	return load_library(name, flags, false, _handle);
+	return load_library(name, flags, false, caller, _handle);
 }
 
 
@@ -40,6 +41,18 @@ static status_t
 export_unload_library(void* handle)
 {
 	return unload_library(handle, -1, false);
+}
+
+
+status_t
+reinit_after_fork()
+{
+	status_t returnstatus = B_OK;
+	if (status_t status = elf_reinit_after_fork())
+		returnstatus = status;
+	if (status_t status = heap_reinit_after_fork())
+		returnstatus = status;
+	return returnstatus;
 }
 
 
@@ -59,7 +72,7 @@ struct rld_export gRuntimeLoader = {
 	get_tls_address,
 	destroy_thread_tls,
 
-	elf_reinit_after_fork,
+	reinit_after_fork,
 	NULL, // call_atexit_hooks_for_range
 	terminate_program,
 
@@ -81,13 +94,18 @@ rldexport_init(void)
 
 
 /*!	Is called for all images, and sets the minimum ABI version found to the
-	gRuntimeLoader.abi_version field.
+	gRuntimeLoader.abi_version field and the minimum API version found to the
+	gRuntimeLoader.api_version field.
 */
 void
-set_abi_version(int abi_version)
+set_abi_api_version(int abi_version, int api_version)
 {
 	if (gRuntimeLoader.abi_version == 0
 		|| gRuntimeLoader.abi_version > abi_version) {
 		gRuntimeLoader.abi_version = abi_version;
+	}
+	if (gRuntimeLoader.api_version == 0
+		|| gRuntimeLoader.api_version > api_version) {
+		gRuntimeLoader.api_version = api_version;
 	}
 }

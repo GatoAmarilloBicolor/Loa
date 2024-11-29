@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <set>
 
+#include <Locale.h>
+
 #include <package/solver/SolverPackage.h>
 #include <TextTable.h>
 
@@ -55,6 +57,9 @@ static const char* const kLongUsage =
 	"    Only find not installed packages.\n"
 	"  -r, --requirements\n"
 	"    Search packages with <search-string> as requirements.\n"
+	"  -s <scope>, --search-scope=<scope>\n"
+	"    Search for packages containing <search-string> only on the given scope.\n"
+	"    <scope> must be either \"name\" or \"full\"."
 	"\n"
 	"Status flags in non-detailed listings:\n"
 	"  S - installed in system with a matching version in a repository\n"
@@ -66,7 +71,7 @@ static const char* const kLongUsage =
 
 
 DEFINE_COMMAND(SearchCommand, "search", kShortUsage, kLongUsage,
-	kCommandCategoryPackages)
+	COMMAND_CATEGORY_PACKAGES)
 
 
 static int
@@ -88,11 +93,13 @@ struct PackageComparator {
 		fSystemRepository(systemRepository),
 		fHomeRepository(homeRepository)
 	{
+		BLocale::Default()->GetCollator(&fCollator);
+		fCollator.SetNumericSorting(true);
 	}
 
 	int operator()(const BSolverPackage* a, const BSolverPackage* b) const
 	{
-		int cmp = a->Name().Compare(b->Name());
+		int cmp = fCollator.Compare(a->Name().String(), b->Name().String());
 		if (cmp != 0)
 			return cmp;
 
@@ -116,6 +123,8 @@ struct PackageComparator {
 private:
 	const BSolverRepository*	fSystemRepository;
 	const BSolverRepository*	fHomeRepository;
+
+	BCollator					fCollator;
 };
 
 
@@ -132,6 +141,8 @@ SearchCommand::Execute(int argc, const char* const* argv)
 {
 	bool installedOnly = false;
 	bool uninstalledOnly = false;
+	bool nameOnly = false;
+	bool fullSearch = false;
 	bool listAll = false;
 	bool details = false;
 	bool requirements = false;
@@ -145,11 +156,12 @@ SearchCommand::Execute(int argc, const char* const* argv)
 			{ "installed-only", no_argument, 0, 'i' },
 			{ "uninstalled-only", no_argument, 0, 'u' },
 			{ "requirements", no_argument, 0, 'r' },
+			{ "search-scope", required_argument, NULL, 's' },
 			{ 0, 0, 0, 0 }
 		};
 
 		opterr = 0; // don't print errors
-		int c = getopt_long(argc, (char**)argv, "aDhiur", sLongOptions, NULL);
+		int c = getopt_long(argc, (char**)argv, "aDhiurs:", sLongOptions, NULL);
 		if (c == -1)
 			break;
 
@@ -183,6 +195,16 @@ SearchCommand::Execute(int argc, const char* const* argv)
 				requirements = true;
 				break;
 
+			case 's':
+				if (strcmp(optarg, "name") == 0)
+					nameOnly = true;
+				else if (strcmp(optarg, "full") == 0)
+					fullSearch = true;
+				else
+					fprintf(stderr, "Warning: Invalid search scope (%s). Using default.\n",
+						optarg);
+				break;
+
 			default:
 				PrintUsageAndExit(true);
 				break;
@@ -204,10 +226,19 @@ SearchCommand::Execute(int argc, const char* const* argv)
 			| (!installedOnly ? PackageManager::B_ADD_REMOTE_REPOSITORIES : 0));
 
 	uint32 flags = BSolver::B_FIND_CASE_INSENSITIVE | BSolver::B_FIND_IN_NAME
-		| BSolver::B_FIND_IN_SUMMARY | BSolver::B_FIND_IN_DESCRIPTION
-		| BSolver::B_FIND_IN_PROVIDES;
+		| BSolver::B_FIND_IN_SUMMARY | BSolver::B_FIND_IN_PROVIDES;
+
+	if (nameOnly)
+		flags = BSolver::B_FIND_CASE_INSENSITIVE | BSolver::B_FIND_IN_NAME;
+
+	if (fullSearch)
+		flags = BSolver::B_FIND_CASE_INSENSITIVE | BSolver::B_FIND_IN_NAME
+			| BSolver::B_FIND_IN_SUMMARY | BSolver::B_FIND_IN_DESCRIPTION
+			| BSolver::B_FIND_IN_PROVIDES;
+
 	if (requirements)
 		flags = BSolver::B_FIND_IN_REQUIRES;
+
 	// search
 	BObjectList<BSolverPackage> packages;
 	status_t error = packageManager.Solver()->FindPackages(searchString,

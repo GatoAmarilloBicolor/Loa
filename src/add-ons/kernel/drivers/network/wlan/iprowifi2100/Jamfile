@@ -1,8 +1,8 @@
 SubDir HAIKU_TOP src add-ons kernel drivers network wlan iprowifi2100 ;
 
-UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd11_network compat ]
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_network compat ]
 	: true ;
-UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd11_wlan ] : true ;
+UseHeaders [ FDirName $(HAIKU_TOP) src libs compat freebsd_wlan ] : true ;
 UsePrivateHeaders net system ;
 UsePrivateKernelHeaders ;
 
@@ -19,12 +19,11 @@ KernelAddon iprowifi2100 :
 	if_ipw.c
 	glue.c
 	:
-	libfreebsd11_wlan.a
-	libfreebsd11_network.a
+	freebsd_wlan.a
+	libfreebsd_network.a
 	;
 
 # Note: Due to licensing restrictions, we can only distribute the archive.
 # The end-user must extract and install it themselves.
-HAIKU_WIFI_FIRMWARE_PACKAGE on iprowifi2100 = "" ;
 HAIKU_WIFI_FIRMWARE_ARCHIVE on iprowifi2100 = ipw2100-fw-1.3.tgz ;
 HAIKU_WIFI_FIRMWARE_DO_EXTRACT on iprowifi2100 = false ;

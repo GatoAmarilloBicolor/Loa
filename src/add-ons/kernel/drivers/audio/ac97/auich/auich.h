@@ -47,6 +47,7 @@
 #define INTEL_82801DB_AC97_DEVICE_ID	0x24c5
 #define INTEL_82801EB_AC97_DEVICE_ID	0x24d5
 #define INTEL_82801FB_AC97_DEVICE_ID	0x266e
+#define INTEL_631xESB_AC97_DEVICE_ID	0x2698
 #define INTEL_82801GB_AC97_DEVICE_ID	0x27de
 #define INTEL_6300ESB_AC97_DEVICE_ID	0x25a6
 #define SIS_VENDOR_ID		0x1039	/* Sis */
@@ -64,7 +65,7 @@
 #define AMD_AMD8111_AC97_DEVICE_ID		0x764d
 #define AMD_AMD768_AC97_DEVICE_ID		0x7445
 
-#define VERSION "Version alpha 1, Copyright (c) 2003 Jérôme Duval, compiled on " ## __DATE__ ## " " ## __TIME__
+#define VERSION "Version alpha 1, Copyright (c) 2003 Jérôme Duval, compiled on " __DATE__ " " __TIME__
 #define DRIVER_NAME "auich"
 #define FRIENDLY_NAME "Auich"
 #define AUTHOR "Jérôme Duval"

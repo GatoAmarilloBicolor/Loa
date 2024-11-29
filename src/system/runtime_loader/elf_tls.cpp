@@ -16,7 +16,7 @@
 
 
 class TLSBlock {
-public:	
+public:
 	inline				TLSBlock();
 	inline				TLSBlock(void* pointer);
 
@@ -27,7 +27,7 @@ public:
 			bool		IsInvalid() const	{ return fPointer == NULL; }
 
 			void*		operator+(addr_t offset) const
-							{ return (void*)((addr_t)fPointer + offset); }
+							{ return (void*)((addr_t)fPointer + TLS_DTV_OFFSET + offset); }
 
 private:
 			void*		fPointer;
@@ -85,12 +85,13 @@ TLSBlockTemplate::SetBaseAddress(addr_t baseAddress)
 TLSBlock
 TLSBlockTemplate::CreateBlock()
 {
-	void* pointer = malloc(fMemorySize);
+	void* pointer = malloc(fMemorySize + TLS_DTV_OFFSET);
 	if (pointer == NULL)
 		return TLSBlock();
-	memcpy(pointer, fAddress, fFileSize);
+	memset(pointer, 0, TLS_DTV_OFFSET);
+	memcpy((char*)pointer + TLS_DTV_OFFSET, fAddress, fFileSize);
 	if (fMemorySize > fFileSize)
-		memset((char*)pointer + fFileSize, 0, fMemorySize - fFileSize);
+		memset((char*)pointer + TLS_DTV_OFFSET + fFileSize, 0, fMemorySize - fFileSize);
 	return TLSBlock(pointer);
 }
 
@@ -234,11 +235,13 @@ DynamicThreadVector::operator[](unsigned dso)
 {
 	unsigned generation = TLSBlockTemplates::Get().GetGeneration(-1);
 	if (_Generation() < generation) {
-		for (unsigned i = 0; i < _Size(); i++) {
-			TLSBlock& block = (*fVector)[i + 1];
+		// We need to destroy any blocks whose DSO generation has changed
+		// to be greater than our own generation.
+		for (unsigned dsoIndex = 0; dsoIndex < _Size(); dsoIndex++) {
+			TLSBlock& block = (*fVector)[dsoIndex + 1];
 			unsigned dsoGeneration
-				= TLSBlockTemplates::Get().GetGeneration(dso);
-			if (_Generation() < dsoGeneration && dsoGeneration <= generation)
+				= TLSBlockTemplates::Get().GetGeneration(dsoIndex);
+			if (dsoGeneration > _Generation() && dsoGeneration <= generation)
 				block.Destroy();
 		}
 
@@ -256,7 +259,7 @@ DynamicThreadVector::operator[](unsigned dso)
 		status_t result = block.Initialize(dso);
 		if (result != B_OK)
 			return fNullBlock;
-	};
+	}
 
 	return block;
 }
@@ -285,7 +288,7 @@ DynamicThreadVector::_ResizeVector(unsigned minimumSize)
 		return B_NO_MEMORY;
 
 	*fVector = (TLSBlock*)newVector;
-	memset(*fVector + oldSize + 1, 0, (size - oldSize) * sizeof(TLSBlock));
+	memset((void*)(*fVector + oldSize + 1), 0, (size - oldSize) * sizeof(TLSBlock));
 	if (fGeneration == NULL) {
 		fGeneration = new Generation;
 		if (fGeneration == NULL)

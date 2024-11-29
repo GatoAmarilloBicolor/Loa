@@ -1,24 +1,16 @@
 SubDir HAIKU_TOP src add-ons kernel file_systems fat ;
 
-UsePrivateKernelHeaders ;
+local commonSource ;
+include [ FDirName $(HAIKU_TOP) src add-ons kernel file_systems fat JamCommon ] ;
 
-SubDirCcFlags -DTRACK_FILENAME ;
+UsePrivateKernelHeaders ;
+UsePrivateHeaders shared storage file_systems ;
+UseHeaders [ FDirName $(HAIKU_TOP) headers compatibility bsd ] : true ;
 
 KernelAddon fat :
-	attr.c
-	dir.c
-	dlist.c
-	dosfs.c
-	encodings.cpp
-	fat.c
-	file.c
-	iter.c
+	$(commonSource)
 	mime_ext_table.c
-	mkdos.cpp
-	util.c
-	vcache.c
-	version.c
-;
+	;
 
 SEARCH on [ FGristFiles mime_ext_table.c ]
 	+= [ FDirName $(HAIKU_TOP) src add-ons kernel file_systems shared ] ;

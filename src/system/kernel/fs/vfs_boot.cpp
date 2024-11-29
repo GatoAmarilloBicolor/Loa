@@ -275,11 +275,11 @@ DiskBootMethod::IsBootPartition(KPartition* partition, bool& foundForSure)
 
 		if (fMethod == BOOT_METHOD_CD) {
 			// Check for the boot partition of an anyboot CD. We identify it as
-			// such, if it is the only primary partition on the CD, has type
-			// BFS, and the boot partition offset is 0.
+			// such if it is a partition on the CD, has type BFS, and the boot
+			// partition offset is 0
 			KDiskDevice* device = partition->Device();
-			if (IsBootDevice(device, false) && bootPartitionOffset == 0
-				&& partition->Parent() == device && device->CountChildren() == 1
+			if (IsBootDevice(device, false)
+				&& bootPartitionOffset == 0 && partition->Parent() == device
 				&& device->ContentType() != NULL
 				&& strcmp(device->ContentType(), kPartitionTypeIntel) == 0
 				&& partition->ContentType() != NULL
@@ -360,18 +360,21 @@ get_boot_partitions(KMessage& bootVolume, PartitionStack& partitions)
 
 	status = manager->InitialDeviceScan();
 	if (status != B_OK) {
-		dprintf("KDiskDeviceManager::InitialDeviceScan() failed: %s\n",
+		dprintf("KDiskDeviceManager::InitialDeviceScan() returned error: %s\n",
 			strerror(status));
-		return status;
+		// InitialDeviceScan returns error if one (or more) partitions are
+		// determined to be invalid. The partition we are trying to boot from
+		// may be usuable anyway, so don't fail here.
 	}
 
-	if (1 /* dump devices and partitions */) {
-		KDiskDevice *device;
-		int32 cookie = 0;
-		while ((device = manager->NextDevice(&cookie)) != NULL) {
-			device->Dump(true, 0);
-		}
+#if KDEBUG
+	// dump devices and partitions
+	KDiskDevice *device;
+	int32 cookie = 0;
+	while ((device = manager->NextDevice(&cookie)) != NULL) {
+		device->Dump(true, 0);
 	}
+#endif
 
 	struct BootPartitionVisitor : KPartitionVisitor {
 		BootPartitionVisitor(BootMethod* bootMethod, PartitionStack &stack)
@@ -475,7 +478,7 @@ vfs_mount_boot_file_system(kernel_args* args)
 		panic("get_boot_partitions failed!");
 	}
 	if (partitions.IsEmpty()) {
-		panic("did not find any boot partitions!");
+		panic("did not find any boot partitions! @! syslog | tail 15");
 	}
 
 	dev_t bootDevice = -1;

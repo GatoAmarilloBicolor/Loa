@@ -608,6 +608,7 @@ void BNodeInfo::_ReservedNodeInfo2() {}
 void BNodeInfo::_ReservedNodeInfo3() {}
 
 
+#ifdef __HAIKU_BEOS_COMPATIBLE
 /*!	Assignment operator is declared private to prevent it from being created
 	automatically by the compiler.
 */
@@ -624,3 +625,4 @@ BNodeInfo::operator=(const BNodeInfo &nodeInfo)
 BNodeInfo::BNodeInfo(const BNodeInfo &)
 {
 }
+#endif

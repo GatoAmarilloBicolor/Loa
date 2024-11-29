@@ -33,6 +33,7 @@
 #include <lock.h>
 #include <Notifications.h>
 #include <util/AutoLock.h>
+#include <util/fs_trim_support.h>
 #include <vfs.h>
 #include <vm/vm.h>
 #include <wait_for_objects.h>
@@ -148,11 +149,6 @@ struct devfs_cookie {
 	void*				device_cookie;
 };
 
-struct synchronous_io_cookie {
-	BaseDevice*		device;
-	void*			cookie;
-};
-
 // directory iteration states
 enum {
 	ITERATION_STATE_DOT		= 0,
@@ -234,8 +230,8 @@ scan_for_drivers_if_needed(devfs_vnode* dir)
 	get_device_name(dir, path.LockBuffer(), path.BufferSize());
 	path.UnlockBuffer();
 
-	TRACE(("scan_for_drivers_if_needed: mode %ld: %s\n", scan_mode(),
-		path.Path()));
+	TRACE(("scan_for_drivers_if_needed: mode %" B_PRId32 ": %s\n",
+		scan_mode(), path.Path()));
 
 	// scan for drivers at this path
 	static int32 updateCycle = 1;
@@ -481,7 +477,8 @@ add_partition(struct devfs* fs, struct devfs_vnode* device, const char* name,
 	fs->vnode_hash->Insert(partitionNode);
 	devfs_insert_in_dir(device->parent, partitionNode);
 
-	TRACE(("add_partition(name = %s, offset = %Ld, size = %Ld)\n",
+	TRACE(("add_partition(name = %s, offset = %" B_PRIdOFF
+		", size = %" B_PRIdOFF ")\n",
 		name, info.offset, info.size));
 	return B_OK;
 
@@ -502,6 +499,37 @@ translate_partition_access(devfs_partition* partition, off_t& offset,
 
 	size = (size_t)min_c((off_t)size, partition->info.size - offset);
 	offset += partition->info.offset;
+}
+
+
+static bool
+translate_partition_access(devfs_partition* partition, uint64& offset,
+	uint64& size)
+{
+	const off_t partitionSize = partition->info.size;
+	const off_t partitionOffset = partition->info.offset;
+
+	// Check that off_t values can be cast to uint64,
+	// partition offset can theoretically be negative
+	ASSERT(partitionSize >= 0);
+	STATIC_ASSERT(sizeof(partitionSize) <= sizeof(uint64));
+	STATIC_ASSERT(sizeof(partitionOffset) <= sizeof(uint64));
+
+	// Check that calculations give expected results
+	if (offset >= (uint64)partitionSize)
+		return false;
+	if (partitionOffset >= 0 && offset > UINT64_MAX - (uint64)partitionOffset)
+		return false;
+	if (partitionOffset < 0 && offset < (uint64)-partitionOffset)
+		return false;
+
+	size = min_c(size, (uint64)partitionSize - offset);
+	if (partitionOffset >= 0)
+		offset += (uint64)partitionOffset;
+	else
+		offset -= (uint64)-partitionOffset;
+
+	return true;
 }
 
 
@@ -785,22 +813,6 @@ get_device_name(struct devfs_vnode* vnode, char* buffer, size_t size)
 }
 
 
-static status_t
-device_read(void* _cookie, off_t offset, void* buffer, size_t* length)
-{
-	synchronous_io_cookie* cookie = (synchronous_io_cookie*)_cookie;
-	return cookie->device->Read(cookie->cookie, offset, buffer, length);
-}
-
-
-static status_t
-device_write(void* _cookie, off_t offset, void* buffer, size_t* length)
-{
-	synchronous_io_cookie* cookie = (synchronous_io_cookie*)_cookie;
-	return cookie->device->Write(cookie->cookie, offset, buffer, length);
-}
-
-
 static int
 dump_node(int argc, char** argv)
 {
@@ -1038,7 +1050,8 @@ devfs_get_vnode(fs_volume* _volume, ino_t id, fs_vnode* _vnode, int* _type,
 {
 	struct devfs* fs = (struct devfs*)_volume->private_volume;
 
-	TRACE(("devfs_get_vnode: asking for vnode id = %Ld, vnode = %p, r %d\n", id, _vnode, reenter));
+	TRACE(("devfs_get_vnode: asking for vnode id = %" B_PRIdINO
+		", vnode = %p, r %d\n", id, _vnode, reenter));
 
 	RecursiveLocker _(fs->lock);
 
@@ -1062,8 +1075,8 @@ devfs_put_vnode(fs_volume* _volume, fs_vnode* _vnode, bool reenter)
 #ifdef TRACE_DEVFS
 	struct devfs_vnode* vnode = (struct devfs_vnode*)_vnode->private_node;
 
-	TRACE(("devfs_put_vnode: entry on vnode %p, id = %Ld, reenter %d\n",
-		vnode, vnode->id, reenter));
+	TRACE(("devfs_put_vnode: entry on vnode %p, id = %" B_PRIdINO
+		", reenter %d\n", vnode, vnode->id, reenter));
 #endif
 
 	return B_OK;
@@ -1076,7 +1089,8 @@ devfs_remove_vnode(fs_volume* _volume, fs_vnode* _v, bool reenter)
 	struct devfs* fs = (struct devfs*)_volume->private_volume;
 	struct devfs_vnode* vnode = (struct devfs_vnode*)_v->private_node;
 
-	TRACE(("devfs_removevnode: remove %p (%Ld), reenter %d\n", vnode, vnode->id, reenter));
+	TRACE(("devfs_removevnode: remove %p (%" B_PRIdINO "), reenter %d\n",
+		vnode, vnode->id, reenter));
 
 	RecursiveLocker locker(&fs->lock);
 
@@ -1185,10 +1199,11 @@ devfs_read_link(fs_volume* _volume, fs_vnode* _link, char* buffer,
 	if (!S_ISLNK(link->stream.type))
 		return B_BAD_VALUE;
 
-	if (link->stream.u.symlink.length < *_bufferSize)
-		*_bufferSize = link->stream.u.symlink.length;
+	memcpy(buffer, link->stream.u.symlink.path, min_c(*_bufferSize,
+		link->stream.u.symlink.length));
 
-	memcpy(buffer, link->stream.u.symlink.path, *_bufferSize);
+	*_bufferSize = link->stream.u.symlink.length;
+
 	return B_OK;
 }
 
@@ -1200,7 +1215,7 @@ devfs_read(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t pos,
 	struct devfs_vnode* vnode = (struct devfs_vnode*)_vnode->private_node;
 	struct devfs_cookie* cookie = (struct devfs_cookie*)_cookie;
 
-	//TRACE(("devfs_read: vnode %p, cookie %p, pos %Ld, len %p\n",
+	//TRACE(("devfs_read: vnode %p, cookie %p, pos %lld, len %p\n",
 	//	vnode, cookie, pos, _length));
 
 	if (!S_ISCHR(vnode->stream.type))
@@ -1213,7 +1228,8 @@ devfs_read(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t pos,
 		if (pos >= vnode->stream.u.dev.partition->info.size)
 			return B_BAD_VALUE;
 
-		translate_partition_access(vnode->stream.u.dev.partition, pos, *_length);
+		translate_partition_access(vnode->stream.u.dev.partition, pos,
+			*_length);
 	}
 
 	if (*_length == 0)
@@ -1232,7 +1248,7 @@ devfs_write(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t pos,
 	struct devfs_vnode* vnode = (struct devfs_vnode*)_vnode->private_node;
 	struct devfs_cookie* cookie = (struct devfs_cookie*)_cookie;
 
-	//TRACE(("devfs_write: vnode %p, cookie %p, pos %Ld, len %p\n",
+	//TRACE(("devfs_write: vnode %p, cookie %p, pos %lld, len %p\n",
 	//	vnode, cookie, pos, _length));
 
 	if (!S_ISCHR(vnode->stream.type))
@@ -1245,7 +1261,8 @@ devfs_write(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t pos,
 		if (pos >= vnode->stream.u.dev.partition->info.size)
 			return B_BAD_VALUE;
 
-		translate_partition_access(vnode->stream.u.dev.partition, pos, *_length);
+		translate_partition_access(vnode->stream.u.dev.partition, pos,
+			*_length);
 	}
 
 	if (*_length == 0)
@@ -1379,13 +1396,13 @@ devfs_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 
 	dirent->d_dev = fs->id;
 	dirent->d_ino = childNode->id;
-	dirent->d_reclen = strlen(name) + sizeof(struct dirent);
+	dirent->d_reclen = offsetof(struct dirent, d_name) + strlen(name) + 1;
 
 	if (dirent->d_reclen > bufferSize)
 		return ENOBUFS;
 
 	status = user_strlcpy(dirent->d_name, name,
-		bufferSize - sizeof(struct dirent));
+		bufferSize - offsetof(struct dirent, d_name));
 	if (status < B_OK)
 		return status;
 
@@ -1428,7 +1445,8 @@ devfs_ioctl(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, uint32 op,
 	struct devfs_vnode* vnode = (struct devfs_vnode*)_vnode->private_node;
 	struct devfs_cookie* cookie = (struct devfs_cookie*)_cookie;
 
-	TRACE(("devfs_ioctl: vnode %p, cookie %p, op %ld, buf %p, len %ld\n",
+	TRACE(("devfs_ioctl: vnode %p, cookie %p, op %" B_PRIu32
+		", buf %p, len %" B_PRIuSIZE "\n",
 		vnode, cookie, op, buffer, length));
 
 	// we are actually checking for a *device* here, we don't make the
@@ -1459,19 +1477,61 @@ devfs_ioctl(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, uint32 op,
 				return user_memcpy(buffer, &geometry, sizeof(device_geometry));
 			}
 
-			case B_GET_DRIVER_FOR_DEVICE:
+			case B_TRIM_DEVICE:
 			{
-#if 0
-				const char* path;
-				if (!vnode->stream.u.dev.driver)
-					return B_ENTRY_NOT_FOUND;
-				path = vnode->stream.u.dev.driver->path;
-				if (path == NULL)
-					return B_ENTRY_NOT_FOUND;
+				struct devfs_partition* partition
+					= vnode->stream.u.dev.partition;
 
-				return user_strlcpy((char*)buffer, path, B_FILE_NAME_LENGTH);
+				fs_trim_data* trimData;
+				MemoryDeleter deleter;
+				status_t status = get_trim_data_from_user(buffer, length,
+					deleter, trimData);
+				if (status != B_OK)
+					return status;
+
+#ifdef DEBUG_TRIM
+				dprintf("TRIM: devfs: received TRIM ranges (bytes):\n");
+				for (uint32 i = 0; i < trimData->range_count; i++) {
+					dprintf("[%3" B_PRIu32 "] %" B_PRIu64 " : %"
+						B_PRIu64 "\n", i,
+						trimData->ranges[i].offset,
+						trimData->ranges[i].size);
+				}
 #endif
-				return B_ERROR;
+
+				if (partition != NULL) {
+					// If there is a partition, offset all ranges according
+					// to the partition start.
+					// Range size may be reduced to fit the partition size.
+					for (uint32 i = 0; i < trimData->range_count; i++) {
+						if (!translate_partition_access(partition,
+							trimData->ranges[i].offset,
+							trimData->ranges[i].size)) {
+							return B_BAD_VALUE;
+						}
+					}
+
+#ifdef DEBUG_TRIM
+					dprintf("TRIM: devfs: TRIM ranges after partition"
+						" translation (bytes):\n");
+					for (uint32 i = 0; i < trimData->range_count; i++) {
+						dprintf("[%3" B_PRIu32 "] %" B_PRIu64 " : %"
+							B_PRIu64 "\n", i,
+							trimData->ranges[i].offset,
+							trimData->ranges[i].size);
+					}
+#endif
+				}
+
+				status = vnode->stream.u.dev.device->Control(
+					cookie->device_cookie, op, trimData, length);
+
+				// Copy the data back to userland (it contains the number of
+				// trimmed bytes)
+				if (status == B_OK)
+					status = copy_trim_data_to_user(buffer, trimData);
+
+				return status;
 			}
 
 			case B_GET_PARTITION_INFO:
@@ -1555,9 +1615,8 @@ devfs_select(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 	// If the device has no select() hook, notify select() now.
 	if (!vnode->stream.u.dev.device->HasSelect()) {
 		if (!SELECT_TYPE_IS_OUTPUT_ONLY(event))
-			return notify_select_event((selectsync*)sync, event);
-		else
-			return B_OK;
+			notify_select_event((selectsync*)sync, event);
+		return B_UNSUPPORTED;
 	}
 
 	return vnode->stream.u.dev.device->Select(cookie->device_cookie, event,
@@ -1575,7 +1634,6 @@ devfs_deselect(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 	if (!S_ISCHR(vnode->stream.type))
 		return B_NOT_ALLOWED;
 
-	// If the device has no select() hook, notify select() now.
 	if (!vnode->stream.u.dev.device->HasDeselect())
 		return B_OK;
 
@@ -1612,7 +1670,7 @@ devfs_read_pages(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 	struct devfs_vnode* vnode = (devfs_vnode*)_vnode->private_node;
 	struct devfs_cookie* cookie = (struct devfs_cookie*)_cookie;
 
-	//TRACE(("devfs_read_pages: vnode %p, vecs %p, count = %lu, pos = %Ld, size = %lu\n", vnode, vecs, count, pos, *_numBytes));
+	//TRACE(("devfs_read_pages: vnode %p, vecs %p, count = %lu, pos = %lld, size = %lu\n", vnode, vecs, count, pos, *_numBytes));
 
 	if (!S_ISCHR(vnode->stream.type)
 		|| (!vnode->stream.u.dev.device->HasRead()
@@ -1671,7 +1729,7 @@ devfs_write_pages(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 	struct devfs_vnode* vnode = (devfs_vnode*)_vnode->private_node;
 	struct devfs_cookie* cookie = (struct devfs_cookie*)_cookie;
 
-	//TRACE(("devfs_write_pages: vnode %p, vecs %p, count = %lu, pos = %Ld, size = %lu\n", vnode, vecs, count, pos, *_numBytes));
+	//TRACE(("devfs_write_pages: vnode %p, vecs %p, count = %lu, pos = %lld, size = %lu\n", vnode, vecs, count, pos, *_numBytes));
 
 	if (!S_ISCHR(vnode->stream.type)
 		|| (!vnode->stream.u.dev.device->HasWrite()
@@ -1727,21 +1785,18 @@ static status_t
 devfs_io(fs_volume* volume, fs_vnode* _vnode, void* _cookie,
 	io_request* request)
 {
-	TRACE(("[%ld] devfs_io(request: %p)\n", find_thread(NULL), request));
+	TRACE(("[%d] devfs_io(request: %p)\n", find_thread(NULL), request));
 
 	devfs_vnode* vnode = (devfs_vnode*)_vnode->private_node;
 	devfs_cookie* cookie = (devfs_cookie*)_cookie;
 
-	bool isWrite = request->IsWrite();
-
-	if (!S_ISCHR(vnode->stream.type)
-		|| (((isWrite && !vnode->stream.u.dev.device->HasWrite())
-				|| (!isWrite && !vnode->stream.u.dev.device->HasRead()))
-			&& !vnode->stream.u.dev.device->HasIO())
-		|| cookie == NULL) {
+	if (!S_ISCHR(vnode->stream.type) || cookie == NULL) {
 		request->SetStatusAndNotify(B_NOT_ALLOWED);
 		return B_NOT_ALLOWED;
 	}
+
+	if (!vnode->stream.u.dev.device->HasIO())
+		return B_UNSUPPORTED;
 
 	if (vnode->stream.u.dev.partition != NULL) {
 		if (request->Offset() + (off_t)request->Length()
@@ -1752,16 +1807,7 @@ devfs_io(fs_volume* volume, fs_vnode* _vnode, void* _cookie,
 		translate_partition_access(vnode->stream.u.dev.partition, request);
 	}
 
-	if (vnode->stream.u.dev.device->HasIO())
-		return vnode->stream.u.dev.device->IO(cookie->device_cookie, request);
-
-	synchronous_io_cookie synchronousCookie = {
-		vnode->stream.u.dev.device,
-		cookie->device_cookie
-	};
-
-	return vfs_synchronous_io(request,
-		request->IsWrite() ? &device_write : &device_read, &synchronousCookie);
+	return vnode->stream.u.dev.device->IO(cookie->device_cookie, request);
 }
 
 
@@ -1770,8 +1816,8 @@ devfs_read_stat(fs_volume* _volume, fs_vnode* _vnode, struct stat* stat)
 {
 	struct devfs_vnode* vnode = (struct devfs_vnode*)_vnode->private_node;
 
-	TRACE(("devfs_read_stat: vnode %p (%Ld), stat %p\n", vnode, vnode->id,
-		stat));
+	TRACE(("devfs_read_stat: vnode %p (%" B_PRIdINO "), stat %p\n",
+		vnode, vnode->id, stat));
 
 	stat->st_ino = vnode->id;
 	stat->st_rdev = vnode->id;
@@ -1823,8 +1869,8 @@ devfs_write_stat(fs_volume* _volume, fs_vnode* _vnode, const struct stat* stat,
 	struct devfs* fs = (struct devfs*)_volume->private_volume;
 	struct devfs_vnode* vnode = (struct devfs_vnode*)_vnode->private_node;
 
-	TRACE(("devfs_write_stat: vnode %p (0x%Lx), stat %p\n", vnode, vnode->id,
-		stat));
+	TRACE(("devfs_write_stat: vnode %p (0x%" B_PRIdINO "), stat %p\n",
+		vnode, vnode->id, stat));
 
 	// we cannot change the size of anything
 	if (statMask & B_STAT_SIZE)
@@ -2045,7 +2091,8 @@ devfs_publish_partition(const char* name, const partition_info* info)
 {
 	if (name == NULL || info == NULL)
 		return B_BAD_VALUE;
-	TRACE(("publish partition: %s (device \"%s\", offset %Ld, size %Ld)\n",
+	TRACE(("publish partition: %s (device \"%s\", offset %" B_PRIdOFF
+		", size %" B_PRIdOFF ")\n",
 		name, info->device, info->offset, info->size));
 
 	devfs_vnode* device;
@@ -2190,13 +2237,14 @@ void
 devfs_compute_geometry_size(device_geometry* geometry, uint64 blockCount,
 	uint32 blockSize)
 {
-	if (blockCount > UINT32_MAX)
-		geometry->head_count = (blockCount + UINT32_MAX - 1) / UINT32_MAX;
-	else
-		geometry->head_count = 1;
+	geometry->head_count = 1;
+	while (blockCount > UINT32_MAX) {
+		geometry->head_count <<= 1;
+		blockCount >>= 1;
+	}
 
 	geometry->cylinder_count = 1;
-	geometry->sectors_per_track = blockCount / geometry->head_count;
+	geometry->sectors_per_track = blockCount;
 	geometry->bytes_per_sector = blockSize;
 }
 

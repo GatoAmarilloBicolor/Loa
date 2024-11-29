@@ -1,5 +1,7 @@
 SubDir HAIKU_TOP src libs stdc++ legacy ;
 
+AddSubDirSupportedPlatforms libbe_test ;
+
 local architectureObject ;
 for architectureObject in [ MultiArchSubDirSetup x86_gcc2 ] {
 	on $(architectureObject) {
@@ -19,7 +21,9 @@ for architectureObject in [ MultiArchSubDirSetup x86_gcc2 ] {
 			= [ FDirName $(HAIKU_TOP) src system libroot posix glibc ] ;
 		SYSHDRS =
 			$(SUBDIR)
+			[ FDirName $(glibcDir) ctype ]
 			[ FDirName $(glibcDir) libio ]
+			[ FDirName $(glibcDir) locale ]
 			[ FDirName $(glibcDir) stdlib ]
 			[ FDirName $(glibcDir) stdio-common ]
 			[ FDirName $(glibcDir) include ]

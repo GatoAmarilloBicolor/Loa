@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2015, Haiku, Inc. All Rights Reserved.
+ * Copyright 2013-2024, Haiku, Inc. All Rights Reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -173,10 +173,17 @@ PackageManager::Warn(status_t error, const char* format, ...)
 void
 PackageManager::ProgressPackageDownloadStarted(const char* packageName)
 {
+	fShowProgress = isatty(STDOUT_FILENO);
 	fLastBytes = 0;
 	fLastRateCalcTime = system_time();
 	fDownloadRate = 0;
-	printf("  0%%");
+
+	if (fShowProgress) {
+		char percentString[32];
+		fNumberFormat.FormatPercent(percentString, sizeof(percentString), 0.0);
+		// Make sure there is enough space for '100 %' percent format
+		printf("%6s", percentString);
+	}
 }
 
 
@@ -186,7 +193,7 @@ PackageManager::ProgressPackageDownloadActive(const char* packageName,
 {
 	if (bytes == totalBytes)
 		fLastBytes = totalBytes;
-	if (!fInteractive)
+	if (!fShowProgress)
 		return;
 
 	// Do not update if nothing changed in the last 500ms
@@ -212,10 +219,12 @@ PackageManager::ProgressPackageDownloadActive(const char* packageName,
 
 	if (width < 30) {
 		// Not much space for anything, just draw a percentage
-		leftStr.SetToFormat("%3d%%", (int)(completionPercentage * 100));
+		fNumberFormat.FormatPercent(leftStr, completionPercentage);
 	} else {
-		leftStr.SetToFormat("%3d%% %s", (int)(completionPercentage * 100),
-				packageName);
+		BString dataString;
+		fNumberFormat.FormatPercent(dataString, completionPercentage);
+		// Make sure there is enough space for '100 %' percent format
+		leftStr.SetToFormat("%6s %s", dataString.String(), packageName);
 
 		char byteBuffer[32];
 		char totalBuffer[32];
@@ -258,13 +267,16 @@ PackageManager::ProgressPackageDownloadActive(const char* packageName,
 void
 PackageManager::ProgressPackageDownloadComplete(const char* packageName)
 {
-	if (fInteractive) {
+	if (fShowProgress) {
 		// Erase the line, return to the start, and reset colors
 		printf("\r\33[2K\r\x1B[0m");
 	}
 
 	char byteBuffer[32];
-	printf("100%% %s [%s]\n", packageName,
+	char percentString[32];
+	fNumberFormat.FormatPercent(percentString, sizeof(percentString), 1.0);
+	// Make sure there is enough space for '100 %' percent format
+	printf("%6s %s [%s]\n", percentString, packageName,
 		string_for_size(fLastBytes, byteBuffer, sizeof(byteBuffer)));
 	fflush(stdout);
 }
@@ -319,6 +331,9 @@ void
 PackageManager::ProgressApplyingChangesDone(InstalledRepository& repository)
 {
 	printf("[%s] Done.\n", repository.Name().String());
+
+	if (BPackageRoster().IsRebootNeeded())
+		printf("A reboot is necessary to complete the installation process.\n");
 }
 
 

@@ -59,6 +59,8 @@ All rights reserved.
 #include <Volume.h>
 #include <VolumeRoster.h>
 
+#include <tracker_private.h>
+
 #include "Attributes.h"
 #include "AutoLock.h"
 #include "BackgroundImage.h"
@@ -371,11 +373,10 @@ TTracker::QuitRequested()
 			= dynamic_cast<BContainerWindow*>(fWindowList.ItemAt(i));
 
 		if (window != NULL && window->Lock()) {
-			if (window->TargetModel() != NULL
-				&& !window->PoseView()->IsDesktopWindow()) {
-				if (window->TargetModel()->IsRoot())
+			if (window->TargetModel() != NULL && !window->TargetModel()->IsDesktop()) {
+				if (window->TargetModel()->IsRoot()) {
 					message.AddBool("open_disks_window", true);
-				else {
+				} else {
 					BEntry entry;
 					BPath path;
 					const entry_ref* ref = window->TargetModel()->EntryRef();
@@ -484,7 +485,7 @@ TTracker::MessageReceived(BMessage* message)
 			OpenInfoWindows(message);
 			break;
 
-		case kMoveToTrash:
+		case kMoveSelectionToTrash:
 			MoveRefsToTrash(message);
 			break;
 
@@ -614,6 +615,40 @@ TTracker::MessageReceived(BMessage* message)
 			bool localize;
 			if (message->FindBool("filesys", &localize) == B_OK)
 				gLocalizedNamePreferred = localize;
+			break;
+		}
+
+		case kUpdateThumbnail:
+		{
+			// message passed from generator thread
+			// update icon on passed-in node_ref
+			node_ref noderef;
+			if (message->FindNodeRef("noderef", &noderef) == B_OK) {
+				// cycle through open windows to find the node's pose
+				// TODO find a faster way
+				AutoLock<WindowList> lock(&fWindowList);
+				int32 count = fWindowList.CountItems();
+				for (int32 index = 0; index < count; index++) {
+					BContainerWindow* window = dynamic_cast<BContainerWindow*>(
+						fWindowList.ItemAt(index));
+					if (window == NULL)
+						continue;
+
+					AutoLock<BWindow> windowLock(window);
+					if (!windowLock.IsLocked())
+						continue;
+
+					BPoseView* poseView = window->PoseView();
+					if (poseView == NULL)
+						continue;
+
+					BPose* pose = poseView->FindPose(&noderef);
+					if (pose != NULL) {
+						poseView->UpdateIcon(pose);
+						break; // updated pose icon, exit loop
+					}
+				}
+			}
 			break;
 		}
 
@@ -817,30 +852,21 @@ TTracker::OpenRef(const entry_ref* ref, const node_ref* nodeToClose,
 	BEntry entry(ref, true);
 	status_t result = entry.InitCheck();
 
-	bool brokenLinkWithSpecificHandler = false;
-	BString brokenLinkPreferredApp;
-
 	if (result != B_OK) {
-		model = new Model(ref, false);
-		if (model->IsSymLink() && !model->LinkTo()) {
-			model->GetPreferredAppForBrokenSymLink(brokenLinkPreferredApp);
-			if (brokenLinkPreferredApp.Length()
-				&& brokenLinkPreferredApp != kTrackerSignature) {
-				brokenLinkWithSpecificHandler = true;
-			}
-		}
+		BAlert* alert = new BAlert("",
+			B_TRANSLATE("There was an error resolving the link."),
+			B_TRANSLATE_COMMENT("Get info", "Tracker's 'Get info' panel [ALT+I]"),
+			B_TRANSLATE("Cancel"), 0, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+		int32 choice = alert->Go();
 
-		if (!brokenLinkWithSpecificHandler) {
-			delete model;
-			BAlert* alert = new BAlert("",
-				B_TRANSLATE("There was an error resolving the link."),
-				B_TRANSLATE("Cancel"), 0, 0, B_WIDTH_AS_USUAL,
-					B_WARNING_ALERT);
-			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
-			alert->Go();
-
-			return result;
+		if (choice == 0) {
+			BMessenger tracker(kTrackerSignature);
+			BMessage message(kGetInfo);
+			message.AddRef("refs", ref);
+			tracker.SendMessage(&message);
 		}
+		return result;
 	} else
 		model = new Model(&entry);
 
@@ -896,14 +922,7 @@ TTracker::OpenRef(const entry_ref* ref, const node_ref* nodeToClose,
 				refsReceived.what = B_REFS_RECEIVED;
 			}
 			refsReceived.AddRef("refs", ref);
-			if (brokenLinkWithSpecificHandler) {
-				// This cruft is to support a hacky workaround for
-				// double-clicking broken refs for cifs; should get fixed
-				// in R5
-				LaunchBrokenLink(brokenLinkPreferredApp.String(),
-					&refsReceived);
-			} else
-				TrackerLaunch(&refsReceived, true);
+			TrackerLaunch(&refsReceived, true);
 		}
 	}
 
@@ -1066,8 +1085,7 @@ TTracker::OpenContainerWindow(Model* model, BMessage* originalRefsList,
 	int32 windowCount = 0;
 	while (window != NULL) {
 		if ((window->Workspaces() & workspace) != 0
-			&& (dynamic_cast<BDeskWindow*>(window) == NULL
-				|| !TrackerSettings().SingleWindowBrowse())) {
+			&& (!model->IsDesktop() || !TrackerSettings().SingleWindowBrowse())) {
 			// We found at least one window that is open and is not Desktop
 			// or we're in spatial mode, activate it and make sure we don't
 			// jerk the workspaces around.
@@ -1111,7 +1129,7 @@ TTracker::OpenContainerWindow(Model* model, BMessage* originalRefsList,
 		window = new BContainerWindow(&fWindowList, openFlags);
 	}
 
-	if (model != NULL && window->LockLooper()) {
+	if (model != NULL && window != NULL && window->LockLooper()) {
 		window->CreatePoseView(model);
 		if (window->PoseView() == NULL) {
 			// Failed initialization.

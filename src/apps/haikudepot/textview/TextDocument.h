@@ -14,10 +14,6 @@
 #include "UndoableEditListener.h"
 
 
-typedef List<Paragraph, false>					ParagraphList;
-typedef List<TextListenerRef, false>			TextListenerList;
-typedef List<UndoableEditListenerRef, false>	UndoListenerList;
-
 class TextDocument;
 typedef BReference<TextDocument> TextDocumentRef;
 
@@ -59,12 +55,11 @@ public:
 			// Style access
 			const CharacterStyle& CharacterStyleAt(int32 textOffset) const;
 			const ParagraphStyle& ParagraphStyleAt(int32 textOffset) const;
-
-			// Paragraph access
-			const ParagraphList& Paragraphs() const
-									{ return fParagraphs; }
+			BCursor				CursorAt(int32 textOffset) const;
+			const BMessage*		ClickMessageAt(int32 textOffset) const;
 
 			int32				CountParagraphs() const;
+			const Paragraph&	ParagraphAtIndex(int32 index) const;
 
 			int32				ParagraphIndexFor(int32 textOffset,
 									int32& paragraphOffset) const;
@@ -117,12 +112,15 @@ private:
 									const UndoableEditRef& edit) const;
 
 private:
-			ParagraphList		fParagraphs;
+			std::vector<Paragraph>
+								fParagraphs;
 			Paragraph			fEmptyLastParagraph;
 			CharacterStyle		fDefaultCharacterStyle;
 
-			TextListenerList	fTextListeners;
-			UndoListenerList	fUndoListeners;
+			std::vector<TextListenerRef>
+								fTextListeners;
+			std::vector<UndoableEditListenerRef>
+								fUndoListeners;
 };
 
 

@@ -70,7 +70,7 @@ struct iframe_stack gBootFrameStack;
 
 
 void
-arch_int_enable_io_interrupt(int irq)
+arch_int_enable_io_interrupt(int32 irq)
 {
 	//if (!sPIC)
 	//	return;
@@ -82,7 +82,7 @@ arch_int_enable_io_interrupt(int irq)
 
 
 void
-arch_int_disable_io_interrupt(int irq)
+arch_int_disable_io_interrupt(int32 irq)
 {
 	//if (!sPIC)
 	//	return;
@@ -95,10 +95,11 @@ arch_int_disable_io_interrupt(int irq)
 /* arch_int_*_interrupts() and friends are in arch_asm.S */
 
 
-void
+int32
 arch_int_assign_to_cpu(int32 irq, int32 cpu)
 {
-	// intentionally left blank; no SMP support (yet)
+	// Not yet supported.
+	return 0;
 }
 
 
@@ -304,12 +305,7 @@ dprintf("handling I/O interrupts done\n");
 	}
 
 	int state = disable_interrupts();
-	if (thread->cpu->invoke_scheduler) {
-		SpinLocker schedulerLocker(thread->scheduler_lock);
-		scheduler_reschedule(B_THREAD_READY);
-		schedulerLocker.Unlock();
-		restore_interrupts(state);
-	} else if (hardwareInterrupt && thread->post_interrupt_callback != NULL) {
+	if (hardwareInterrupt && thread->post_interrupt_callback != NULL) {
 		void (*callback)(void*) = thread->post_interrupt_callback;
 		void* data = thread->post_interrupt_data;
 
@@ -319,6 +315,11 @@ dprintf("handling I/O interrupts done\n");
 		restore_interrupts(state);
 
 		callback(data);
+	} else if (thread->cpu->invoke_scheduler) {
+		SpinLocker schedulerLocker(thread->scheduler_lock);
+		scheduler_reschedule(B_THREAD_READY);
+		schedulerLocker.Unlock();
+		restore_interrupts(state);
 	}
 
 	// pop iframe

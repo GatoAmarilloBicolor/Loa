@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5416/ar5416reg.h 298939 2016-05-02 19:56:48Z pfg $
  */
 #ifndef _DEV_ATH_AR5416REG_H
 #define	_DEV_ATH_AR5416REG_H
@@ -667,7 +667,6 @@
 #define	AR_XSREV_VERSION_OWL_PCI	0x0D
 #define	AR_XSREV_VERSION_OWL_PCIE	0x0C
 
-
 /*
  * These are from ath9k/Atheros and assume an AR_SREV version mask
  * of 0x07, rather than 0x0F which is being used in the FreeBSD HAL.
@@ -805,7 +804,6 @@
 #define	AR_SREV_KIWI_13_OR_LATER(_ah) \
 	(AR_SREV_KIWI(_ah) && \
 	 AH_PRIVATE((_ah))->ah_macRev >= AR_XSREV_REVISION_KIWI_13)
-
 
 /* Not yet implemented chips */
 #define	AR_SREV_9271(_ah)	0

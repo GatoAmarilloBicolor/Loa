@@ -11,6 +11,7 @@
 #define SHOW_IMAGE_WINDOW_H
 
 
+#include <NumberFormat.h>
 #include <ToolBar.h>
 #include <Window.h>
 
@@ -23,8 +24,9 @@ class BMenu;
 class BMenuBar;
 class BMenuItem;
 class BMessageRunner;
+class BMessageRunner;
+class BMimeType;
 class BScrollBar;
-class BScrollView;
 class ProgressWindow;
 class ShowImageView;
 class ShowImageStatusView;
@@ -37,6 +39,7 @@ enum {
 	MSG_UPDATE_STATUS_TEXT		= 'mUPT',
 	MSG_UPDATE_STATUS_ZOOM		= 'mUPZ',
 	MSG_SELECTION				= 'mSEL',
+	MSG_OPEN_WITH				= 'mOPW',
 	MSG_FILE_NEXT				= 'mFLN',
 	MSG_FILE_PREV				= 'mFLP',
 	kMsgDeleteCurrentFile		= 'mDcF',
@@ -67,6 +70,8 @@ private:
 			void				_AddMenus(BMenuBar* bar);
 			void				_ResizeWindowToImage();
 			void				_BuildViewMenu(BMenu* menu, bool popupMenu);
+			void				_UpdateOpenWithMenu(BMenu* menu);
+
 			BMenu*				_BuildRatingMenu();
 			BMenuItem*			_AddItemMenu(BMenu* menu, const char* label,
 									uint32 what, char shortcut, uint32 modifier,
@@ -101,6 +106,7 @@ private:
 			void				_SetSlideShowDelay(bigtime_t delay);
 			void				_StartSlideShow();
 			void				_StopSlideShow();
+			void				_ResetSlideShowDelay();
 
 			void				_UpdateRatingMenu();
 
@@ -120,9 +126,13 @@ private:
 			BMenu*				fGoToPageMenu;
 			BMenu*				fSlideShowDelayMenu;
 			BMenu*				fRatingMenu;
+			BMenu*	 			fOpenWithMenu;
+			BMenuItem*			fResetRatingItem;
+			BNumberFormat		fNumberFormat;
 			BToolBar*			fToolBar;
 			bool				fToolBarVisible;
-			BScrollView*		fScrollView;
+			BView*				fScrollArea;
+			BScrollBar			*fVScrollBar, *fHScrollBar;
 			ShowImageView*		fImageView;
 			ShowImageStatusView* fStatusView;
 			ProgressWindow*		fProgressWindow;
@@ -135,6 +145,7 @@ private:
 			PrintOptions		fPrintOptions;
 
 			BString				fImageType;
+			BMimeType*			fMimeType;
 
 			BMessageRunner*		fSlideShowRunner;
 			bigtime_t			fSlideShowDelay;

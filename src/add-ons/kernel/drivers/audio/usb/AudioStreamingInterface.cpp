@@ -261,13 +261,14 @@ AudioStreamAlternate::SetSamplingRate(uint32 newRate)
 			}
 			fSamplingRate = newRate;
 		} else {
-			for (int i = 0; i < frequencies.Count(); i++)
+			for (int i = 0; i < frequencies.Count(); i++) {
 				if (newRate == frequencies[i]) {
 					fSamplingRate = newRate;
 					return B_OK;
 				}
-				TRACE(ERR, "Rate %d not found - ignore it.\n", newRate);
-				return B_BAD_INDEX;
+			}
+			TRACE(ERR, "Rate %d not found - ignore it.\n", newRate);
+			return B_BAD_INDEX;
 		}
 	}
 
@@ -476,7 +477,7 @@ AudioStreamingInterface::~AudioStreamingInterface()
 uint8
 AudioStreamingInterface::TerminalLink()
 {
-	if (fAlternates[fActiveAlternate]->Interface() != 0)
+	if (fAlternates[fActiveAlternate]->Interface() != NULL)
 		return fAlternates[fActiveAlternate]->Interface()->fTerminalLink;
 	return 0;
 }

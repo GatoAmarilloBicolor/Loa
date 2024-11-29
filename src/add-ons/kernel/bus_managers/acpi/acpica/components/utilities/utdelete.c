@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2024, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -266,7 +266,7 @@ AcpiUtDeleteInternalObj (
             (void) AcpiEvDeleteGpeBlock (Object->Device.GpeBlock);
         }
 
-        /*lint -fallthrough */
+        ACPI_FALLTHROUGH;
 
     case ACPI_TYPE_PROCESSOR:
     case ACPI_TYPE_THERMAL:
@@ -293,7 +293,7 @@ AcpiUtDeleteInternalObj (
             /* Global Lock has extra semaphore */
 
             (void) AcpiOsDeleteSemaphore (AcpiGbl_GlobalLockSemaphore);
-            AcpiGbl_GlobalLockSemaphore = -1;
+            AcpiGbl_GlobalLockSemaphore = ACPI_SEMAPHORE_NULL;
 
             AcpiOsDeleteMutex (Object->Mutex.OsMutex);
             AcpiGbl_GlobalLockMutex = NULL;
@@ -312,7 +312,7 @@ AcpiUtDeleteInternalObj (
             Object, Object->Event.OsSemaphore));
 
         (void) AcpiOsDeleteSemaphore (Object->Event.OsSemaphore);
-        Object->Event.OsSemaphore = -1;
+        Object->Event.OsSemaphore = ACPI_SEMAPHORE_NULL;
         break;
 
     case ACPI_TYPE_METHOD:
@@ -412,6 +412,11 @@ AcpiUtDeleteInternalObj (
 
             AcpiUtDeleteObjectDesc (SecondDesc);
         }
+        if (Object->Field.InternalPccBuffer)
+        {
+            ACPI_FREE(Object->Field.InternalPccBuffer);
+        }
+
         break;
 
     case ACPI_TYPE_BUFFER_FIELD:
@@ -438,6 +443,14 @@ AcpiUtDeleteInternalObj (
         }
         break;
 
+    case ACPI_TYPE_LOCAL_ADDRESS_HANDLER:
+
+        ACPI_DEBUG_PRINT ((ACPI_DB_ALLOCATIONS,
+            "***** Address handler %p\n", Object));
+
+        AcpiOsDeleteMutex (Object->AddressSpace.ContextMutex);
+        break;
+
     default:
 
         break;
@@ -454,8 +467,8 @@ AcpiUtDeleteInternalObj (
 
     /* Now the object can be safely deleted */
 
-    ACPI_DEBUG_PRINT ((ACPI_DB_ALLOCATIONS, "Deleting Object %p [%s]\n",
-        Object, AcpiUtGetObjectTypeName (Object)));
+    ACPI_DEBUG_PRINT_RAW ((ACPI_DB_ALLOCATIONS, "%s: Deleting Object %p [%s]\n",
+        ACPI_GET_FUNCTION_NAME, Object, AcpiUtGetObjectTypeName (Object)));
 
     AcpiUtDeleteObjectDesc (Object);
     return_VOID;
@@ -520,6 +533,7 @@ AcpiUtUpdateRefCount (
     UINT16                  OriginalCount;
     UINT16                  NewCount = 0;
     ACPI_CPU_FLAGS          LockFlags;
+    char                    *Message;
 
 
     ACPI_FUNCTION_NAME (UtUpdateRefCount);
@@ -560,6 +574,7 @@ AcpiUtUpdateRefCount (
             "Obj %p Type %.2X [%s] Refs %.2X [Incremented]\n",
             Object, Object->Common.Type,
             AcpiUtGetObjectTypeName (Object), NewCount));
+        Message = "Incremement";
         break;
 
     case REF_DECREMENT:
@@ -579,11 +594,12 @@ AcpiUtUpdateRefCount (
             ACPI_WARNING ((AE_INFO,
                 "Obj %p, Reference Count is already zero, cannot decrement\n",
                 Object));
+            return;
         }
 
-        ACPI_DEBUG_PRINT ((ACPI_DB_ALLOCATIONS,
-            "Obj %p Type %.2X Refs %.2X [Decremented]\n",
-            Object, Object->Common.Type, NewCount));
+        ACPI_DEBUG_PRINT_RAW ((ACPI_DB_ALLOCATIONS,
+            "%s: Obj %p Type %.2X Refs %.2X [Decremented]\n",
+            ACPI_GET_FUNCTION_NAME, Object, Object->Common.Type, NewCount));
 
         /* Actually delete the object on a reference count of zero */
 
@@ -591,6 +607,7 @@ AcpiUtUpdateRefCount (
         {
             AcpiUtDeleteInternalObj (Object);
         }
+        Message = "Decrement";
         break;
 
     default:
@@ -608,8 +625,8 @@ AcpiUtUpdateRefCount (
     if (NewCount > ACPI_MAX_REFERENCE_COUNT)
     {
         ACPI_WARNING ((AE_INFO,
-            "Large Reference Count (0x%X) in object %p, Type=0x%.2X",
-            NewCount, Object, Object->Common.Type));
+            "Large Reference Count (0x%X) in object %p, Type=0x%.2X Operation=%s",
+            NewCount, Object, Object->Common.Type, Message));
     }
 }
 
@@ -618,13 +635,13 @@ AcpiUtUpdateRefCount (
  *
  * FUNCTION:    AcpiUtUpdateObjectReference
  *
- * PARAMETERS:  Object              - Increment ref count for this object
- *                                    and all sub-objects
+ * PARAMETERS:  Object              - Increment or decrement the ref count for
+ *                                    this object and all sub-objects
  *              Action              - Either REF_INCREMENT or REF_DECREMENT
  *
  * RETURN:      Status
  *
- * DESCRIPTION: Increment the object reference count
+ * DESCRIPTION: Increment or decrement the object reference count
  *
  * Object references are incremented when:
  * 1) An object is attached to a Node (namespace object)
@@ -663,7 +680,7 @@ AcpiUtUpdateObjectReference (
         }
 
         /*
-         * All sub-objects must have their reference count incremented
+         * All sub-objects must have their reference count updated
          * also. Different object types have different subobjects.
          */
         switch (Object->Common.Type)
@@ -732,17 +749,13 @@ AcpiUtUpdateObjectReference (
                     break;
                 }
             }
+
             NextObject = NULL;
             break;
 
         case ACPI_TYPE_BUFFER_FIELD:
 
             NextObject = Object->BufferField.BufferObj;
-            break;
-
-        case ACPI_TYPE_LOCAL_REGION_FIELD:
-
-            NextObject = Object->Field.RegionObj;
             break;
 
         case ACPI_TYPE_LOCAL_BANK_FIELD:
@@ -780,6 +793,7 @@ AcpiUtUpdateObjectReference (
             }
             break;
 
+        case ACPI_TYPE_LOCAL_REGION_FIELD:
         case ACPI_TYPE_REGION:
         default:
 
@@ -906,9 +920,9 @@ AcpiUtRemoveReference (
         return;
     }
 
-    ACPI_DEBUG_PRINT ((ACPI_DB_ALLOCATIONS,
-        "Obj %p Current Refs=%X [To Be Decremented]\n",
-        Object, Object->Common.ReferenceCount));
+    ACPI_DEBUG_PRINT_RAW ((ACPI_DB_ALLOCATIONS,
+        "%s: Obj %p Current Refs=%X [To Be Decremented]\n",
+        ACPI_GET_FUNCTION_NAME, Object, Object->Common.ReferenceCount));
 
     /*
      * Decrement the reference count, and only actually delete the object

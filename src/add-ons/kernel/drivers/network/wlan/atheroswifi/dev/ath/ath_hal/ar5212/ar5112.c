@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5212/ar5112.c 225883 2011-09-30 05:17:57Z adrian $
  */
 #include "opt_ah.h"
 
@@ -279,7 +279,7 @@ ar5112SetRfRegs(struct ath_hal *ah,
 		ar5212ModifyRfBuffer(priv->Bank6Data, ob5GHz, 3, 279, 0);
 		ar5212ModifyRfBuffer(priv->Bank6Data, db5GHz, 3, 282, 0);
 	}
-	
+
 	/* Lower synth voltage for X112 Rev 2.0 only */
 	if (IS_RADX112_REV2(ah)) {
 		/* Non-Reversed analyg registers - so values are pre-reversed */
@@ -761,7 +761,7 @@ ar5112GetMinPower(struct ath_hal *ah, const EXPN_DATA_PER_CHANNEL_5112 *data)
 	retVal = minPwr - (minPcdac*2);
 	return(retVal);
 }
-	
+
 static HAL_BOOL
 ar5112GetChannelMaxMinPower(struct ath_hal *ah,
 	const struct ieee80211_channel *chan,

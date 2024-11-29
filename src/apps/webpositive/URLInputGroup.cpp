@@ -25,10 +25,13 @@
 
 #include "BaseURL.h"
 #include "BitmapButton.h"
+#include "BrowserWindow.h"
 #include "BrowsingHistory.h"
 #include "IconButton.h"
 #include "IconUtils.h"
 #include "TextViewCompleter.h"
+#include "WebView.h"
+#include "WebWindow.h"
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -147,7 +150,6 @@ public:
 	virtual						~URLTextView();
 
 	virtual	void				MessageReceived(BMessage* message);
-	virtual	void				FrameResized(float width, float height);
 	virtual	void				MouseDown(BPoint where);
 	virtual	void				KeyDown(const char* bytes, int32 numBytes);
 	virtual	void				MakeFocus(bool focused = true);
@@ -162,9 +164,6 @@ protected:
 									int32 inOffset,
 									const text_run_array* inRuns);
 	virtual	void				DeleteText(int32 fromOffset, int32 toOffset);
-
-private:
-			void				_AlignTextRect();
 
 private:
 			URLInputGroup*		fURLInputGroup;
@@ -183,6 +182,7 @@ URLInputGroup::URLTextView::URLTextView(URLInputGroup* parent)
 {
 	MakeResizable(true);
 	SetStylable(true);
+	SetInsets(be_control_look->DefaultLabelSpacing(), 2, 0, 2);
 	fURLAutoCompleter->SetModificationsReported(true);
 }
 
@@ -205,14 +205,6 @@ URLInputGroup::URLTextView::MessageReceived(BMessage* message)
 			BTextView::MessageReceived(message);
 			break;
 	}
-}
-
-
-void
-URLInputGroup::URLTextView::FrameResized(float width, float height)
-{
-	BTextView::FrameResized(width, height);
-	_AlignTextRect();
 }
 
 
@@ -382,17 +374,20 @@ URLInputGroup::URLTextView::InsertText(const char* inText, int32 inLength,
 
 	BFont font;
 	GetFont(&font);
-	const rgb_color black = (rgb_color) { 0, 0, 0, 255 };
-	const rgb_color gray = (rgb_color) { 60, 60, 60, 255 };
+	const rgb_color hostColor = ui_color(B_DOCUMENT_TEXT_COLOR);
+	const rgb_color urlColor = tint_color(hostColor,
+		(hostColor.IsDark() ? B_LIGHTEN_1_TINT : B_DARKEN_1_TINT));
 	if (baseUrlStart > 0)
-		SetFontAndColor(0, baseUrlStart, &font, B_FONT_ALL, &gray);
+		SetFontAndColor(0, baseUrlStart, &font, B_FONT_ALL, &urlColor);
 	if (baseUrlEnd > baseUrlStart) {
 		font.SetFace(B_BOLD_FACE);
-		SetFontAndColor(baseUrlStart, baseUrlEnd, &font, B_FONT_ALL, &black);
+		SetFontAndColor(baseUrlStart, baseUrlEnd, &font, B_FONT_ALL,
+			&hostColor);
 	}
 	if (baseUrlEnd < TextLength()) {
 		font.SetFace(B_REGULAR_FACE);
-		SetFontAndColor(baseUrlEnd, TextLength(), &font, B_FONT_ALL, &gray);
+		SetFontAndColor(baseUrlEnd, TextLength(), &font, B_FONT_ALL,
+			&urlColor);
 	}
 
 	fURLAutoCompleter->TextModified(fUpdateAutoCompleterChoices);
@@ -405,25 +400,6 @@ URLInputGroup::URLTextView::DeleteText(int32 fromOffset, int32 toOffset)
 	BTextView::DeleteText(fromOffset, toOffset);
 
 	fURLAutoCompleter->TextModified(fUpdateAutoCompleterChoices);
-}
-
-
-void
-URLInputGroup::URLTextView::_AlignTextRect()
-{
-	// Layout the text rect to be in the middle, normally this means there
-	// is one pixel spacing on each side.
-	BRect textRect(Bounds());
-	textRect.left = 0.0;
-	float vInset = max_c(1,
-		floorf((textRect.Height() - LineHeight(0)) / 2.0 + 0.5));
-	float hInset = kHorizontalTextRectInset;
-
-	if (be_control_look)
-		hInset = be_control_look->DefaultLabelSpacing();
-
-	textRect.InsetBy(hInset, vInset);
-	SetTextRect(textRect);
 }
 
 
@@ -526,7 +502,9 @@ public:
 	PageIconView()
 		:
 		BView("page icon view", B_WILL_DRAW | B_FULL_UPDATE_ON_RESIZE),
-		fIcon(NULL)
+		fIcon(NULL),
+		fClickPoint(-1, 0),
+		fPageIconSet(false)
 	{
 		SetDrawingMode(B_OP_ALPHA);
 		SetBlendingMode(B_PIXEL_ALPHA, B_ALPHA_OVERLAY);
@@ -566,21 +544,97 @@ public:
 		return MinSize();
 	}
 
+	void MouseDown(BPoint where)
+	{
+		int32 buttons;
+		if (Window()->CurrentMessage()->FindInt32("buttons", &buttons) == B_OK) {
+			if ((buttons & B_PRIMARY_MOUSE_BUTTON) != 0) {
+				// Memorize click point for dragging
+				fClickPoint = where;
+			}
+		}
+		return;
+	}
+
+	void MouseUp(BPoint where)
+	{
+		fClickPoint.x = -1;
+	}
+
+	virtual void MouseMoved(BPoint where, uint32 code, const BMessage* dragMessage)
+	{
+		if (dragMessage != NULL)
+			return;
+
+		if (fClickPoint.x >= 0
+			&& (fabs(where.x - fClickPoint.x) > 4 || fabs(where.y - fClickPoint.y) > 4)) {
+			// Start dragging
+			BPoint offset = fClickPoint - Frame().LeftTop();
+
+			const char* url = static_cast<URLInputGroup*>(Parent())->Text();
+			const char* title =
+				static_cast<BWebWindow*>(Window())->CurrentWebView()->MainFrameTitle();
+
+			// Validate the file name to be set for the clipping if user drags to Tracker.
+			BString fileName(title);
+			if (fileName.Length() == 0) {
+				fileName = url;
+				int32 leafPos = fileName.FindLast('/');
+				if (leafPos >= 0)
+					fileName.Remove(0, leafPos + 1);
+			}
+			fileName.ReplaceAll('/', '-');
+			fileName.Truncate(B_FILE_NAME_LENGTH - 1);
+
+			BBitmap miniIcon(BRect(0, 0, 15, 15), B_BITMAP_NO_SERVER_LINK,
+				B_CMAP8);
+			miniIcon.ImportBits(fIcon);
+			// TODO:  obtain and send the large icon in addition to the mini icon.
+			// Currently PageUserData does not provide a function that returns this.
+
+			BMessage drag(B_SIMPLE_DATA);
+			drag.AddInt32("be:actions", B_COPY_TARGET);
+			drag.AddString("be:clip_name", fileName.String());
+			drag.AddString("be:filetypes", "application/x-vnd.Be-bookmark");
+			// Support the "Passing Data via File" protocol
+			drag.AddString("be:types", B_FILE_MIME_TYPE);
+			BMessage data(B_SIMPLE_DATA);
+			data.AddString("url", url);
+			data.AddString("title", title);
+				// The title may differ from the validated filename
+			if (fPageIconSet == true) {
+				// Don't bother sending the placeholder web icon, if that is all we have.
+				data.AddData("miniIcon", B_COLOR_8_BIT_TYPE, &miniIcon, sizeof(miniIcon));
+			}
+			drag.AddMessage("be:originator-data", &data);
+
+			BBitmap* iconClone = new BBitmap(fIcon);
+				// Needed because DragMessage will delete the bitmap when it's done.
+
+			DragMessage(&drag, iconClone, B_OP_ALPHA, offset);
+		}
+		return;
+	}
+
 	void SetIcon(const BBitmap* icon)
 	{
 		delete fIcon;
-		if (icon)
+		if (icon) {
 			fIcon = new BBitmap(icon);
-		else {
+			fPageIconSet = true;
+		} else {
 			fIcon = new BBitmap(BRect(0, 0, 15, 15), B_RGB32);
 			BIconUtils::GetVectorIcon(kPlaceholderIcon,
 				sizeof(kPlaceholderIcon), fIcon);
+			fPageIconSet = false;
 		}
 		Invalidate();
 	}
 
 private:
 	BBitmap* fIcon;
+	BPoint fClickPoint;
+	bool fPageIconSet;
 };
 
 
@@ -606,7 +660,7 @@ URLInputGroup::URLInputGroup(BMessage* goMessage)
 // TODO: Fix in Haiku, no in-built support for archived BBitmaps from
 // resources?
 //	fGoButton = new BitmapButton("kActionGo", NULL);
-	fGoButton = new BitmapButton(kGoBitmapBits, kGoBitmapWidth,
+	fGoButton = new BBitmapButton(kGoBitmapBits, kGoBitmapWidth,
 		kGoBitmapHeight, kGoBitmapFormat, goMessage);
 	GroupLayout()->AddView(fGoButton, 0.0f);
 

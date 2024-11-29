@@ -96,6 +96,7 @@ public:
 			const BStringList&	Groups() const;
 
 			const BStringList&	PostInstallScripts() const;
+			const BStringList&	PreUninstallScripts() const;
 
 			const BObjectList<BPackageResolvable>&	ProvidesList() const;
 			const BObjectList<BPackageResolvableExpression>&
@@ -159,6 +160,9 @@ public:
 			void				ClearPostInstallScripts();
 			status_t			AddPostInstallScript(const BString& path);
 
+			void				ClearPreUninstallScripts();
+			status_t			AddPreUninstallScript(const BString& path);
+
 			void				ClearProvidesList();
 			status_t			AddProvides(const BPackageResolvable& provides);
 
@@ -197,6 +201,10 @@ public:
 	static	status_t			ParseVersionString(const BString& string,
 									bool revisionIsOptional,
 									BPackageVersion& _version,
+									ParseErrorListener* listener = NULL);
+	static	status_t			ParseResolvableString(
+									const BString& string,
+									BPackageResolvable& _expression,
 									ParseErrorListener* listener = NULL);
 	static	status_t			ParseResolvableExpressionString(
 									const BString& string,
@@ -297,6 +305,7 @@ private:
 			BStringList			fGroups;
 
 			BStringList			fPostInstallScripts;
+			BStringList			fPreUninstallScripts;
 
 			ResolvableList		fProvidesList;
 

@@ -1,42 +1,50 @@
-1	hungarian	x-vnd.Haiku-libbe	3337473349
+1	hungarian	x-vnd.Haiku-libbe	1445751563
+All Rights Reserved.	AboutWindow		Minden jog fenntartva.
+gold master	AboutWindow		arany fokozatú
+Undo	TextView		Visszavonás
+OK	PrintJob		Rendben
+OK	Dragger		Rendben
 gamma	AboutWindow		gamma
-beta	AboutWindow		béta
-%3.2f GiB	StringForSize		%3.2f GiB
-Written by:	AboutWindow		Írta:
+development	AboutWindow		fejlesztés
+{0, plural, one{%s byte/s} other{%s bytes/s}}	StringForRate	units per second	{0, plural, one{%s bájt/mp} other{%s bájt/mp}}
+Print Server is not responding.	PrintJob		A nyomtatókiszolgáló nem válaszol.
 About %app%	AboutMenuItem		%app% névjegye
+Warning	Dragger		Figyelmeztetés
+Green:	ColorControl		Zöld
+Redo	TextView		Újra
+No pages to print!	PrintJob		Nincs nyomtatható oldal!
+beta	AboutWindow		béta
+%s MiB	StringForSize	size unit	%s MiB
+OK	ZombieReplicantView		Rendben
 Cut	TextView		Kivágás
+Default	Default decorator about box		Alapértelmezett
+Can't delete this replicant from its original application. Life goes on.	Dragger		Nem lehet ezt a replikánst törölni az eredeti programtól.
+%s KiB	StringForSize	size unit	%s KiB
+Error	ZombieReplicantView		Hiba
+Paste	TextView		Beillesztés
+OK	AboutWindow		Rendben
+%s MiB/s	StringForRate	units per second	%s MiB/s
+Special Thanks:	AboutWindow		Külön köszönet:
+%s TiB	StringForSize	size unit	%s TiB
+Default Haiku window decorator.	Default decorator about box		Alapértelmezett Haiku ablak-dekoráció
+%s GiB	StringForSize	size unit	%s GiB
+%s B	StringForSize	size unit, narrow space	%s B
+Remove replicant	Dragger		Replikáns eltávolítása
 Version	AboutWindow		Verzió
-Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Nem lehet replikánst létrehozni ehhez: %description.\n%error
+Red:	ColorControl		Vörös
+<empty>	Menu		<üres>
 Copy	TextView		Másolás
-%3.2f KiB	StringForSize		%3.2f KiB
+Select all	TextView		Összes kijelölése
 alpha	AboutWindow		alfa
 Error	PrintJob		Hiba
-All Rights Reserved.	AboutWindow		Minden jog fenntartva.
-{0, plural, one{# byte} other{# bytes}}	StringForSize		{0, plural, one{# bájt} other{# bájt}}
-About %app%	AboutWindow		%app% névjegye
-No pages to print!	PrintJob		Nincs nyomtatható oldal!
-OK	Dragger		Rendben
-OK	PrintJob		Rendben
-Green:	ColorControl		Zöld:
-Version history:	AboutWindow		Előző verziók:
-Remove replicant	Dragger		Replikáns eltávolítása
-Select all	TextView		Összes kijelölése
-OK	AboutWindow		Rendben
-OK	ZombieReplicantView		Rendben
-Print Server is not responding.	PrintJob		A nyomtatókiszolgáló nem válaszol.
-Paste	TextView		Beillesztés
-Special Thanks:	AboutWindow		Külön köszönet:
-%.2f TiB	StringForSize		%.2f TiB
-Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		Nem található a replikánshoz tartozó program. Nincs megadva programaláírás.\n%error
-Redo	TextView		Újra
-<empty>	Menu		<üres>
-Warning	Dragger		Figyelmeztetés
-Undo	TextView		Visszavonás
-Red:	ColorControl		Vörös:
-%3.2f MiB	StringForSize		%3.2f MiB
+%s TiB/s	StringForRate	units per second	%s TiB/s
 About %app…	Dragger		%app névjegye…
-development	AboutWindow		fejlesztés
-Error	ZombieReplicantView		Hiba
-Blue:	ColorControl		Kék:
-gold master	AboutWindow		arany fokozatú
-Can't delete this replicant from its original application. Life goes on.	Dragger		Nem lehet ezt a replikánst törölni az eredeti programtól.
+About %app%	AboutWindow		%app% névjegye
+{0, plural, one{%s byte} other{%s bytes}}	StringForSize	size unit	{0, plural, one{%s bájt} other{%s bájt}}
+%s GiB/s	StringForRate	units per second	%s GiB/s
+Version history:	AboutWindow		Előző verziók:
+Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		Nem található a replikánshoz tartozó program. Nincs megadva programaláírás.\n%error
+%s KiB/s	StringForRate	units per second	%s KiB/s
+Blue:	ColorControl		Kék
+Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Nem lehet replikánst létrehozni ehhez: \"%description\".\n%error
+Written by:	AboutWindow		Írta:

@@ -1045,7 +1045,7 @@ Volume::GetVNodeName(void* _node, char* buffer, size_t bufferSize)
 	char* readBuffer = (char*)reply->buffer.GetData();
 	size_t nameLen = reply->buffer.GetSize();
 	nameLen = strnlen(readBuffer, nameLen);
-	if (nameLen <= 1 || nameLen >= bufferSize)
+	if (nameLen <= 0 || nameLen >= bufferSize)
 		RETURN_ERROR(B_BAD_DATA);
 
 	memcpy(buffer, readBuffer, nameLen);
@@ -2103,7 +2103,7 @@ Volume::Close(void* node, void* cookie)
 	status_t error = _Close(node, cookie);
 	if (error != B_OK && fFileSystem->GetPortPool()->IsDisconnected()) {
 		// This isn't really necessary, as the return value is irrelevant to
-		// the VFS. OBOS ignores it completely. The fsshell returns it to the
+		// the VFS. Haiku ignores it completely. The fsshell returns it to the
 		// userland, but considers the node closed anyway.
 		WARN(("Volume::Close(): connection lost, forcing close\n"));
 		return B_OK;
@@ -2119,7 +2119,7 @@ Volume::FreeCookie(void* node, void* cookie)
 	bool disconnected = false;
 	if (error != B_OK && fFileSystem->GetPortPool()->IsDisconnected()) {
 		// This isn't really necessary, as the return value is irrelevant to
-		// the VFS. It's completely ignored by OBOS as well as by the fsshell.
+		// the VFS. It's completely ignored by Haiku as well as by the fsshell.
 		WARN(("Volume::FreeCookie(): connection lost, forcing free cookie\n"));
 		error = B_OK;
 		disconnected = true;
@@ -2179,8 +2179,11 @@ Volume::Read(void* _node, void* cookie, off_t pos, void* buffer,
 		|| reply->bytesRead > bufferSize) {
 		return B_BAD_DATA;
 	}
-	if (reply->bytesRead > 0)
-		memcpy(buffer, readBuffer, reply->bytesRead);
+	if (reply->bytesRead > 0
+		&& user_memcpy(buffer, readBuffer, reply->bytesRead) < B_OK) {
+		return B_BAD_ADDRESS;
+	}
+
 	*bytesRead = reply->bytesRead;
 	_SendReceiptAck(port);
 	return error;
@@ -2375,7 +2378,7 @@ Volume::CloseDir(void* node, void* cookie)
 	status_t error = _CloseDir(node, cookie);
 	if (error != B_OK && fFileSystem->GetPortPool()->IsDisconnected()) {
 		// This isn't really necessary, as the return value is irrelevant to
-		// the VFS. OBOS ignores it completely. The fsshell returns it to the
+		// the VFS. Haiku ignores it completely. The fsshell returns it to the
 		// userland, but considers the node closed anyway.
 		WARN(("Volume::CloseDir(): connection lost, forcing close dir\n"));
 		return B_OK;
@@ -2391,7 +2394,7 @@ Volume::FreeDirCookie(void* node, void* cookie)
 	bool disconnected = false;
 	if (error != B_OK && fFileSystem->GetPortPool()->IsDisconnected()) {
 		// This isn't really necessary, as the return value is irrelevant to
-		// the VFS. It's completely ignored by OBOS as well as by the fsshell.
+		// the VFS. It's completely ignored by Haiku as well as by the fsshell.
 		WARN(("Volume::FreeDirCookie(): connection lost, forcing free dir "
 			"cookie\n"));
 		error = B_OK;
@@ -2563,7 +2566,7 @@ Volume::CloseAttrDir(void* node, void* cookie)
 	status_t error = _CloseAttrDir(node, cookie);
 	if (error != B_OK && fFileSystem->GetPortPool()->IsDisconnected()) {
 		// This isn't really necessary, as the return value is irrelevant to
-		// the VFS. OBOS ignores it completely. The fsshell returns it to the
+		// the VFS. Haiku ignores it completely. The fsshell returns it to the
 		// userland, but considers the node closed anyway.
 		WARN(("Volume::CloseAttrDir(): connection lost, forcing close attr "
 			"dir\n"));
@@ -2580,7 +2583,7 @@ Volume::FreeAttrDirCookie(void* node, void* cookie)
 	bool disconnected = false;
 	if (error != B_OK && fFileSystem->GetPortPool()->IsDisconnected()) {
 		// This isn't really necessary, as the return value is irrelevant to
-		// the VFS. It's completely ignored by OBOS as well as by the fsshell.
+		// the VFS. It's completely ignored by Haiku as well as by the fsshell.
 		WARN(("Volume::FreeAttrDirCookie(): connection lost, forcing free attr "
 			"dir cookie\n"));
 		error = B_OK;
@@ -2802,7 +2805,7 @@ Volume::CloseAttr(void* node, void* cookie)
 	status_t error = _CloseAttr(node, cookie);
 	if (error != B_OK && fFileSystem->GetPortPool()->IsDisconnected()) {
 		// This isn't really necessary, as the return value is irrelevant to
-		// the VFS. OBOS ignores it completely. The fsshell returns it to the
+		// the VFS. Haiku ignores it completely. The fsshell returns it to the
 		// userland, but considers the node closed anyway.
 		WARN(("Volume::CloseAttr(): connection lost, forcing close attr\n"));
 		return B_OK;
@@ -2818,7 +2821,7 @@ Volume::FreeAttrCookie(void* node, void* cookie)
 	bool disconnected = false;
 	if (error != B_OK && fFileSystem->GetPortPool()->IsDisconnected()) {
 		// This isn't really necessary, as the return value is irrelevant to
-		// the VFS. It's completely ignored by OBOS as well as by the fsshell.
+		// the VFS. It's completely ignored by Haiku as well as by the fsshell.
 		WARN(("Volume::FreeAttrCookie(): connection lost, forcing free attr "
 			"cookie\n"));
 		error = B_OK;
@@ -2879,8 +2882,10 @@ Volume::ReadAttr(void* _node, void* cookie, off_t pos,
 		|| reply->bytesRead > bufferSize) {
 		return B_BAD_DATA;
 	}
-	if (reply->bytesRead > 0)
-		memcpy(buffer, readBuffer, reply->bytesRead);
+	if (reply->bytesRead > 0
+		&& user_memcpy(buffer, readBuffer, reply->bytesRead) < B_OK) {
+		return B_BAD_ADDRESS;
+	}
 	*bytesRead = reply->bytesRead;
 	_SendReceiptAck(port);
 	return error;
@@ -3163,7 +3168,7 @@ Volume::CloseIndexDir(void* cookie)
 	status_t error = _CloseIndexDir(cookie);
 	if (error != B_OK && fFileSystem->GetPortPool()->IsDisconnected()) {
 		// This isn't really necessary, as the return value is irrelevant to
-		// the VFS. OBOS ignores it completely. The fsshell returns it to the
+		// the VFS. Haiku ignores it completely. The fsshell returns it to the
 		// userland, but considers the node closed anyway.
 		WARN(("Volume::CloseIndexDir(): connection lost, forcing close "
 			"index dir\n"));
@@ -3180,7 +3185,7 @@ Volume::FreeIndexDirCookie(void* cookie)
 	bool disconnected = false;
 	if (error != B_OK && fFileSystem->GetPortPool()->IsDisconnected()) {
 		// This isn't really necessary, as the return value is irrelevant to
-		// the VFS. It's completely ignored by OBOS as well as by the fsshell.
+		// the VFS. It's completely ignored by Haiku as well as by the fsshell.
 		WARN(("Volume::FreeIndexDirCookie(): connection lost, forcing free "
 			"index dir cookie\n"));
 		error = B_OK;
@@ -3471,7 +3476,7 @@ Volume::CloseQuery(void* cookie)
 	status_t error = _CloseQuery(cookie);
 	if (error != B_OK && fFileSystem->GetPortPool()->IsDisconnected()) {
 		// This isn't really necessary, as the return value is irrelevant to
-		// the VFS. OBOS ignores it completely. The fsshell returns it to the
+		// the VFS. Haiku ignores it completely. The fsshell returns it to the
 		// userland, but considers the node closed anyway.
 		WARN(("Volume::CloseQuery(): connection lost, forcing close query\n"));
 		return B_OK;
@@ -3487,7 +3492,7 @@ Volume::FreeQueryCookie(void* cookie)
 	bool disconnected = false;
 	if (error != B_OK && fFileSystem->GetPortPool()->IsDisconnected()) {
 		// This isn't really necessary, as the return value is irrelevant to
-		// the VFS. It's completely ignored by OBOS as well as by the fsshell.
+		// the VFS. It's completely ignored by Haiku as well as by the fsshell.
 		WARN(("Volume::FreeQueryCookie(): connection lost, forcing free "
 			"query cookie\n"));
 		error = B_OK;
@@ -4436,7 +4441,7 @@ Volume::_IncrementVNodeCount(ino_t vnid)
 	}
 
 	vnode->useCount++;
-//PRINT(("_IncrementVNodeCount(%Ld): count: %ld, fVNodeCountMap size: %ld\n", vnid, *count, fVNodeCountMap->Size()));
+//PRINT(("_IncrementVNodeCount(%lld): count: %ld, fVNodeCountMap size: %ld\n", vnid, *count, fVNodeCountMap->Size()));
 }
 
 
@@ -4457,7 +4462,7 @@ Volume::_DecrementVNodeCount(ino_t vnid)
 	}
 
 	vnode->useCount--;
-//PRINT(("_DecrementVNodeCount(%Ld): count: %ld, fVNodeCountMap size: %ld\n", vnid, tmpCount, fVNodeCountMap->Size()));
+//PRINT(("_DecrementVNodeCount(%lld): count: %ld, fVNodeCountMap size: %ld\n", vnid, tmpCount, fVNodeCountMap->Size()));
 }
 
 

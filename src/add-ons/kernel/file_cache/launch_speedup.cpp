@@ -398,7 +398,7 @@ Session::Session(team_id team, const char *name, dev_t device,
 	fNodeRef.device = device;
 	fNodeRef.node = node;
 
-	TRACE(("start session %ld:%Ld \"%s\", system_time: %Ld, active until: %Ld\n",
+	TRACE(("start session %ld:%lld \"%s\", system_time: %lld, active until: %lld\n",
 		device, node, Name(), system_time(), fActiveUntil));
 }
 
@@ -589,7 +589,7 @@ Session::Save()
 
 	char name[B_OS_NAME_LENGTH + 25];
 	if (!IsMainSession()) {
-		snprintf(name, sizeof(name), "/etc/launch_cache/%ld:%Ld %s",
+		snprintf(name, sizeof(name), "/etc/launch_cache/%ld:%lld %s",
 			fNodeRef.device, fNodeRef.node, Name());
 	} else
 		snprintf(name, sizeof(name), "/etc/launch_cache/%s", Name());
@@ -610,7 +610,7 @@ Session::Save()
 	NodeTable::Iterator iterator(fNodeHash);
 	while (iterator.HasNext()) {
 		struct node *node = iterator.Next();
-		snprintf(name, sizeof(name), "%ld:%Ld\n", node->ref.device, node->ref.node);
+		snprintf(name, sizeof(name), "%ld:%lld\n", node->ref.device, node->ref.node);
 
 		ssize_t bytesWritten = write(fd, name, strlen(name));
 		if (bytesWritten < B_OK) {
@@ -709,7 +709,7 @@ SessionGetter::Stop()
 
 
 static void
-node_opened(struct vnode *vnode, int32 fdType, dev_t device, ino_t parent,
+node_opened(struct vnode *vnode, dev_t device, ino_t parent,
 	ino_t node, const char *name, off_t size)
 {
 	if (device < gBootDevice) {
@@ -744,7 +744,7 @@ node_opened(struct vnode *vnode, int32 fdType, dev_t device, ino_t parent,
 
 
 static void
-node_closed(struct vnode *vnode, int32 fdType, dev_t device, ino_t node,
+node_closed(struct vnode *vnode, dev_t device, ino_t node,
 	int32 accessType)
 {
 	Session *session;
@@ -790,7 +790,7 @@ launch_speedup_control(const char *subsystem, uint32 function,
 				return B_BAD_VALUE;
 
 			if (!strcmp(name, "system boot"))
-				dprintf("STOP BOOT %Ld\n", system_time());
+				dprintf("STOP BOOT %lld\n", system_time());
 
 			sMainSession->Lock();
 			stop_session(sMainSession);
@@ -872,7 +872,7 @@ init()
 
 	sMainSession = start_session(-1, -1, -1, "system boot");
 	sMainSession->Unlock();
-	dprintf("START BOOT %Ld\n", system_time());
+	dprintf("START BOOT %lld\n", system_time());
 	return B_OK;
 
 err3:

@@ -27,8 +27,8 @@
 #include <NetServer.h>
 
 extern "C" {
-#	include <freebsd11_network/compat/sys/cdefs.h>
-#	include <freebsd11_network/compat/sys/ioccom.h>
+#	include <freebsd_network/compat/sys/cdefs.h>
+#	include <freebsd_network/compat/sys/ioccom.h>
 #	include <net80211/ieee80211_ioctl.h>
 }
 
@@ -367,10 +367,16 @@ configure_wireless(const char* name, char* const* args, int32 argCount)
 				}
 			} else {
 				// list them all
-				wireless_network network;
-				uint32 cookie = 0;
-				while (device.GetNextNetwork(cookie, network) == B_OK)
-					show_wireless_network(network, verbose);
+				uint32 networksCount = 0;
+				wireless_network* networks = NULL;
+				status_t status = device.GetNetworks(networks, networksCount);
+				if (status != B_OK) {
+					fprintf(stderr, "%s: Getting networks failed: %s\n",
+						kProgramName, strerror(status));
+				}
+				for (uint32 i = 0; i < networksCount; i++)
+					show_wireless_network(networks[i], verbose);
+				delete[] networks;
 			}
 			break;
 		}
@@ -592,7 +598,7 @@ list_interface(const char* name)
 					first = false;
 				}
 				putchar(' ');
-				printf(kFlags[i].name);
+				fputs(kFlags[i].name, stdout);
 			}
 		}
 	}
@@ -603,11 +609,11 @@ list_interface(const char* name)
 
 	ifreq_stats stats;
 	if (interface.GetStats(stats) == B_OK) {
-		printf("\tReceive: %d packets, %d errors, %Ld bytes, %d mcasts, %d "
+		printf("\tReceive: %d packets, %d errors, %" B_PRId64 " bytes, %d mcasts, %d "
 			"dropped\n", stats.receive.packets, stats.receive.errors,
 			stats.receive.bytes, stats.receive.multicast_packets,
 			stats.receive.dropped);
-		printf("\tTransmit: %d packets, %d errors, %Ld bytes, %d mcasts, %d "
+		printf("\tTransmit: %d packets, %d errors, %" B_PRId64 " bytes, %d mcasts, %d "
 			"dropped\n", stats.send.packets, stats.send.errors,
 			stats.send.bytes, stats.send.multicast_packets, stats.send.dropped);
 		printf("\tCollisions: %d\n", stats.collisions);
@@ -688,8 +694,18 @@ configure_interface(const char* name, char* const* args, int32 argCount)
 
 	int32 i = 0;
 	int family = get_address_family(args[i]);
-	if (family != AF_UNSPEC)
+	if (family != AF_UNSPEC) {
 		i++;
+
+		int socket = ::socket(family, SOCK_DGRAM, 0);
+		if (socket < 0) {
+			fprintf(stderr, "%s: The requested address family is not available.\n",
+				kProgramName);
+			exit(1);
+		}
+		close(socket);
+	}
+
 
 	// try to parse address
 

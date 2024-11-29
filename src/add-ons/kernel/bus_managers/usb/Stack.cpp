@@ -11,16 +11,18 @@
 #include <module.h>
 #include <unistd.h>
 #include <util/kernel_cpp.h>
+#include <util/AutoLock.h>
+
 #include "usb_private.h"
 #include "PhysicalMemoryAllocator.h"
 
 #include <fs/devfs.h>
+#include <kdevice_manager.h>
 
 
 Stack::Stack()
 	:	fExploreThread(-1),
-		fFirstExploreDone(false),
-		fStopThreads(false),
+		fExploreSem(-1),
 		fAllocator(NULL),
 		fObjectIndex(1),
 		fObjectMaxCount(1024),
@@ -31,6 +33,11 @@ Stack::Stack()
 
 	mutex_init(&fStackLock, "usb stack lock");
 	mutex_init(&fExploreLock, "usb explore lock");
+	fExploreSem = create_sem(0, "usb explore sem");
+	if (fExploreSem < B_OK) {
+		TRACE_ERROR("failed to create semaphore\n");
+		return;
+	}
 
 	size_t objectArraySize = fObjectMaxCount * sizeof(Object *);
 	fObjectArray = (Object **)malloc(objectArraySize);
@@ -50,65 +57,17 @@ Stack::Stack()
 		return;
 	}
 
-	// Check for host controller modules
-	// While using a fixed list of names is inflexible it allows us to control
-	// the order in which we try modules. There are controllers/BIOSes that
-	// require UHCI/OHCI to be initialized before EHCI or otherwise they
-	// refuse to publish any high-speed devices.
-	// On other systems the ordering is probably ensured because the EHCI
-	// controller is required to have a higher PCI function number than the
-	// companion host controllers (per the EHCI specs) and it would therefore
-	// be enumerated as the last item. As this does not apply to us we have to
-	// ensure ordering using another method.
-	// Intel Lynx Point and Panther Point chipsets have ports shared between
-	// EHCI and XHCI, defaulting to EHCI. The XHCI module will switch USB 2.0
-	// ports before the EHCI module discovers them.
-	const char *moduleNames[] = {
-		"busses/usb/xhci",
-		"busses/usb/uhci",
-		"busses/usb/ohci",
-		"busses/usb/ehci",
-		NULL
-	};
-
-	TRACE("looking for host controller modules\n");
-	for (uint32 i = 0; moduleNames[i]; i++) {
-		TRACE("looking for module %s\n", moduleNames[i]);
-
-		usb_host_controller_info *module = NULL;
-		if (get_module(moduleNames[i], (module_info **)&module) != B_OK)
-			continue;
-
-		TRACE("adding module %s\n", moduleNames[i]);
-		if (module->add_to(this) < B_OK) {
-			put_module(moduleNames[i]);
-			continue;
-		}
-
-		TRACE("module %s successfully loaded\n", moduleNames[i]);
-	}
-
-	if (fBusManagers.Count() == 0) {
-		TRACE_ERROR("no bus managers available\n");
-		return;
-	}
-
 	fExploreThread = spawn_kernel_thread(ExploreThread, "usb explore",
 		B_LOW_PRIORITY, this);
 	resume_thread(fExploreThread);
-
-	// wait for the first explore to complete. this ensures that a driver that
-	// is opening the module does not get rescanned while or before installing
-	// its hooks.
-	while (!fFirstExploreDone)
-		snooze(10000);
 }
 
 
 Stack::~Stack()
 {
 	int32 result;
-	fStopThreads = true;
+	delete_sem(fExploreSem);
+	fExploreSem = -1;
 	wait_for_thread(fExploreThread, &result);
 
 	mutex_lock(&fStackLock);
@@ -130,9 +89,7 @@ Stack::~Stack()
 status_t
 Stack::InitCheck()
 {
-	if (fBusManagers.Count() == 0)
-		return ENODEV;
-	return B_OK;
+	return (fExploreThread >= 0) ? B_OK : B_NO_INIT;
 }
 
 
@@ -154,7 +111,7 @@ usb_id
 Stack::GetUSBID(Object *object)
 {
 	if (!Lock())
-		return 0;
+		return fObjectMaxCount;
 
 	uint32 id = fObjectIndex;
 	uint32 tries = fObjectMaxCount;
@@ -169,25 +126,43 @@ Stack::GetUSBID(Object *object)
 		id = (id + 1) % fObjectMaxCount;
 	}
 
-	TRACE_ERROR("the stack did run out of usb_ids\n");
+	TRACE_ERROR("the stack has run out of usb_ids\n");
 	Unlock();
 	return 0;
 }
 
 
 void
-Stack::PutUSBID(usb_id id)
+Stack::PutUSBID(Object *object)
 {
 	if (!Lock())
 		return;
 
+	usb_id id = object->USBID();
 	if (id >= fObjectMaxCount) {
 		TRACE_ERROR("tried to put an invalid usb_id\n");
 		Unlock();
 		return;
 	}
+	if (fObjectArray[id] != object) {
+		TRACE_ERROR("tried to put an object with incorrect usb_id\n");
+		Unlock();
+		return;
+	}
 
 	fObjectArray[id] = NULL;
+
+#if KDEBUG
+	// Validate that no children of this object are still in the stack.
+	for (usb_id i = 0; i < fObjectMaxCount; i++) {
+		if (fObjectArray[i] == NULL)
+			continue;
+
+		ASSERT_PRINT(fObjectArray[i]->Parent() != object,
+			"%s", fObjectArray[i]->TypeName());
+	}
+#endif
+
 	Unlock();
 }
 
@@ -206,6 +181,9 @@ Stack::GetObject(usb_id id)
 
 	Object *result = fObjectArray[id];
 
+	if (result != NULL)
+		result->AcquireReference();
+
 	Unlock();
 	return result;
 }
@@ -214,6 +192,7 @@ Stack::GetObject(usb_id id)
 Object *
 Stack::GetObjectNoLock(usb_id id) const
 {
+	ASSERT(debug_debugger_running());
 	if (id >= fObjectMaxCount)
 		return NULL;
 	return fObjectArray[id];
@@ -225,35 +204,9 @@ Stack::ExploreThread(void *data)
 {
 	Stack *stack = (Stack *)data;
 
-	while (!stack->fStopThreads) {
-		if (mutex_lock(&stack->fExploreLock) != B_OK)
-			break;
-
-		rescan_item *rescanList = NULL;
-		change_item *changeItem = NULL;
-		for (int32 i = 0; i < stack->fBusManagers.Count(); i++) {
-			Hub *rootHub = stack->fBusManagers.ElementAt(i)->GetRootHub();
-			if (rootHub)
-				rootHub->Explore(&changeItem);
-		}
-
-		while (changeItem) {
-			stack->NotifyDeviceChange(changeItem->device, &rescanList, changeItem->added);
-			if (!changeItem->added) {
-				// everyone possibly holding a reference is now notified so we
-				// can delete the device
-				changeItem->device->GetBusManager()->FreeDevice(changeItem->device);
-			}
-
-			change_item *next = changeItem->link;
-			delete changeItem;
-			changeItem = next;
-		}
-
-		stack->fFirstExploreDone = true;
-		mutex_unlock(&stack->fExploreLock);
-		stack->RescanDrivers(rescanList);
-		snooze(USB_DELAY_HUB_EXPLORE);
+	while (acquire_sem_etc(stack->fExploreSem, 1, B_RELATIVE_TIMEOUT,
+			USB_DELAY_HUB_EXPLORE) != B_BAD_SEM_ID) {
+		stack->Explore();
 	}
 
 	return B_OK;
@@ -261,14 +214,69 @@ Stack::ExploreThread(void *data)
 
 
 void
+Stack::Explore()
+{
+	recursive_lock* dmLock = device_manager_get_lock();
+	if (find_thread(NULL) != fExploreThread
+			&& RECURSIVE_LOCK_HOLDER(dmLock) == find_thread(NULL)) {
+		// This should only happen during the initial device scan, during which
+		// we should be able to acquire the explore lock immediately (since the
+		// explore thread will be waiting on the device manager lock as below),
+		// but in case we aren't, use a timeout to avoid lock-order-inversion deadlocks.
+		if (mutex_lock_with_timeout(&fExploreLock, B_RELATIVE_TIMEOUT, 1000) != B_OK) {
+			release_sem(fExploreSem);
+			return;
+		}
+	} else {
+		// Temporarily acquire the device manager lock, to ensure it isn't scanning.
+		RecursiveLocker dmLocker(dmLock);
+
+		if (mutex_lock(&fExploreLock) != B_OK)
+			return;
+
+		dmLocker.Unlock();
+	}
+
+	int32 semCount = 0;
+	get_sem_count(fExploreSem, &semCount);
+	if (semCount > 0)
+		acquire_sem_etc(fExploreSem, semCount, B_RELATIVE_TIMEOUT, 0);
+
+	rescan_item *rescanList = NULL;
+	change_item *changeItem = NULL;
+	for (int32 i = 0; i < fBusManagers.Count(); i++) {
+		Hub *rootHub = fBusManagers.ElementAt(i)->GetRootHub();
+		if (rootHub)
+			rootHub->Explore(&changeItem);
+	}
+
+	while (changeItem) {
+		NotifyDeviceChange(changeItem->device, &rescanList, changeItem->added);
+		if (!changeItem->added) {
+			// everyone possibly holding a reference is now notified so we
+			// can delete the device
+			changeItem->device->GetBusManager()->FreeDevice(changeItem->device);
+		}
+
+		change_item *next = changeItem->link;
+		delete changeItem;
+		changeItem = next;
+	}
+
+	mutex_unlock(&fExploreLock);
+	RescanDrivers(rescanList);
+}
+
+void
 Stack::AddBusManager(BusManager *busManager)
 {
+	MutexLocker _(fExploreLock);
 	fBusManagers.PushBack(busManager);
 }
 
 
 int32
-Stack::IndexOfBusManager(BusManager *busManager)
+Stack::IndexOfBusManager(BusManager *busManager) const
 {
 	return fBusManagers.IndexOf(busManager);
 }
@@ -306,7 +314,7 @@ Stack::AllocateArea(void **logicalAddress, phys_addr_t *physicalAddress, size_t 
 	void *logAddress;
 	size = (size + B_PAGE_SIZE - 1) & ~(B_PAGE_SIZE - 1);
 	area_id area = create_area(name, &logAddress, B_ANY_KERNEL_ADDRESS, size,
-		B_32_BIT_CONTIGUOUS, 0);
+		B_32_BIT_CONTIGUOUS, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA);
 		// TODO: Use B_CONTIGUOUS when the TODOs regarding 64 bit physical
 		// addresses are fixed (if possible).
 
@@ -531,3 +539,4 @@ Stack::UninstallNotify(const char *driverName)
 
 	return B_NAME_NOT_FOUND;
 }
+

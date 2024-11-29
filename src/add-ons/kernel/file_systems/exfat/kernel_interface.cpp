@@ -26,6 +26,7 @@
 #include <NodeMonitor.h>
 #include <StorageDefs.h>
 #include <util/AutoLock.h>
+#include <file_systems/fs_ops_support.h>
 
 #include "DirectoryIterator.h"
 #include "exfat.h"
@@ -70,6 +71,7 @@ iterative_io_finished_hook(void* cookie, io_request* request, status_t status,
 {
 	Inode* inode = (Inode*)cookie;
 	rw_lock_read_unlock(inode->Lock());
+	put_vnode(inode->GetVolume()->FSVolume(), inode->ID());
 	return B_OK;
 }
 
@@ -96,9 +98,9 @@ exfat_identify_partition(int fd, partition_data* partition, void** _cookie)
 	uint32 rootDirCluster = superBlock.RootDirCluster();
 	uint32 blockSize = 1 << superBlock.BlockShift();
 	uint32 clusterSize = blockSize << superBlock.BlocksPerClusterShift();
-	uint64 rootDirectoryOffset = (uint64)(EXFAT_SUPER_BLOCK_OFFSET
-		+ superBlock.FirstDataBlock() * blockSize
-		+ (rootDirCluster - 2) * clusterSize);
+	uint64 rootDirectoryOffset = EXFAT_SUPER_BLOCK_OFFSET
+		+ (uint64)superBlock.FirstDataBlock() * blockSize
+		+ (rootDirCluster - 2) * clusterSize;
 	struct exfat_entry entry;
 	size_t entrySize = sizeof(struct exfat_entry);
 	for (uint32 i = 0; read_pos(fd, rootDirectoryOffset + i * entrySize,
@@ -327,6 +329,8 @@ exfat_io(fs_volume* _volume, fs_vnode* _node, void* _cookie,
 	// We lock the node here and will unlock it in the "finished" hook.
 	rw_lock_read_lock(inode->Lock());
 
+	acquire_vnode(_volume, inode->ID());
+
 	return do_iterative_fd_io(volume->Device(), request,
 		iterative_io_get_vecs_hook, iterative_io_finished_hook, inode);
 }
@@ -397,10 +401,13 @@ exfat_lookup(fs_volume* _volume, fs_vnode* _directory, const char* name,
 	status = DirectoryIterator(directory).Lookup(name, strlen(name), _vnodeID);
 	if (status != B_OK) {
 		ERROR("exfat_lookup: name %s (%s)\n", name, strerror(status));
+		if (status == B_ENTRY_NOT_FOUND)
+			entry_cache_add_missing(volume->ID(), directory->ID(), name);
 		return status;
 	}
 
 	TRACE("exfat_lookup: ID %" B_PRIdINO "\n", *_vnodeID);
+	entry_cache_add(volume->ID(), directory->ID(), name, *_vnodeID);
 
 	return get_vnode(volume->FSVolume(), *_vnodeID, NULL);
 }
@@ -534,7 +541,18 @@ exfat_read_link(fs_volume *_volume, fs_vnode *_node, char *buffer,
 	size_t *_bufferSize)
 {
 	Inode* inode = (Inode*)_node->private_node;
-	return inode->ReadAt(0, (uint8*)buffer, _bufferSize);
+
+	if (!inode->IsSymLink())
+		return B_BAD_VALUE;
+
+	status_t result = inode->ReadAt(0, reinterpret_cast<uint8*>(buffer),
+		_bufferSize);
+	if (result != B_OK)
+		return result;
+
+	*_bufferSize = inode->Size();
+
+	return B_OK;
 }
 
 
@@ -576,7 +594,7 @@ exfat_read_dir(fs_volume *_volume, fs_vnode *_node, void *_cookie,
 
 	while (count < maxCount && bufferSize > sizeof(struct dirent)) {
 		ino_t id;
-		size_t length = bufferSize - sizeof(struct dirent) + 1;
+		size_t length = bufferSize - offsetof(struct dirent, d_name);
 
 		status_t status = iterator->GetNext(dirent->d_name, &length, &id);
 		if (status == B_ENTRY_NOT_FOUND)
@@ -594,10 +612,8 @@ exfat_read_dir(fs_volume *_volume, fs_vnode *_node, void *_cookie,
 
 		dirent->d_dev = volume->ID();
 		dirent->d_ino = id;
-		dirent->d_reclen = sizeof(struct dirent) + length;
 
-		bufferSize -= dirent->d_reclen;
-		dirent = (struct dirent*)((uint8*)dirent + dirent->d_reclen);
+		dirent = next_dirent(dirent, length, bufferSize);
 		count++;
 	}
 

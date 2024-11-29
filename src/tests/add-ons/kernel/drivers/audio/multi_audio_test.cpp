@@ -11,11 +11,7 @@
 #include <unistd.h>
 #include <math.h>
 
-#ifdef HAIKU_MULTI_AUDIO
-#	include <hmulti_audio.h>
-#else
-#	include <multi_audio.h>
-#endif
+#include <hmulti_audio.h>
 
 #include "argv.h"
 
@@ -160,7 +156,7 @@ get_kind_name(uint32 kind)
 			return "bus-in";
 		case B_MULTI_AUX_BUS:
 			return "bus-aux";
-		
+
 		default:
 			return "unknown";
 	}
@@ -381,6 +377,7 @@ do_play(int argc, char** argv)
 		if (ioctl(sDevice, B_MULTI_BUFFER_EXCHANGE, &bufferInfo,
 				sizeof(multi_buffer_list)) < B_OK) {
 			printf("Getting buffers failed: %s\n", strerror(errno));
+			continue;
 		}
 
 		// fill buffer with data
@@ -411,7 +408,7 @@ do_play(int argc, char** argv)
 		exchanged++;
 	}
 
-	printf("%ld buffers exchanged while playing (%lu frames played (%Ld)).\n",
+	printf("%ld buffers exchanged while playing (%lu frames played (%lld)).\n",
 		exchanged, x, bufferInfo.played_frames_count);
 
 	// clear buffers

@@ -1,5 +1,5 @@
 /*
- * Copyright 2012, Haiku Inc. All rights reserved.
+ * Copyright 2012-2022, Haiku Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -7,19 +7,20 @@
  *
  */
 
+#include <arch/arm/arch_cpu_defs.h>
+
 #include <asm_defs.h>
 
-#define CPSR_MODE_MASK	0x1f
-#define CPSR_MODE_USR	0x10
-#define CPSR_MODE_FIQ	0x11
-#define CPSR_MODE_IRQ	0x12
-#define CPSR_MODE_SVC	0x13
-#define CPSR_MODE_ABT	0x17
-#define CPSR_MODE_UND	0x1b
+
+.macro DISABLE_INTERRUPTS
+	mrs		r0, cpsr
+	orr		r0, r0, #(CPSR_I | CPSR_F)
+	msr		cpsr_c, r0
+.endm
 
 /* The following two macros are taken from FreeBSD... */
 
-.macro PUSHFRAMEINSVC
+.macro PUSH_FRAME_IN_SVC
 	stmdb	sp, {r0-r3}					/* Save 4 registers */
 	mov		r0, lr						/* Save xxx32 r14 */
 	mov		r1, sp						/* Save xxx32 sp */
@@ -43,13 +44,37 @@
 	str		r0, [sp, #-4]!				/* Save spsr */
 .endm
 
-.macro PULLFRAMEFROMSVCANDEXIT
+.macro PULL_FRAME_FROM_SVC_AND_EXIT
 	ldr		r0, [sp], #0x0004			/* Get the SPSR from stack */
 	msr		spsr, r0					/* restore SPSR */
 	ldmia	sp, {r0-r14}^				/* Restore registers (usr mode) */
 	mov		r0, r0						/* NOP for previous instruction */
 	add		sp, sp, #(4*15)				/* Adjust the stack pointer */
 	ldmia	sp, {sp, lr, pc}^			/* Restore lr and exit */
+.endm
+
+/* The following two macros are adapted from the two macros above, taken from FreeBSD. */
+
+.macro	PUSH_FRAME
+	str		lr, [sp, #-4]!				/* Push the return address */
+	sub		sp, sp, #(4*17)				/* Adjust the stack pointer */
+	stmia	sp, {r0-r12}				/* Store the general purpose registers */
+	add		r0, sp, #(4*13)				/* Adjust the stack pointer */
+	stmia	r0, {r13-r14}^				/* Store the user mode sp and lr registers */
+	mrs		r0, spsr					/* Store the SPSR */
+	str		r0, [sp, #-4]!
+	mov		r0, #0						/* Fill in svc mode sp and lr with zeroes */
+	str		r0, [sp, #(4*16)]
+	str		r0, [sp, #(4*17)]
+.endm
+
+.macro	PULL_FRAME_AND_EXIT
+	ldr		r0, [sp], #4				/* Get SPSR from stack */
+	msr		spsr, r0
+	ldmia	sp, {r0-r14}^				/* Restore user mode registers */
+	add		sp, sp, #(4*17)				/* Adjust the stack pointer */
+	ldr		lr, [sp], #4				/* Pull the return address */
+	movs	pc, lr						/* Return to user mode */
 .endm
 
 .text
@@ -93,6 +118,9 @@ _arm_fiq:
 
 .globl _vectors_end
 _vectors_end:
+
+.data
+
 	.rept	64
 	.word	0xdeadbeef
 	.endr
@@ -125,24 +153,29 @@ und_stack:
 	.word	. - 4
 	.word	0xccccdddd
 
+.text
 
 FUNCTION(arm_undefined):
-	PUSHFRAMEINSVC
+	PUSH_FRAME_IN_SVC
 
-	mov	r0, sp
-	bl	arch_arm_undefined
+	mov		r0, sp		/* iframe */
+	mov		fp, r0
+	bl		arch_arm_undefined
 
-	PULLFRAMEFROMSVCANDEXIT
+	DISABLE_INTERRUPTS
+	PULL_FRAME_FROM_SVC_AND_EXIT
 FUNCTION_END(arm_undefined)
 
 
 FUNCTION(arm_syscall):
-	PUSHFRAMEINSVC
+	PUSH_FRAME
 
-	mov	r0, sp
-	bl	arch_arm_syscall
+	mov		r0, sp		/* iframe */
+	mov		fp, r0
+	bl		arch_arm_syscall
 
-	PULLFRAMEFROMSVCANDEXIT
+	DISABLE_INTERRUPTS
+	PULL_FRAME_AND_EXIT
 FUNCTION_END(arm_syscall)
 
 
@@ -151,13 +184,15 @@ FUNCTION(arm_prefetch_abort):
 	nop					/* Make absolutely sure any pending */
 	nop					/* imprecise aborts have occurred. */
 #endif
- 	add	lr, lr, #4
-	PUSHFRAMEINSVC
+	sub		lr, lr, #4	/* Adjust LR */
+	PUSH_FRAME_IN_SVC
 
-	mov	r0, sp
-	bl	arch_arm_prefetch_abort
+	mov		r0, sp		/* iframe */
+	mov		fp, r0
+	bl		arch_arm_prefetch_abort
 
-	PULLFRAMEFROMSVCANDEXIT
+	DISABLE_INTERRUPTS
+	PULL_FRAME_FROM_SVC_AND_EXIT
 FUNCTION_END(arm_prefetch_abort)
 
 
@@ -166,13 +201,15 @@ FUNCTION(arm_data_abort):
 	nop					/* Make absolutely sure any pending */
 	nop					/* imprecise aborts have occurred. */
 #endif
-	sub	lr, lr, #8		/* Adjust the lr */
-	PUSHFRAMEINSVC
+	sub		lr, lr, #8	/* Adjust LR */
+	PUSH_FRAME_IN_SVC
 
-	mov	r0, sp
-	bl	arch_arm_data_abort
+	mov		r0, sp		/* iframe */
+	mov		fp, r0
+	bl		arch_arm_data_abort
 
-	PULLFRAMEFROMSVCANDEXIT
+	DISABLE_INTERRUPTS
+	PULL_FRAME_FROM_SVC_AND_EXIT
 FUNCTION_END(arm_data_abort)
 
 
@@ -182,24 +219,28 @@ FUNCTION_END(arm_reserved)
 
 
 FUNCTION(arm_irq):
-	sub	lr, lr, #4
-	PUSHFRAMEINSVC
+	sub		lr, lr, #4	/* Adjust LR */
+	PUSH_FRAME_IN_SVC
 
-	mov	r0, sp			/* iframe */
-	bl	arch_arm_irq
+	mov		r0, sp		/* iframe */
+	mov		fp, r0
+	bl		arch_arm_irq
 
-	PULLFRAMEFROMSVCANDEXIT
+	DISABLE_INTERRUPTS
+	PULL_FRAME_FROM_SVC_AND_EXIT
 FUNCTION_END(arm_irq)
 
 
 FUNCTION(arm_fiq):
-	sub	lr, lr, #4
-	PUSHFRAMEINSVC
+	sub		lr, lr, #4	/* Adjust LR */
+	PUSH_FRAME_IN_SVC
 
-	mov	r0, sp			/* iframe */
-	bl	arch_arm_fiq
-	
-	PULLFRAMEFROMSVCANDEXIT
+	mov		r0, sp		/* iframe */
+	mov		fp, r0
+	bl		arch_arm_fiq
+
+	DISABLE_INTERRUPTS
+	PULL_FRAME_FROM_SVC_AND_EXIT
 FUNCTION_END(arm_fiq)
 
 
@@ -212,22 +253,26 @@ FUNCTION(arm_vector_init):
 	mov	r0, r1
 	orr	r0, r0, #CPSR_MODE_FIQ
 	msr	cpsr_c, r0
-	ldr	sp, fiq_stack
+	ldr r2, =fiq_stack
+	ldr sp, [r2]
 
 	mov	r0, r1
 	orr	r0, r0, #CPSR_MODE_IRQ
 	msr	cpsr_c, r0
-	ldr	sp, irq_stack
+	ldr r2, =irq_stack
+	ldr sp, [r2]
 
 	mov	r0, r1
 	orr	r0, r0, #CPSR_MODE_ABT
 	msr	cpsr_c, r0
-	ldr	sp, abort_stack
+	ldr r2, =abort_stack
+	ldr sp, [r2]
 
 	mov	r0, r1
 	orr	r0, r0, #CPSR_MODE_UND
 	msr	cpsr_c, r0
-	ldr	sp, und_stack
+	ldr r2, =und_stack
+	ldr sp, [r2]
 
 	/* ... and return back to supervisor mode */
 	mov	r0, r1

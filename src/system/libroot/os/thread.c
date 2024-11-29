@@ -39,9 +39,12 @@ thread_entry(void* _entry, void* _thread)
 	pthread_thread* thread = (pthread_thread*)_thread;
 	status_t returnCode;
 
+	__heap_thread_init();
+
 	returnCode = entry(thread->entry_argument);
 
 	_thread_do_exit_work();
+	__heap_thread_exit();
 
 	return returnCode;
 }
@@ -71,9 +74,9 @@ _thread_do_exit_work(void)
 
 	tls_set(TLS_ON_EXIT_THREAD_SLOT, NULL);
 
-	__gRuntimeLoader->destroy_thread_tls();
-
 	__pthread_destroy_thread();
+
+	__gRuntimeLoader->destroy_thread_tls();
 }
 
 
@@ -168,6 +171,7 @@ void
 exit_thread(status_t status)
 {
 	_thread_do_exit_work();
+	__heap_thread_exit();
 	_kern_exit_thread(status);
 }
 
@@ -176,6 +180,13 @@ status_t
 wait_for_thread(thread_id thread, status_t *_returnCode)
 {
 	return _kern_wait_for_thread(thread, _returnCode);
+}
+
+
+status_t
+wait_for_thread_etc(thread_id thread, uint32 flags, bigtime_t timeout, status_t *_returnCode)
+{
+	return _kern_wait_for_thread_etc(thread, flags, timeout, _returnCode);
 }
 
 

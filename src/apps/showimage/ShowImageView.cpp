@@ -28,6 +28,7 @@
 #include <BitmapStream.h>
 #include <Catalog.h>
 #include <Clipboard.h>
+#include <ControlLook.h>
 #include <Cursor.h>
 #include <Debug.h>
 #include <Directory.h>
@@ -48,6 +49,7 @@
 #include <StopWatch.h>
 #include <SupportDefs.h>
 #include <TranslatorRoster.h>
+#include <WindowScreen.h>
 
 #include <tracker_private.h>
 
@@ -133,7 +135,7 @@ compose_checker_background(const BBitmap* bitmap)
 						blend_colors(p, kAlphaLow.red, kAlphaLow.green, kAlphaLow.blue, alpha);
 					else
 						blend_colors(p, kAlphaHigh.red, kAlphaHigh.green, kAlphaHigh.blue, alpha);
-					
+
 				} else {
 					if (i % 10 >= 5)
 						blend_colors(p, kAlphaHigh.red, kAlphaHigh.green, kAlphaHigh.blue, alpha);
@@ -170,10 +172,9 @@ PopUpMenu::~PopUpMenu()
 //	#pragma mark -
 
 
-ShowImageView::ShowImageView(BRect rect, const char* name, uint32 resizingMode,
-		uint32 flags)
+ShowImageView::ShowImageView(const char* name, uint32 flags)
 	:
-	BView(rect, name, resizingMode, flags),
+	BView(name, flags),
 	fBitmapOwner(NULL),
 	fBitmap(NULL),
 	fDisplayBitmap(NULL),
@@ -252,8 +253,13 @@ ShowImageView::Pulse()
 			BPoint mousePos;
 			uint32 buttons;
 			GetMouse(&mousePos, &buttons, false);
-			if (Bounds().Contains(mousePos))
+			if (Bounds().Contains(mousePos)) {
 				be_app->ObscureCursor();
+
+				// Set current mouse coordinates to avoid the screen saver kicking in
+				ConvertToScreen(&mousePos);
+				set_mouse_position((int32)mousePos.x, (int32)mousePos.y);
+			}
 		} else if (fHideCursorCountDown > 0)
 			fHideCursorCountDown--;
 	}
@@ -1105,7 +1111,7 @@ ShowImageView::MouseDown(BPoint position)
 
 	// Using clickCount >= 2 and the modulo 2 accounts for quickly repeated
 	// double-clicks
-	if (buttons == B_PRIMARY_MOUSE_BUTTON && clickCount >= 2 && 
+	if (buttons == B_PRIMARY_MOUSE_BUTTON && clickCount >= 2 &&
 			clickCount % 2 == 0) {
 		Window()->PostMessage(MSG_FULL_SCREEN);
 		return;
@@ -1752,15 +1758,7 @@ ShowImageView::ResizeImage(int w, int h)
 void
 ShowImageView::_SetIcon(bool clear, icon_size which)
 {
-	int32 size;
-	switch (which) {
-		case B_MINI_ICON: size = 16;
-			break;
-		case B_LARGE_ICON: size = 32;
-			break;
-		default:
-			return;
-	}
+	const int32 size = be_control_look->ComposeIconSize(which).IntegerWidth() + 1;
 
 	BRect rect(fBitmap->Bounds());
 	float s;

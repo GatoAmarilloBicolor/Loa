@@ -28,7 +28,8 @@ struct rld_export {
 	// runtime loader API export
 	image_id (*load_add_on)(char const *path, uint32 flags);
 	status_t (*unload_add_on)(image_id imageID);
-	image_id (*load_library)(char const *path, uint32 flags, void **_handle);
+	image_id (*load_library)(char const *path, uint32 flags, void* caller,
+		void **_handle);
 	status_t (*unload_library)(void* handle);
 	status_t (*get_image_symbol)(image_id imageID, char const *symbolName,
 		int32 symbolType, bool recursive, image_id *_inImage, void **_location);
@@ -57,6 +58,7 @@ struct rld_export {
 	const struct user_space_program_args *program_args;
 	const void* commpage_address;
 	int abi_version;
+	int api_version;
 };
 
 extern struct rld_export *__gRuntimeLoader;
@@ -105,27 +107,38 @@ typedef struct image_t {
 	addr_t				term_routine;
 	addr_t 				dynamic_ptr; 	// pointer to the dynamic section
 
-	// pointer to symbol participation data structures
+	// needed images
+	uint32				num_needed;
+	struct image_t		**needed;
+
+	// symbol participation data structures
 	uint32				*symhash;
 	elf_sym				*syms;
 	char				*strtab;
+	struct {
+		uint32			mask_words_count_mask;
+		uint32			shift2;
+		uint32			bucket_count;
+		elf_addr		*bloom;
+		uint32			*buckets;
+		uint32			*chain0;
+	} gnuhash;
+
+	// relocation information
 	elf_rel				*rel;
 	int					rel_len;
 	elf_rela			*rela;
 	int					rela_len;
 	elf_rel				*pltrel;
 	int					pltrel_len;
+
+	// init/term functions
 	addr_t				*init_array;
 	int					init_array_len;
 	addr_t				*preinit_array;
 	int					preinit_array_len;
 	addr_t				*term_array;
 	int					term_array_len;
-
-	unsigned			dso_tls_id;
-
-	uint32				num_needed;
-	struct image_t		**needed;
 
 	// versioning related structures
 	uint32				num_version_definitions;
@@ -135,6 +148,9 @@ typedef struct image_t {
 	elf_versym			*symbol_versions;
 	elf_version_info	*versions;
 	uint32				num_versions;
+
+	// thread-local storage
+	unsigned			dso_tls_id;
 
 #ifdef __cplusplus
 	elf_sym*			(*find_undefined_symbol)(struct image_t* rootImage,

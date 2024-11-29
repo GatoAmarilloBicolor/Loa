@@ -9,6 +9,8 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 		local architecture = $(TARGET_PACKAGING_ARCH) ;
 
 		UsePrivateSystemHeaders ;
+		ObjectSysHdrs strfmon.c :
+			[ FDirName $(HAIKU_TOP) headers compatibility bsd ] ;
 
 		MergeObject <$(architecture)>posix_stdlib.o :
 			abs.c
@@ -19,15 +21,14 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			div.c
 			env.cpp
 			exit.cpp
-			getsubopt.cpp
 			heapsort.c
 			merge.c
 			mktemp.c
 			pty.cpp
 			qsort.c
 			radixsort.c
-			rand.c
 			random.c
+			reallocarray.cpp
 			realpath.cpp
 			strfmon.c
 			strtol.c

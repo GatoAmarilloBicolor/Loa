@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5312/ar5312reg.h 204644 2010-03-03 17:32:32Z rpaulo $
  */
 #ifndef _DEV_ATH_AR5312REG_H_
 #define _DEV_ATH_AR5312REG_H_
@@ -26,7 +26,6 @@
 
 /* Register base addresses for modules which are not wmac modules */
 /* 531X has a fixed memory map */
-
 
 #define REG_WRITE(_reg,_val)		*((volatile uint32_t *)(_reg)) = (_val);
 #define REG_READ(_reg)		*((volatile uint32_t *)(_reg))
@@ -126,7 +125,6 @@
 #define AR5312_RC_WBB0_RES  0x00004000  /* Warm reset to WBB0 */
 #define AR5312_RC_WMAC1_RES  0x00020000  /* Warm reset to WMAC1 */
 #define AR5312_RC_WBB1_RES   0x00040000  /* Warm reset to WBB */
-
 
 #define AR_RAD2112_SREV_MAJOR   0x40    /* 2112 Major Rev */
 

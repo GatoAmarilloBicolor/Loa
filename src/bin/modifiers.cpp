@@ -1,7 +1,7 @@
 /*
  * modifiers - asserts (un)pressed modifier keys
  * (c) 2002, Francois Revol, revol@free.fr
- * for OpenBeOS
+ * for Haiku
  * compile with:
  * LDFLAGS=-lbe make modifiers
  */
@@ -54,11 +54,10 @@ list_modifiers(int mods)
 {
 	int i;
 	int gotone = 0;
-	for (i=0; modifier_names[i]; i++) {
+	for (i = 0; modifier_names[i]; i++) {
 		if (mods & modifier_bits[i]) {
 			if (gotone)
 				printf(",");
-			gotone = 0;
 			printf("%s", modifier_names[i]);
 			gotone = 1;
 		}

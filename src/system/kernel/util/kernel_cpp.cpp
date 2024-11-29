@@ -1,11 +1,12 @@
 /*
- * Copyright 2003-2007, Haiku Inc. All rights reserved.
+ * Copyright 2003-2022, Haiku Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
  *		Axel Dörfler, axeld@pinc-software.de.
  *		Ingo Weinhold, bonefish@users.sf.net.
  */
+
 
 //!	C++ in the kernel
 
@@ -22,7 +23,7 @@
 #ifdef _LOADER_MODE
 #	define panic printf
 #	define dprintf printf
-#	define kernel_debugger printf
+#	define kernel_debugger(x) printf("%s", x)
 #endif
 
 
@@ -137,6 +138,13 @@ operator delete(void *ptr) _NOEXCEPT
 
 void
 operator delete[](void *ptr) _NOEXCEPT
+{
+	free(ptr);
+}
+
+
+void
+operator delete(void *ptr, std::nothrow_t const &) _NOEXCEPT
 {
 	free(ptr);
 }
@@ -381,7 +389,8 @@ extern "C"
 void
 abort()
 {
-	panic("abort() called!");
+	while (true)
+		panic("abort() called!");
 }
 
 
@@ -403,6 +412,7 @@ extern "C"
 void
 exit(int status)
 {
-	panic("exit() called with status code = %d!", status);
+	while (true)
+		panic("exit() called with status code = %d!", status);
 }
 

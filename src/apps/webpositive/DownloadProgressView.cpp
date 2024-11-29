@@ -219,7 +219,7 @@ DownloadProgressView::Init(BMessage* archive)
 	fProcessStartTime = fLastSpeedReferenceTime
 		= fEstimatedFinishReferenceTime	= system_time();
 
-	SetViewColor(245, 245, 245);
+	SetViewUIColor(B_LIST_BACKGROUND_COLOR);
 	SetFlags(Flags() | B_FULL_UPDATE_ON_RESIZE | B_WILL_DRAW);
 
 	if (archive) {
@@ -346,11 +346,14 @@ DownloadProgressView::AllAttached()
 {
 	fStatusBar->SetLowColor(ViewColor());
 	fInfoView->SetLowColor(ViewColor());
-	fInfoView->SetHighColor(0, 0, 0, 255);
+	fInfoView->SetHighUIColor(B_LIST_ITEM_TEXT_COLOR);
 
 	SetViewColor(B_TRANSPARENT_COLOR);
-	SetLowColor(245, 245, 245);
-	SetHighColor(tint_color(LowColor(), B_DARKEN_1_TINT));
+	SetLowUIColor(B_LIST_BACKGROUND_COLOR);
+	if (LowColor().IsLight())
+		SetHighColor(tint_color(LowColor(), B_DARKEN_1_TINT));
+	else
+		SetHighColor(tint_color(LowColor(), B_LIGHTEN_1_TINT));
 }
 
 
@@ -747,7 +750,6 @@ DownloadProgressView::_UpdateStatusText()
 	if (sShowSpeed && fBytesPerSecond != 0.0) {
 		// Draw speed info
 		char sizeBuffer[128];
-		buffer = "(";
 		// Get strings for current and expected size and remove the unit
 		// from the current size string if it's the same as the expected
 		// size unit.
@@ -762,21 +764,19 @@ DownloadProgressView::_UpdateStatusText()
 				expectedSize.String() + expectedSizeUnitPos) == 0) {
 			currentSize.Truncate(currentSizeUnitPos);
 		}
-		buffer << currentSize;
-		buffer << " ";
-		buffer << B_TRANSLATE_COMMENT("of", "...as in '12kB of 256kB'");
-		buffer << " ";
-		buffer << expectedSize;
-		buffer << ", ";
-		buffer << string_for_size(fBytesPerSecond, sizeBuffer,
-			sizeof(sizeBuffer));
-		buffer << B_TRANSLATE_COMMENT("/s)", "...as in 'per second'");
+
+		buffer = B_TRANSLATE("(%currentSize% of %expectedSize%, %rate%/s)");
+		buffer.ReplaceFirst("%currentSize%", currentSize);
+		buffer.ReplaceFirst("%expectedSize%", expectedSize);
+		buffer.ReplaceFirst("%rate%", string_for_size(fBytesPerSecond,
+				sizeBuffer, sizeof(sizeBuffer)));
+
 		float stringWidth = fInfoView->StringWidth(buffer.String());
 		if (stringWidth < fInfoView->Bounds().Width())
 			fInfoView->SetText(buffer.String());
 		else {
 			// complete string too wide, try with shorter version
-			buffer << string_for_size(fBytesPerSecond, sizeBuffer,
+			buffer = string_for_size(fBytesPerSecond, sizeBuffer,
 				sizeof(sizeBuffer));
 			buffer << B_TRANSLATE_COMMENT("/s)", "...as in 'per second'");
 			stringWidth = fInfoView->StringWidth(buffer.String());

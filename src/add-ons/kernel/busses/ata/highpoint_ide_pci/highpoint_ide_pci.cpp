@@ -12,13 +12,15 @@
 #include <string.h>
 
 
-#define TRACE(a...)			dprintf("Highpoint-IDE: " a)
+#define INFO(a...)			dprintf("Highpoint-IDE: " a)
 
-//#define TRACE_EXT_HIGHPOINT
-#ifdef TRACE_EXT_HIGHPOINT
-#define TRACE_EXT(a...)		dprintf("Highpoint-IDE (ext): " a)
+//#define TRACE_HIGHPOINT
+#ifdef TRACE_HIGHPOINT
+#define TRACE(a...)		dprintf("Highpoint-IDE: " a)
+#define TRACE_ONLY
 #else
-#define TRACE_EXT(a...)
+#define TRACE(a...)
+#define TRACE_ONLY __attribute__((unused))
 #endif
 
 
@@ -39,7 +41,7 @@ struct HPT_controller_info *HPT_info;
 static void
 set_channel(void *cookie, ata_channel channel)
 {
-	TRACE_EXT("set_channel()\n");
+	TRACE("set_channel()\n");
 
 	sATAAdapter->set_channel((ata_adapter_channel_info *)cookie, channel);
 }
@@ -49,7 +51,7 @@ static status_t
 write_command_block_regs(void *channel_cookie, ata_task_file *tf,
 	ata_reg_mask mask)
 {
-	TRACE_EXT("write_command_block_regs()\n");
+	TRACE("write_command_block_regs()\n");
 
 	return sATAAdapter->write_command_block_regs(
 		(ata_adapter_channel_info *)channel_cookie, tf, mask);
@@ -60,7 +62,7 @@ static status_t
 read_command_block_regs(void *channel_cookie, ata_task_file *tf,
 	ata_reg_mask mask)
 {
-	TRACE_EXT("read_command_block_regs()\n");
+	TRACE("read_command_block_regs()\n");
 
 	return sATAAdapter->read_command_block_regs(
 		(ata_adapter_channel_info *)channel_cookie, tf, mask);
@@ -70,7 +72,7 @@ read_command_block_regs(void *channel_cookie, ata_task_file *tf,
 static uint8
 get_altstatus(void *channel_cookie)
 {
-	TRACE_EXT("get_altstatus()\n");
+	TRACE("get_altstatus()\n");
 
 	return sATAAdapter->get_altstatus(
 		(ata_adapter_channel_info *)channel_cookie);
@@ -80,7 +82,7 @@ get_altstatus(void *channel_cookie)
 static status_t
 write_device_control(void *channel_cookie, uint8 val)
 {
-	TRACE_EXT("write_device_control()\n");
+	TRACE("write_device_control()\n");
 
 	return sATAAdapter->write_device_control(
 		(ata_adapter_channel_info *)channel_cookie, val);
@@ -90,7 +92,7 @@ write_device_control(void *channel_cookie, uint8 val)
 static status_t
 write_pio(void *channel_cookie, uint16 *data, int count, bool force_16bit)
 {
-	TRACE_EXT("write_pio()\n");
+	TRACE("write_pio()\n");
 
 	return sATAAdapter->write_pio((ata_adapter_channel_info *)channel_cookie,
 		data, count, force_16bit);
@@ -100,7 +102,7 @@ write_pio(void *channel_cookie, uint16 *data, int count, bool force_16bit)
 static status_t
 read_pio(void *channel_cookie, uint16 *data, int count, bool force_16bit)
 {
-	TRACE_EXT("read_pio()\n");
+	TRACE("read_pio()\n");
 
 	return sATAAdapter->read_pio((ata_adapter_channel_info *)channel_cookie,
 		data, count, force_16bit);
@@ -111,7 +113,7 @@ static status_t
 prepare_dma(void *channel_cookie, const physical_entry *sg_list,
 	size_t sg_list_count, bool to_device)
 {
-	TRACE_EXT("prepare_dma()\n");
+	TRACE("prepare_dma()\n");
 
 	return sATAAdapter->prepare_dma((ata_adapter_channel_info *)channel_cookie,
 		sg_list, sg_list_count, to_device);
@@ -121,7 +123,7 @@ prepare_dma(void *channel_cookie, const physical_entry *sg_list,
 static status_t
 start_dma(void *channel_cookie)
 {
-	TRACE_EXT("start_dma()\n");
+	TRACE("start_dma()\n");
 
 	return sATAAdapter->start_dma((ata_adapter_channel_info *)channel_cookie);
 }
@@ -130,7 +132,7 @@ start_dma(void *channel_cookie)
 static status_t
 finish_dma(void *channel_cookie)
 {
-	TRACE_EXT("finish_dma()\n");
+	TRACE("finish_dma()\n");
 
 	return sATAAdapter->finish_dma((ata_adapter_channel_info *)channel_cookie);
 }
@@ -161,7 +163,7 @@ init_channel(device_node *node, void **channel_cookie)
 		(ata_adapter_channel_info **)channel_cookie,
 		sizeof(ata_adapter_channel_info), sATAAdapter->inthand);
 	// from here we have valid channel...
-	ata_adapter_channel_info *channel=NULL;
+	ata_adapter_channel_info *channel TRACE_ONLY = NULL;
 	channel = (ata_adapter_channel_info *)*channel_cookie;
 
 	if (sDeviceManager->get_attr_uint8(node, ATA_ADAPTER_CHANNEL_INDEX,
@@ -170,8 +172,12 @@ init_channel(device_node *node, void **channel_cookie)
 		return B_ERROR;
 	}
 
-	TRACE("init_channel(): channel command %x, control %x, result: %d \n", channel->command_block_base,channel->control_block_base, (int)result);
-	TRACE("init_channel(): index #%d done. HPT_info deviceID: %04x, config option %x, revision %2d, function %2d \n", channel_index, HPT_info->deviceID, HPT_info->configOption, HPT_info->revisionID, HPT_info->function);
+	TRACE("init_channel(): channel command %x, control %x, result: %d \n",
+		channel->command_block_base,
+		channel->control_block_base, (int)result);
+	TRACE("init_channel(): index #%d done. HPT_info deviceID: %04x, config option %x, "
+		"revision %2d, function %2d \n", channel_index, HPT_info->deviceID,
+		HPT_info->configOption, HPT_info->revisionID, HPT_info->function);
 	return result;
 }
 
@@ -228,7 +234,7 @@ init_controller(device_node *node, ata_adapter_controller_info **cookie)
 		HPT_info->revisionID = revisionID;
 		HPT_info->function = function;
 
-    	TRACE("init_controller(): found: device: %x, revision: %x, function: %x\n",devID,revisionID,function);
+		INFO("found: device: %x, revision: %x, function: %x\n",devID,revisionID,function);
 
 		// setting different config options
 		if (devID == ATA_HPT366) {
@@ -268,7 +274,7 @@ init_controller(device_node *node, ata_adapter_controller_info **cookie)
 		if (HPT_info->configOption == CFG_HPT366_OLD) {
 			/* disable interrupt prediction */
 			pci->write_pci_config(pci_device, 0x51, 1, (pci->read_pci_config(pci_device, 0x51, 1) & ~0x80));
-			TRACE("Highpoint-ATA: old revision found.\n");
+			INFO("Highpoint-ATA: old revision found.\n");
 	    } else {
 			/* disable interrupt prediction */
 			pci->write_pci_config(pci_device, 0x51, 1, (pci->read_pci_config(pci_device, 0x51, 1) & ~0x03));
@@ -373,7 +379,7 @@ supports_device(device_node *parent)
 			result = 0.0f;
 		}
 	}
-	TRACE("supports_device(): supporting device Vendor ID: %x, deviceID: %x, result %f\n", vendorID, deviceID, result);
+	INFO("supporting device Vendor ID: %x, deviceID: %x, result %f\n", vendorID, deviceID, result);
 	return result;
 }
 

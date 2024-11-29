@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5212/ar5212_interrupts.c 201758 2010-01-07 21:01:37Z mbr $
  */
 #include "opt_ah.h"
 
@@ -24,7 +24,6 @@
 #include "ar5212/ar5212.h"
 #include "ar5212/ar5212reg.h"
 #include "ar5212/ar5212phy.h"
-
 
 /*
  * Checks to see if an interrupt is pending on our NIC

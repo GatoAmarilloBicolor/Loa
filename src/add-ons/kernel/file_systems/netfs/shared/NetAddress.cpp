@@ -1,6 +1,7 @@
 // NetAddress.cpp
 
 #include <new>
+#include <compatibility/bsd/features.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -198,7 +199,7 @@ public:
 
 	status_t InitCheck() const
 	{
-		return (fLock.Sem() >= 0 ? B_OK : B_NO_INIT);
+		return fLock.InitCheck();
 	}
 
 	status_t GetHostAddress(const char* hostName, NetAddress* address)

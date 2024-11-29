@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * All rights reserved.
  *
@@ -28,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: releng/11.1/sys/dev/ath/if_ath_beacon.c 298359 2016-04-20 18:29:30Z avos $");
-
 /*
  * Driver for the Atheros Wireless LAN controller.
  *
@@ -148,8 +148,12 @@ ath_beaconq_config(struct ath_softc *sc)
 		qi.tqi_cwmin = ATH_BEACON_CWMIN_DEFAULT;
 		qi.tqi_cwmax = ATH_BEACON_CWMAX_DEFAULT;
 	} else {
-		struct wmeParams *wmep =
-			&ic->ic_wme.wme_chanParams.cap_wmeParams[WME_AC_BE];
+		struct chanAccParams chp;
+		struct wmeParams *wmep;
+
+		ieee80211_wme_ic_getparams(ic, &chp);
+		wmep = &chp.cap_wmeParams[WME_AC_BE];
+
 		/*
 		 * Adhoc mode; important thing is to use 2x cwmin.
 		 */
@@ -347,7 +351,7 @@ ath_beacon_setup(struct ath_softc *sc, struct ath_buf *bf)
 		rc[0].tx_power_cap = 0x3f;
 		rc[0].PktDuration =
 		    ath_hal_computetxtime(ah, rt, roundup(m->m_len, 4),
-		        rix, 0);
+		        rix, 0, AH_TRUE);
 		ath_hal_set11nratescenario(ah, ds, 0, 0, rc, 4, flags);
 	}
 
@@ -442,9 +446,11 @@ ath_beacon_proc(void *arg, int pending)
 	 * many consecutive beacons reset the device.
 	 */
 	if (ath_hal_numtxpending(ah, sc->sc_bhalq) != 0) {
+
 		sc->sc_bmisscount++;
 		sc->sc_stats.ast_be_missed++;
 		ath_beacon_miss(sc);
+
 		DPRINTF(sc, ATH_DEBUG_BEACON,
 			"%s: missed %u consecutive beacons\n",
 			__func__, sc->sc_bmisscount);
@@ -761,11 +767,16 @@ ath_beacon_generate(struct ath_softc *sc, struct ieee80211vap *vap)
 	bus_dmamap_sync(sc->sc_dmat, bf->bf_dmamap, BUS_DMASYNC_PREWRITE);
 
 	/*
+	 * XXX TODO: tie into net80211 for quiet time IE update and program
+	 * local AP timer if we require it.  The process of updating the
+	 * beacon will also update the IE with the relevant counters.
+	 */
+
+	/*
 	 * Enable the CAB queue before the beacon queue to
 	 * insure cab frames are triggered by this beacon.
 	 */
 	if (vap->iv_bcn_off.bo_tim[4] & 1) {
-
 		/* NB: only at DTIM */
 		ATH_TXQ_LOCK(&avp->av_mcastq);
 		if (nmcastq) {
@@ -917,29 +928,55 @@ ath_beacon_config(struct ath_softc *sc, struct ieee80211vap *vap)
 	((((u_int32_t)(_h)) << 22) | (((u_int32_t)(_l)) >> 10))
 #define	FUDGE	2
 	struct ath_hal *ah = sc->sc_ah;
+	struct ath_vap *avp;
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_node *ni;
 	u_int32_t nexttbtt, intval, tsftu;
 	u_int32_t nexttbtt_u8, intval_u8;
 	u_int64_t tsf, tsf_beacon;
 
-	if (vap == NULL)
-		vap = TAILQ_FIRST(&ic->ic_vaps);	/* XXX */
 	/*
-	 * Just ensure that we aren't being called when the last
-	 * VAP is destroyed.
+	 * Find the first VAP that we /can/ use a beacon configuration for.
+	 * If it's a STA VAP then if it has SWBMISS set we should ignore it.
+	 *
+	 * Yes, ideally we'd not have a STA without SWBMISS followed by an
+	 * AP STA, and yes this isn't ready for P2P/TSF2 logic on AR9300 and
+	 * later chips.
 	 */
 	if (vap == NULL) {
-		device_printf(sc->sc_dev, "%s: called with no VAPs\n",
-		    __func__);
+		IEEE80211_LOCK(ic);
+		TAILQ_FOREACH(vap, &ic->ic_vaps, iv_next) {
+			/* A STA VAP w/ SWBMISS set can't be used for beaconing */
+			if ((vap->iv_opmode == IEEE80211_M_STA) &&
+			    ((vap->iv_flags_ext & IEEE80211_FEXT_SWBMISS) != 0))
+				continue;
+			break;
+		}
+		IEEE80211_UNLOCK(ic);
+	}
+
+	if (vap == NULL) {
+		device_printf(sc->sc_dev, "called with no valid vaps?\n");
 		return;
 	}
+
+	if ((vap->iv_flags_ext & IEEE80211_FEXT_SWBMISS) != 0) {
+		device_printf(sc->sc_dev, "called on VAP with SWBMISS set?\n");
+		return;
+	}
+
+	/* Now that we have a vap, we can do this bit */
+	avp = ATH_VAP(vap);
 
 	ni = ieee80211_ref_node(vap->iv_bss);
 
 	ATH_LOCK(sc);
 	ath_power_set_power_state(sc, HAL_PM_AWAKE);
 	ATH_UNLOCK(sc);
+
+	/* Always clear the quiet IE timers; let the next update program them */
+	ath_hal_set_quiet(ah, 0, 0, 0, HAL_QUIET_DISABLE);
+	memset(&avp->quiet_ie, 0, sizeof(avp->quiet_ie));
 
 	/* extract tstamp from last beacon and convert to TU */
 	nexttbtt = TSF_TO_TU(le32dec(ni->ni_tstamp.data + 4),
@@ -964,12 +1001,28 @@ ath_beacon_config(struct ath_softc *sc, struct ieee80211vap *vap)
 		/* NB: the beacon interval is kept internally in TU's */
 		intval = ni->ni_intval & HAL_BEACON_PERIOD;
 	}
+
+	/*
+	 * Note: rounding up to the next intval can cause problems with
+	 * bad APs when we're in powersave mode.
+	 *
+	 * In STA mode with powersave enabled, beacons are only received
+	 * whenever the beacon timer fires to wake up the hardware.
+	 * Now, if this is rounded up to the next intval, it assumes
+	 * that the AP has started transmitting beacons at TSF values that
+	 * are multiples of intval, versus say being 25 TU off.
+	 *
+	 * The specification (802.11-2012 10.1.3.2 - Beacon Generation in
+	 * Infrastructure Networks) requires APs be beaconing at a
+	 * multiple of intval.  So, if bintval=100, then we shouldn't
+	 * get beacons at intervals other than around multiples of 100.
+	 */
 	if (nexttbtt == 0)		/* e.g. for ap mode */
 		nexttbtt = intval;
-	else if (intval)		/* NB: can be 0 for monitor mode */
+	else
 		nexttbtt = roundup(nexttbtt, intval);
-	DPRINTF(sc, ATH_DEBUG_BEACON, "%s: nexttbtt %u intval %u (%u)\n",
-		__func__, nexttbtt, intval, ni->ni_intval);
+
+
 	if (ic->ic_opmode == IEEE80211_M_STA && !sc->sc_swbmiss) {
 		HAL_BEACON_STATE bs;
 		int dtimperiod, dtimcount;
@@ -1160,8 +1213,8 @@ ath_beacon_config(struct ath_softc *sc, struct ieee80211vap *vap)
 		 * nexttbtt and intval is TU/8.
 		 */
 		if (sc->sc_isedma) {
-			nexttbtt_u8 = (nexttbtt << 3);
-			intval_u8 = (intval << 3);
+			nexttbtt_u8 = (nexttbtt << 3) & HAL_BEACON_PERIOD_TU8;
+			intval_u8 = (intval << 3) & HAL_BEACON_PERIOD_TU8;
 			if (intval & HAL_BEACON_ENA)
 				intval_u8 |= HAL_BEACON_ENA;
 			if (intval & HAL_BEACON_RESET_TSF)
@@ -1179,6 +1232,15 @@ ath_beacon_config(struct ath_softc *sc, struct ieee80211vap *vap)
 			ath_beacon_start_adhoc(sc, vap);
 	}
 	ieee80211_free_node(ni);
+
+	tsf = ath_hal_gettsf64(ah);
+	DPRINTF(sc, ATH_DEBUG_BEACON,
+	    "%s: nexttbtt %u intval %u (%u), tsf64=%llu tsfbeacon=%llu delta=%lld\n",
+	    __func__, nexttbtt, intval, ni->ni_intval,
+	    (unsigned long long) tsf,
+	    (unsigned long long) tsf_beacon,
+	    (long long) tsf -
+	    (long long) tsf_beacon);
 
 	ATH_LOCK(sc);
 	ath_power_restore_power_state(sc);

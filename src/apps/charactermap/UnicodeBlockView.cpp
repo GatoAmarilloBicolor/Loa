@@ -44,6 +44,14 @@ UnicodeBlockView::SetFilter(const char* filter)
 	_UpdateBlocks();
 }
 
+void
+UnicodeBlockView::SetCharacterFont(const BFont& font)
+{
+	fCharacterFont = font;
+	fUnicodeBlocks = fCharacterFont.Blocks();
+	_UpdateBlocks();
+}
+
 
 void
 UnicodeBlockView::ShowPrivateBlocks(bool show)
@@ -76,6 +84,22 @@ UnicodeBlockView::IsShowingBlock(int32 blockIndex) const
 	if (!fShowPrivateBlocks && kUnicodeBlocks[blockIndex].private_block)
 		return false;
 
+	// The reason for two checks is BeOS compatibility.
+	// The first one checks for unicode blocks as defined by Be,
+	// but there are only 71 such blocks.
+	// The rest of the blocks (denoted by kNoBlock) need to
+	// be queried by searching for the start and end codepoints
+	// via the IncludesBlock method.
+	if (fShowContainedBlocksOnly) {
+		if (kUnicodeBlocks[blockIndex].block != kNoBlock)
+			return (fUnicodeBlocks & kUnicodeBlocks[blockIndex].block) != kNoBlock;
+
+		if (!fCharacterFont.IncludesBlock(
+				kUnicodeBlocks[blockIndex].start,
+				kUnicodeBlocks[blockIndex].end))
+			return false;
+	}
+
 	return true;
 }
 
@@ -91,10 +115,9 @@ UnicodeBlockView::_UpdateBlocks()
 				continue;
 		}
 
-		if (!IsShowingBlock(i))
-			continue;
-
 		AddItem(fBlocks.ItemAt(i));
+
+		fBlocks.ItemAt(i)->SetEnabled(IsShowingBlock(i));
 	}
 }
 

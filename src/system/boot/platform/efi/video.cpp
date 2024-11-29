@@ -15,9 +15,12 @@
 #include <boot/stage2.h>
 #include <boot/stdio.h>
 #include <drivers/driver_settings.h>
+#include <edid.h>
 #include <util/list.h>
 
 #include "efi_platform.h"
+#include <efi/protocol/edid.h>
+#include <efi/protocol/graphics-output.h>
 
 
 //#define TRACE_VIDEO
@@ -30,14 +33,16 @@
 
 struct video_mode {
 	list_link	link;
-	UINTN		mode;
-	UINTN		width, height, bits_per_pixel, bytes_per_row;
+	size_t		mode;
+	size_t		width, height, bits_per_pixel, bytes_per_row;
 };
 
 
-static EFI_GUID sGraphicsOutputGuid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
-static EFI_GRAPHICS_OUTPUT_PROTOCOL *sGraphicsOutput;
-static UINTN sGraphicsMode;
+static efi_guid sGraphicsOutputGuid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+static efi_guid sEdidActiveGuid = EFI_EDID_ACTIVE_PROTOCOL_GUID;
+static efi_graphics_output_protocol *sGraphicsOutput;
+static efi_edid_protocol *sEdidActiveProtocol;
+static size_t sGraphicsMode;
 static struct list sModeList;
 static uint32 sModeCount;
 static bool sModeChosen;
@@ -150,31 +155,33 @@ platform_init_video(void)
 {
 	list_init(&sModeList);
 
-	// we don't support VESA modes or EDID
+	// we don't support VESA modes
 	gKernelArgs.vesa_modes = NULL;
 	gKernelArgs.vesa_modes_size = 0;
+
 	gKernelArgs.edid_info = NULL;
 
-	// make a guess at the best video mode to use, and save the mode ID
-	// for switching to graphics mode
-	EFI_STATUS status = kBootServices->LocateProtocol(&sGraphicsOutputGuid,
-		NULL, (void **)&sGraphicsOutput);
+	// make a guess at the best video mode to use, and save the mode ID for switching to graphics
+	// mode
+	efi_status status = kBootServices->LocateProtocol(&sGraphicsOutputGuid, NULL,
+		(void **)&sGraphicsOutput);
 	if (sGraphicsOutput == NULL || status != EFI_SUCCESS) {
+		dprintf("GOP protocol not found\n");
 		gKernelArgs.frame_buffer.enabled = false;
 		sGraphicsOutput = NULL;
 		return B_ERROR;
 	}
 
-	UINTN bestArea = 0;
-	UINTN bestDepth = 0;
+	size_t bestArea = 0;
+	size_t bestDepth = 0;
 
 	TRACE(("looking for best graphics mode...\n"));
 
-	for (UINTN mode = 0; mode < sGraphicsOutput->Mode->MaxMode; ++mode) {
-		EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
-		UINTN size, depth;
+	for (size_t mode = 0; mode < sGraphicsOutput->Mode->MaxMode; ++mode) {
+		efi_graphics_output_mode_information *info;
+		size_t size, depth;
 		sGraphicsOutput->QueryMode(sGraphicsOutput, mode, &size, &info);
-		UINTN area = info->HorizontalResolution * info->VerticalResolution;
+		size_t area = info->HorizontalResolution * info->VerticalResolution;
 		TRACE(("  mode: %lu\n", mode));
 		TRACE(("  width: %u\n", info->HorizontalResolution));
 		TRACE(("  height: %u\n", info->VerticalResolution));
@@ -190,6 +197,12 @@ platform_init_video(void)
 			&& info->PixelInformation.BlueMask == 0x0000FF
 			&& info->PixelInformation.ReservedMask == 0) {
 			depth = 24;
+		} else if (info->PixelFormat == PixelBitMask
+			&& info->PixelInformation.RedMask == 0xF800
+			&& info->PixelInformation.GreenMask == 0x07E0
+			&& info->PixelInformation.BlueMask == 0x001F
+			&& info->PixelInformation.ReservedMask == 0) {
+			depth = 16;
 		} else {
 			TRACE(("  pixel format: %x unsupported\n",
 				info->PixelFormat));
@@ -202,7 +215,7 @@ platform_init_video(void)
 			videoMode->mode = mode;
 			videoMode->width = info->HorizontalResolution;
 			videoMode->height = info->VerticalResolution;
-			videoMode->bits_per_pixel = info->PixelFormat == PixelBitMask ? 24 : 32;
+			videoMode->bits_per_pixel = depth;
 			videoMode->bytes_per_row = info->PixelsPerScanLine * depth / 8;
 			add_video_mode(videoMode);
 		}
@@ -226,6 +239,17 @@ platform_init_video(void)
 	gKernelArgs.frame_buffer.enabled = true;
 	sModeChosen = false;
 	sSettingsLoaded = false;
+
+	status = kBootServices->LocateProtocol(&sEdidActiveGuid, NULL, (void **)&sEdidActiveProtocol);
+	if ((sEdidActiveProtocol != NULL) && (status == EFI_SUCCESS)
+		&& (sEdidActiveProtocol->SizeOfEdid) != 0) {
+		edid1_info* edid_info = (edid1_info*)kernel_args_malloc(sizeof(edid1_info));
+		if (edid_info != NULL) {
+			edid_decode(edid_info, (edid1_raw*)sEdidActiveProtocol->Edid);
+			gKernelArgs.edid_info = edid_info;
+		}
+	}
+
 	return B_OK;
 }
 
@@ -261,10 +285,10 @@ platform_switch_to_logo(void)
 bool
 video_mode_hook(Menu *menu, MenuItem *item)
 {
-	menu = item->Submenu();
-	item = menu->FindMarked();
-	if (item != NULL) {
-		sGraphicsMode = (UINTN)item->Data();
+	Menu* submenu = item->Submenu();
+	MenuItem* subitem = submenu->FindMarked();
+	if (subitem != NULL) {
+		sGraphicsMode = (size_t)subitem->Data();
 		sModeChosen = true;
 	}
 

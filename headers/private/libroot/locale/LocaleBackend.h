@@ -8,11 +8,11 @@
 
 #include <SupportDefs.h>
 
+#include <locale.h>
 #include <time.h>
 #include <wctype.h>
 
 
-struct lconv;
 struct lc_time_t;
 struct locale_data;		// glibc
 
@@ -22,29 +22,38 @@ namespace Libroot {
 
 
 struct LocaleCtypeDataBridge {
-	const unsigned short**	addrOfClassInfoTable;
-	const int**				addrOfToLowerTable;
-	const int**				addrOfToUpperTable;
+private:
+	const unsigned short*		localClassInfoTable;
+	const int*					localToLowerTable;
+	const int*					localToUpperTable;
 
-	const unsigned short*	posixClassInfo;
-	const int*				posixToLowerMap;
-	const int*				posixToUpperMap;
+public:
+	const unsigned short**		addrOfClassInfoTable;
+	const int**					addrOfToLowerTable;
+	const int**					addrOfToUpperTable;
 
-	LocaleCtypeDataBridge();
+	const unsigned short* const	posixClassInfo;
+	const int* const			posixToLowerMap;
+	const int* const			posixToUpperMap;
+
+	bool						isGlobal;
+
+	LocaleCtypeDataBridge(bool isGlobal);
 
 	void setMbCurMax(unsigned short mbCurMax);
+	void ApplyToCurrentThread();
 };
 
 
 struct LocaleMessagesDataBridge {
-	const char** posixLanginfo;
+	const char** const 	posixLanginfo;
 
 	LocaleMessagesDataBridge();
 };
 
 
 struct LocaleMonetaryDataBridge {
-	const struct lconv* posixLocaleConv;
+	const struct lconv* const posixLocaleConv;
 
 	LocaleMonetaryDataBridge();
 };
@@ -71,29 +80,44 @@ private:
 		values[6];
 	};
 	locale_data* originalGlibcLocale;
+	GlibcNumericLocale  		glibcNumericLocaleData;
 
 public:
-	const struct lconv* posixLocaleConv;
-	GlibcNumericLocale  glibcNumericLocale;
+	const struct lconv* const 	posixLocaleConv;
+	GlibcNumericLocale*  		glibcNumericLocale;
+	bool						isGlobal;
 
-	LocaleNumericDataBridge();
+	LocaleNumericDataBridge(bool isGlobal);
 	~LocaleNumericDataBridge();
+
+	void ApplyToCurrentThread();
 };
 
 
 struct LocaleTimeDataBridge {
-	const struct lc_time_t* posixLCTimeInfo;
+	const struct lc_time_t* const posixLCTimeInfo;
 
 	LocaleTimeDataBridge();
 };
 
 
 struct TimeConversionDataBridge {
+	static const int32 		kTZNameLength = 64;
+
+private:
+	int						localDaylight;
+	long					localTimezone;
+	char*					localTZName[2];
+	char					localTZName0[kTZNameLength];
+	char					localTZName1[kTZNameLength];
+
+public:
 	int*					addrOfDaylight;
 	long*					addrOfTimezone;
 	char**					addrOfTZName;
+	bool					isGlobal;
 
-	TimeConversionDataBridge();
+	TimeConversionDataBridge(bool isGlobal);
 };
 
 
@@ -104,9 +128,12 @@ struct LocaleDataBridge {
 	LocaleNumericDataBridge		numericDataBridge;
 	LocaleTimeDataBridge		timeDataBridge;
 	TimeConversionDataBridge	timeConversionDataBridge;
-	const char**				posixLanginfo;
+	const char** const			posixLanginfo;
+	bool						isGlobal;
 
-	LocaleDataBridge();
+	LocaleDataBridge(bool isGlobal);
+
+	void ApplyToCurrentThread();
 };
 
 
@@ -142,12 +169,12 @@ public:
 
 	virtual	status_t			Strcoll(const char* a, const char* b,
 									int& out) = 0;
-	virtual status_t			Strxfrm(char* out, const char* in, size_t size,
-									size_t& outSize) = 0;
+	virtual status_t			Strxfrm(char* out, const char* in,
+									size_t outSize, size_t& requiredSize) = 0;
 	virtual	status_t			Wcscoll(const wchar_t* a, const wchar_t* b,
 									int& out) = 0;
 	virtual status_t			Wcsxfrm(wchar_t* out, const wchar_t* in,
-									size_t size, size_t& outSize) = 0;
+									size_t outSize, size_t& requiredSize) = 0;
 
 	virtual status_t			TZSet(const char* timeZoneID,
 									const char* tz) = 0;
@@ -157,14 +184,29 @@ public:
 									struct tm* tmOut) = 0;
 	virtual status_t			Mktime(struct tm* inOutTm, time_t& timeOut) = 0;
 
+	virtual status_t			Timegm(struct tm* inOutTm, time_t& timeOut) = 0;
+
 	virtual void				Initialize(LocaleDataBridge* dataBridge) = 0;
 
 	static	status_t			LoadBackend();
+	static  status_t			CreateBackend(LocaleBackend*& backendOut);
+	static  void				DestroyBackend(LocaleBackend* instance);
 };
 
 
-extern LocaleBackend* gLocaleBackend;
+// The real struct behind locale_t
+struct LocaleBackendData {
+	int magic;
+	LocaleBackend* backend;
+	LocaleDataBridge* databridge;
+};
 
+
+LocaleBackendData* GetCurrentLocaleInfo();
+void SetCurrentLocaleInfo(LocaleBackendData* newLocale);
+LocaleBackend* GetCurrentLocaleBackend();
+extern LocaleBackend* gGlobalLocaleBackend;
+extern LocaleDataBridge gGlobalLocaleDataBridge;
 
 }	// namespace Libroot
 }	// namespace BPrivate

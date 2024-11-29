@@ -25,7 +25,9 @@ void *
 dlopen(char const *name, int mode)
 {
 	void* handle;
-	image_id imageID = __gRuntimeLoader->load_library(name, mode, &handle);
+	void* caller = __builtin_return_address(0);
+	image_id imageID = __gRuntimeLoader->load_library(name, mode, caller,
+		&handle);
 
 	sStatus = imageID >= 0 ? B_OK : imageID;
 
@@ -40,8 +42,9 @@ dlsym(void *handle, char const *name)
 	status_t status;
 	void* caller = NULL;
 
-	if (handle == RTLD_NEXT)
-		caller = __arch_get_caller();
+	if (handle == RTLD_NEXT) {
+		caller = __builtin_return_address(0);
+	}
 
 	status = __gRuntimeLoader->get_library_symbol(handle, caller, name,
 		&location);

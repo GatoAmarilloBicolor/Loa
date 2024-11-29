@@ -5,8 +5,9 @@
 #ifndef _BSD_PTY_H_
 #define _BSD_PTY_H_
 
+#include <features.h>
 
-#ifdef _BSD_SOURCE
+#ifdef _DEFAULT_SOURCE
 
 
 #include <sys/cdefs.h>
@@ -27,4 +28,4 @@ __END_DECLS
 #endif
 
 
-#endif	// _BSD_PTY_H_
+#endif	/* _BSD_PTY_H_ */

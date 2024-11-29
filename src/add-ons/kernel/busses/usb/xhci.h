@@ -1,8 +1,9 @@
 /*
- * Copyright 2006-2012, Haiku Inc. All rights reserved.
+ * Copyright 2011-2019, Haiku Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
+ *		Augustin Cavalier <waddlesplash>
  *		Michael Lotz <mmlr@mlotz.ch>
  *		Jian Chiang <j.jian.chiang@gmail.com>
  *		Jérôme Duval <jerome.duval@gmail.com>
@@ -16,59 +17,63 @@
 
 
 struct pci_info;
-struct pci_module_info;
-struct pci_x86_module_info;
+struct pci_device_module_info;
+struct pci_device;
 struct xhci_td;
 struct xhci_device;
 struct xhci_endpoint;
 class XHCIRootHub;
 
 
-enum xhci_state {
-	XHCI_STATE_DISABLED = 0,
-	XHCI_STATE_ENABLED,
-	XHCI_STATE_DEFAULT,
-	XHCI_STATE_ADDRESSED,
-	XHCI_STATE_CONFIGURED,
-};
+/* The endpoint ring needs space for 2 TRBs per transfer
+ * (one for the link TRB, and one for the Event Data TRB). */
+#define XHCI_ENDPOINT_RING_SIZE	(XHCI_MAX_TRANSFERS * 2)
 
 
 typedef struct xhci_td {
-	struct xhci_trb	trbs[XHCI_MAX_TRBS_PER_TD];
+	xhci_trb*	trbs;
+	phys_addr_t	trb_addr;
+	uint32		trb_count;
+	uint32		trb_used;
 
-	phys_addr_t	this_phy;				// A physical pointer to this address
-	phys_addr_t	buffer_phy[XHCI_MAX_TRBS_PER_TD];
-	void	*buffer_log[XHCI_MAX_TRBS_PER_TD];	// Pointer to the logical buffer
-	size_t	buffer_size[XHCI_MAX_TRBS_PER_TD];	// Size of the buffer
-	uint8	buffer_count;
+	void**		buffers;
+	phys_addr_t* buffer_addrs;
+	size_t		buffer_size;
+	uint32		buffer_count;
 
-	struct xhci_td	*next_chain;
-	struct xhci_td	*next;
-	Transfer *transfer;
-	uint8	trb_count;
-	uint8	trb_completion_code;
-	uint32	trb_left;
-} xhci_td __attribute__((__aligned__(16)));
+	Transfer*	transfer;
+	uint8		trb_completion_code;
+	int32		td_transferred;
+	int32		trb_left;
+
+	xhci_td*	next;
+} xhci_td;
 
 
 typedef struct xhci_endpoint {
-	xhci_device		*device;
-	xhci_td 		*td_head;
-	struct xhci_trb *trbs; // [XHCI_MAX_TRANSFERS]
-	phys_addr_t trb_addr;
-	uint8	used;
-	uint8	current;
-	mutex	lock;
+	mutex 			lock;
+
+	xhci_device*	device;
+	uint8			id;
+	uint8			status;
+
+	uint16			max_burst_payload;
+
+	xhci_td*		td_head;
+	uint8			used;
+	uint8			next;
+
+	xhci_trb*		trbs; // [XHCI_ENDPOINT_RING_SIZE]
+	phys_addr_t 	trb_addr;
 } xhci_endpoint;
 
 
 typedef struct xhci_device {
 	uint8 slot;
 	uint8 address;
-	enum xhci_state state;
 	area_id trb_area;
 	phys_addr_t trb_addr;
-	struct xhci_trb *trbs; // [XHCI_MAX_ENDPOINTS - 1][XHCI_MAX_TRANSFERS]
+	struct xhci_trb *trbs; // [XHCI_MAX_ENDPOINTS - 1][XHCI_ENDPOINT_RING_SIZE]
 
 	area_id input_ctx_area;
 	phys_addr_t input_ctx_addr;
@@ -84,8 +89,13 @@ typedef struct xhci_device {
 
 class XHCI : public BusManager {
 public:
-								XHCI(pci_info *info, Stack *stack);
+	static	status_t			AddTo(Stack *stack);
+
+								XHCI(pci_info *info, pci_device_module_info* pci, pci_device* device, Stack *stack,
+									device_node* node);
 								~XHCI();
+
+	virtual	const char *		TypeName() const { return "xhci"; }
 
 			status_t			Start();
 	virtual	status_t			SubmitTransfer(Transfer *transfer);
@@ -93,22 +103,17 @@ public:
 			status_t			SubmitNormalRequest(Transfer *transfer);
 	virtual	status_t			CancelQueuedTransfers(Pipe *pipe, bool force);
 
+	virtual	status_t			StartDebugTransfer(Transfer *transfer);
+	virtual	status_t			CheckDebugTransfer(Transfer *transfer);
+	virtual	void				CancelDebugTransfer(Transfer *transfer);
+
 	virtual	status_t			NotifyPipeChange(Pipe *pipe,
 									usb_change change);
-
-	static	status_t			AddTo(Stack *stack);
 
 	virtual	Device *			AllocateDevice(Hub *parent,
 									int8 hubAddress, uint8 hubPort,
 									usb_speed speed);
-			status_t			ConfigureEndpoint(uint8 slot, uint8 number,
-									uint8 type, uint64 ringAddr,
-									uint16 interval, uint16 maxPacketSize,
-									uint16 maxFrameSize, usb_speed speed);
 	virtual	void				FreeDevice(Device *device);
-
-			status_t			_InsertEndpointForPipe(Pipe *pipe);
-			status_t			_RemoveEndpointForPipe(Pipe *pipe);
 
 			// Port operations for root hub
 			uint8				PortCount() const { return fPortCount; }
@@ -119,8 +124,6 @@ public:
 
 			status_t			GetPortSpeed(uint8 index, usb_speed *speed);
 
-	virtual	const char *		TypeName() const { return "xhci"; }
-
 private:
 			// Controller resets
 			status_t			ControllerReset();
@@ -130,24 +133,38 @@ private:
 	static	int32				InterruptHandler(void *data);
 			int32				Interrupt();
 
+			// Device management
+			void				CleanupDevice(xhci_device *device);
+
+			// Endpoint management
+			status_t			ConfigureEndpoint(xhci_endpoint* ep, uint8 slot,
+									uint8 number, uint8 type, bool directionIn,
+									uint16 interval, uint16 maxPacketSize,
+									usb_speed speed, uint8 maxBurst,
+									uint16 bytesPerInterval);
+			uint8				_GetEndpointState(xhci_endpoint* ep);
+
+			status_t			_InsertEndpointForPipe(Pipe *pipe);
+			status_t			_RemoveEndpointForPipe(Pipe *pipe);
+
 			// Event management
 	static	int32				EventThread(void *data);
 			void				CompleteEvents();
+			void				ProcessEvents();
 
 			// Transfer management
 	static	int32				FinishThread(void *data);
 			void				FinishTransfers();
 
-			// Descriptor
-			xhci_td *			CreateDescriptor(size_t bufferSize);
-			xhci_td *			CreateDescriptorChain(size_t bufferSize,
-									int32 &trbCount);
+			// Descriptor management
+			xhci_td *			CreateDescriptor(uint32 trbCount,
+									uint32 bufferCount, size_t bufferSize);
 			void				FreeDescriptor(xhci_td *descriptor);
 
-			size_t				WriteDescriptorChain(xhci_td *descriptor,
-									iovec *vector, size_t vectorCount);
-			size_t				ReadDescriptorChain(xhci_td *descriptor,
-									iovec *vector, size_t vectorCount);
+			size_t				WriteDescriptor(xhci_td *descriptor,
+									generic_io_vec *vector, size_t vectorCount, bool physical);
+			size_t				ReadDescriptor(xhci_td *descriptor,
+									generic_io_vec *vector, size_t vectorCount, bool physical);
 
 			status_t			_LinkDescriptorForPipe(xhci_td *descriptor,
 									xhci_endpoint *endpoint);
@@ -160,7 +177,8 @@ private:
 			void				HandleCmdComplete(xhci_trb *trb);
 			void				HandleTransferComplete(xhci_trb *trb);
 			status_t			DoCommand(xhci_trb *trb);
-			//Doorbell
+
+			// Doorbell
 			void				Ring(uint8 slot, uint8 endpoint);
 
 			// Commands
@@ -173,10 +191,8 @@ private:
 									bool deconfigure, uint8 slot);
 			status_t			EvaluateContext(uint64 inputContext,
 									uint8 slot);
-			status_t			ResetEndpoint(bool preserve, uint8 endpoint,
-									uint8 slot);
-			status_t			StopEndpoint(bool suspend, uint8 endpoint,
-									uint8 slot);
+			status_t			ResetEndpoint(bool preserve, xhci_endpoint* endpoint);
+			status_t			StopEndpoint(bool suspend, xhci_endpoint* endpoint);
 			status_t			SetTRDequeue(uint64 dequeue, uint16 stream,
 									uint8 endpoint, uint8 slot);
 			status_t			ResetDevice(uint8 slot);
@@ -207,20 +223,20 @@ private:
 
 			void				_SwitchIntelPorts();
 
-	static	pci_module_info *	sPCIModule;
-	static	pci_x86_module_info *sPCIx86Module;
-
-			uint8 *				fCapabilityRegisters;
-			uint32				fCapabilityLength;
-			uint8 *				fOperationalRegisters;
-			uint32				fOperationalLength;
-			uint8 *				fRuntimeRegisters;
-			uint32				fRuntimeLength;
-			uint8 *				fDoorbellRegisters;
+private:
 			area_id				fRegisterArea;
+			uint8 *				fRegisters;
+			uint32				fCapabilityRegisterOffset;
+			uint32				fOperationalRegisterOffset;
+			uint32				fRuntimeRegisterOffset;
+			uint32				fDoorbellRegisterOffset;
+
 			pci_info *			fPCIInfo;
+			pci_device_module_info* fPci;
+			pci_device*			fDevice;
+
 			Stack *				fStack;
-			uint8				fIRQ;
+			uint32				fIRQ;
 			bool				fUseMSI;
 
 			area_id				fErstArea;
@@ -236,21 +252,15 @@ private:
 			spinlock			fSpinlock;
 
 			sem_id				fCmdCompSem;
-			sem_id				fFinishTransfersSem;
-			thread_id			fFinishThread;
 			bool				fStopThreads;
-
-			xhci_td	*			fFinishedHead;
 
 			// Root Hub
 			XHCIRootHub *		fRootHub;
-			uint8				fRootHubAddress;
 
 			// Port management
 			uint8				fPortCount;
 			uint8				fSlotCount;
 			usb_speed			fPortSpeeds[XHCI_MAX_PORTS];
-			uint8				fPortSlots[XHCI_MAX_PORTS];
 
 			// Scratchpad
 			uint32				fScratchpadCount;
@@ -261,8 +271,16 @@ private:
 			struct xhci_device	fDevices[XHCI_MAX_DEVICES];
 			int32				fContextSizeShift; // 0/1 for 32/64 bytes
 
+			// Transfers
+			mutex				fFinishedLock;
+			xhci_td	*			fFinishedHead;
+			sem_id				fFinishTransfersSem;
+			thread_id			fFinishThread;
+
+			// Events
 			sem_id				fEventSem;
 			thread_id			fEventThread;
+			mutex				fEventLock;
 			uint16				fEventIdx;
 			uint16				fCmdIdx;
 			uint8				fEventCcs;

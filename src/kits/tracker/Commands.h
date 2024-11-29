@@ -48,7 +48,8 @@ namespace BPrivate {
 
 const uint32 kGetInfo = 'Tinf';
 const uint32 kDelete = 'Tdel';
-const uint32 kRestoreFromTrash = 'Tres';
+const uint32 kDeleteSelection = kDelete;
+const uint32 kRestoreSelectionFromTrash = kRestoreFromTrash;
 const uint32 kIdentifyEntry = 'Tidt';
 const uint32 kOpenSelection = 'Tosl';
 const uint32 kOpenSelectionWith = 'Tosu';
@@ -71,11 +72,13 @@ const uint32 kEditItem = 'Tedt';
 const uint32 kEditQuery = 'Qedt';
 const uint32 kNewFolder = 'Tnwf';
 const uint32 kNewEntryFromTemplate = 'Tnwe';
+const uint32 kNewTemplateSubmenu = 'Tnsb';
 const uint32 kCopySelectionTo = 'Tcsl';
 const uint32 kMoveSelectionTo = 'Tmsl';
 const uint32 kCreateLink = 'Tlnk';
 const uint32 kCreateRelativeLink = 'Trln';
 const uint32 kDuplicateSelection = 'Tdsl';
+const uint32 kMoveSelectionToTrash = kMoveToTrash;
 const uint32 kLoadAddOn = 'Tlda';
 const uint32 kEmptyTrash = 'Tetr';
 const uint32 kAddPrinter = 'Tadp';
@@ -114,6 +117,9 @@ const uint32 kSwitchToHome = 'Tswh';
 
 const uint32 kTestIconCache = 'TicC';
 
+// thumbnail generator thread sends this message to be_app when done
+const uint32 kUpdateThumbnail = 'TUTb';
+
 // Observers and Notifiers:
 
 // Settings-changed messages:
@@ -131,6 +137,7 @@ const uint32 kTransparentSelectionChanged = 'Trse';
 const uint32 kSortFolderNamesFirstChanged = 'Sfnf';
 const uint32 kHideDotFilesChanged = 'Hdfc';
 const uint32 kTypeAheadFilteringChanged = 'Tafc';
+const uint32 kGenerateImageThumbnailsChanged = 'GITc';
 
 const uint32 kDesktopFilePanelRootChanged = 'Dfpr';
 const uint32 kFavoriteCountChanged = 'Fvct';
@@ -141,9 +148,6 @@ const uint32 kDateFormatChanged = 'Date';
 const uint32 kUpdateVolumeSpaceBar = 'UpSB';
 const uint32 kShowVolumeSpaceBar = 'ShSB';
 const uint32 kSpaceBarColorChanged = 'SBcc';
-
-const uint32 kDontMoveFilesToTrashChanged = 'STdm';
-const uint32 kAskBeforeDeleteFileChanged = 'STad';
 
 } // namespace BPrivate
 

@@ -17,6 +17,8 @@
 #include <String.h>
 
 #include <AutoDeleter.h>
+#include <AutoDeleterPosix.h>
+#include <StringForSize.h>
 #include <TextTable.h>
 
 #include <file_systems/ram_disk/ram_disk.h>
@@ -97,16 +99,15 @@ static status_t
 execute_control_device_ioctl(int operation, void* request)
 {
 	// open the ram disk control device
-	int fd = open(kRamDiskControlDevicePath, O_RDONLY);
-	if (fd < 0) {
+	FileDescriptorCloser fd(open(kRamDiskControlDevicePath, O_RDONLY));
+	if (!fd.IsSet()) {
 		fprintf(stderr, "Error: Failed to open RAM disk control device \"%s\": "
 			"%s\n", kRamDiskControlDevicePath, strerror(errno));
 		return errno;
 	}
-	FileDescriptorCloser fdCloser(fd);
 
 	// issue the request
-	if (ioctl(fd, operation, request) < 0)
+	if (ioctl(fd.Get(), operation, request) < 0)
 		return errno;
 
 	return B_OK;
@@ -140,29 +141,7 @@ command_register(int argc, const char* const* argv)
 			case 's':
 			{
 				const char* sizeString = optarg;
-				char* end;
-				deviceSize = strtoll(sizeString, &end, 0);
-				if (end != sizeString && deviceSize > 0) {
-					int64 originalDeviceSize = deviceSize;
-					switch (*end) {
-						case 'g':
-							deviceSize *= 1024;
-						case 'm':
-							deviceSize *= 1024;
-						case 'k':
-							deviceSize *= 1024;
-							end++;
-							break;
-						case '\0':
-							break;
-						default:
-							deviceSize = -1;
-							break;
-					}
-
-					if (deviceSize > 0 && originalDeviceSize > deviceSize)
-						deviceSize = -1;
-				}
+				deviceSize = parse_size(sizeString);
 
 				if (deviceSize <= 0) {
 					fprintf(stderr, "Error: Invalid size argument: \"%s\"\n",
@@ -351,16 +330,15 @@ command_flush(int argc, const char* const* argv)
 	// open the raw device
 	BString path;
 	path.SetToFormat("%s/%s/raw", kRamDiskRawDeviceBasePath, idString);
-	int fd = open(path, O_RDONLY);
-	if (fd < 0) {
+	FileDescriptorCloser fd(open(path, O_RDONLY));
+	if (!fd.IsSet()) {
 		fprintf(stderr, "Error: Failed to open RAM disk device \"%s\"\n",
 			path.String());
 		return 1;
 	}
-	FileDescriptorCloser fdCloser(fd);
 
 	// issue the request
-	if (ioctl(fd, RAM_DISK_IOCTL_FLUSH, NULL) < 0) {
+	if (ioctl(fd.Get(), RAM_DISK_IOCTL_FLUSH, NULL) < 0) {
 		fprintf(stderr, "Error: Failed to flush RAM disk device: %s\n",
 			strerror(errno));
 		return 1;
@@ -402,20 +380,19 @@ command_list(int argc, const char* const* argv)
 		print_usage_and_exit(true);
 
 	// iterate through the RAM disk device directory and search for raw devices
-	DIR* dir = opendir(kRamDiskRawDeviceBasePath);
-	if (dir == NULL) {
+	DirCloser dir(opendir(kRamDiskRawDeviceBasePath));
+	if (!dir.IsSet()) {
 		fprintf(stderr, "Error: Failed to open RAM disk device directory: %s\n",
 			strerror(errno));
 		return 1;
 	}
-	CObjectDeleter<DIR, int> dirCloser(dir, &closedir);
 
 	TextTable table;
 	table.AddColumn("ID", B_ALIGN_RIGHT);
 	table.AddColumn("Size", B_ALIGN_RIGHT);
 	table.AddColumn("Associated file");
 
-	while (dirent* entry = readdir(dir)) {
+	while (dirent* entry = readdir(dir.Get())) {
 		// check, if the entry name could be an ID
 		const char* idString = entry->d_name;
 		char* end;
@@ -426,14 +403,14 @@ command_list(int argc, const char* const* argv)
 		// open the raw device
 		BString path;
 		path.SetToFormat("%s/%s/raw", kRamDiskRawDeviceBasePath, idString);
-		int fd = open(path, O_RDONLY);
-		if (fd < 0)
+		FileDescriptorCloser fd(open(path, O_RDONLY));
+		if (!fd.IsSet())
 			continue;
-		FileDescriptorCloser fdCloser(fd);
 
 		// issue the request
 		ram_disk_ioctl_info request;
-		if (ioctl(fd, RAM_DISK_IOCTL_INFO, &request) < 0)
+		if (ioctl(fd.Get(), RAM_DISK_IOCTL_INFO, &request, sizeof(request))
+			< 0)
 			continue;
 
 		int32 rowIndex = table.CountRows();

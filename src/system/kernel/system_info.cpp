@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2014, Haiku, Inc.
+ * Copyright (c) 2004-2020, Haiku, Inc.
  * Distributed under the terms of the MIT license.
  *
  * Authors:
@@ -49,8 +49,8 @@ const static char *kKernelName = "kernel_" HAIKU_ARCH;
 static int
 dump_info(int argc, char **argv)
 {
-	kprintf("kernel build: %s %s (gcc%d %s)\n", __DATE__, __TIME__, __GNUC__,
-		__VERSION__);
+	kprintf("kernel build: %s %s (gcc%d %s), debug level %d\n", __DATE__,
+		__TIME__, __GNUC__, __VERSION__, KDEBUG_LEVEL);
 	kprintf("revision: %s\n\n", get_haiku_revision());
 
 	kprintf("cpu count: %" B_PRId32 "\n", smp_get_num_cpus());
@@ -490,20 +490,57 @@ get_system_info(system_info* info)
 }
 
 
-status_t
-get_cpu_info(uint32 firstCPU, uint32 cpuCount, cpu_info* info)
+typedef struct {
+	bigtime_t	active_time;
+	bool		enabled;
+} beta2_cpu_info;
+
+
+extern "C" status_t
+__get_cpu_info(uint32 firstCPU, uint32 cpuCount, beta2_cpu_info* beta2_info)
 {
-	if (firstCPU >= (uint32)smp_get_num_cpus())
-		return B_BAD_VALUE;
+	cpu_info info[cpuCount];
+	status_t err = _get_cpu_info_etc(firstCPU, cpuCount, info, sizeof(cpu_info));
+	if (err == B_OK) {
+		for (uint32 i = 0; i < cpuCount; i++) {
+			beta2_info[i].active_time = info[i].active_time;
+			beta2_info[i].enabled = info[i].enabled;
+		}
+	}
+	return err;
+}
+
+
+status_t
+_get_cpu_info_etc(uint32 firstCPU, uint32 cpuCount, cpu_info* info, size_t size)
+{
 	if (cpuCount == 0)
 		return B_OK;
+	if (size != sizeof(cpu_info))
+		return B_BAD_VALUE;
+	if (firstCPU >= (uint32)smp_get_num_cpus())
+		return B_BAD_VALUE;
 
-	uint32 count = std::min(cpuCount, smp_get_num_cpus() - firstCPU);
+	const uint32 endCPU = firstCPU + std::min(cpuCount, smp_get_num_cpus() - firstCPU);
 
-	memset(info, 0, sizeof(cpu_info) * count);
-	for (uint32 i = 0; i < count; i++) {
-		info[i].active_time = cpu_get_active_time(firstCPU + i);
-		info[i].enabled = !gCPU[firstCPU + i].disabled;
+	// This function is called very often from userland by applications
+	// that display CPU usage information, so we want to keep this as
+	// optimized and touch as little as possible. Hence, we avoid use
+	// of an allocated temporary buffer.
+
+	cpu_info localInfo[8];
+	for (uint32 cpuIdx = firstCPU; cpuIdx < endCPU; ) {
+		uint32 localIdx;
+		for (localIdx = 0; cpuIdx < endCPU && localIdx < B_COUNT_OF(localInfo);
+				cpuIdx++, localIdx++) {
+			localInfo[localIdx].active_time = cpu_get_active_time(cpuIdx);
+			localInfo[localIdx].enabled = !gCPU[cpuIdx].disabled;
+			localInfo[localIdx].current_frequency = cpu_frequency(cpuIdx);
+		}
+
+		if (user_memcpy(info, localInfo, sizeof(cpu_info) * localIdx) != B_OK)
+			return B_BAD_ADDRESS;
+		info += localIdx;
 	}
 
 	return B_OK;
@@ -561,23 +598,8 @@ _user_get_cpu_info(uint32 firstCPU, uint32 cpuCount, cpu_info* userInfo)
 {
 	if (userInfo == NULL || !IS_USER_ADDRESS(userInfo))
 		return B_BAD_ADDRESS;
-	if (firstCPU >= (uint32)smp_get_num_cpus())
-		return B_BAD_VALUE;
-	if (cpuCount == 0)
-		return B_OK;
 
-	uint32 count = std::min(cpuCount, smp_get_num_cpus() - firstCPU);
-
-	cpu_info* cpuInfos = new(std::nothrow) cpu_info[count];
-	if (cpuInfos == NULL)
-		return B_NO_MEMORY;
-	ArrayDeleter<cpu_info> _(cpuInfos);
-
-	status_t error = get_cpu_info(firstCPU, count, cpuInfos);
-	if (error != B_OK)
-		return error;
-
-	return user_memcpy(userInfo, cpuInfos, sizeof(cpu_info) * count);
+	return _get_cpu_info_etc(firstCPU, cpuCount, userInfo, sizeof(cpu_info));
 }
 
 

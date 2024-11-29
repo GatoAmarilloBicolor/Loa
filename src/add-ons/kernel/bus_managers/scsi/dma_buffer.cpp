@@ -39,10 +39,10 @@ is_sg_list_dma_safe(scsi_ccb *request)
 	scsi_bus_info *bus = request->bus;
 	const physical_entry *sg_list = request->sg_list;
 	uint32 sg_count = request->sg_count;
-	uint32 dma_boundary = bus->dma_params.dma_boundary;
-	uint32 alignment = bus->dma_params.alignment;
-	uint32 max_sg_block_size = bus->dma_params.max_sg_block_size;
-	uint32 cur_idx;
+	const uint32 dma_boundary = bus->dma_params.dma_boundary;
+	const uint32 alignment = bus->dma_params.alignment;
+	const uint32 max_sg_block_size = bus->dma_params.max_sg_block_size;
+	const uint64 high_address = bus->dma_params.high_address;
 
 	// not too many S/G list entries
 	if (sg_count > bus->dma_params.max_sg_blocks) {
@@ -54,8 +54,8 @@ is_sg_list_dma_safe(scsi_ccb *request)
 	if (dma_boundary == ~(uint32)0 && alignment == 0 && max_sg_block_size == 0)
 		return true;
 
-	// argh - controller is a bit picky, so make sure he likes us
-	for (cur_idx = sg_count; cur_idx >= 1; --cur_idx, ++sg_list) {
+	// argh - controller is a bit picky, so make sure it likes us
+	for (uint32 cur_idx = sg_count; cur_idx >= 1; --cur_idx, ++sg_list) {
 		phys_addr_t max_len;
 
 		// calculate space upto next dma boundary crossing and
@@ -77,6 +77,12 @@ is_sg_list_dma_safe(scsi_ccb *request)
 
 		if (((sg_list->address + sg_list->size) & alignment) != 0) {
 			SHOW_FLOW(0, "end of S/G-entry has bad alignment @%" B_PRIxPHYSADDR,
+				sg_list->address + sg_list->size);
+			return false;
+		}
+
+		if ((sg_list->address + sg_list->size) > high_address) {
+			SHOW_FLOW(0, "S/G-entry above high address @%" B_PRIxPHYSADDR,
 				sg_list->address + sg_list->size);
 			return false;
 		}
@@ -193,7 +199,8 @@ scsi_alloc_dma_buffer(dma_buffer *buffer, dma_params *dma_params, uint32 size)
 			// TODO: Use 64 bit addresses, if possible!
 #endif
 		buffer->area = create_area_etc(B_SYSTEM_TEAM, "DMA buffer", size,
-			B_CONTIGUOUS, 0, 0, 0, &virtualRestrictions, &physicalRestrictions,
+			B_CONTIGUOUS, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA, 0, 0,
+			&virtualRestrictions, &physicalRestrictions,
 			(void**)&buffer->address);
 
 		if (buffer->area < 0) {
@@ -207,7 +214,7 @@ scsi_alloc_dma_buffer(dma_buffer *buffer, dma_params *dma_params, uint32 size)
 		// we can live with a fragmented buffer - very nice
 		buffer->area = create_area("DMA buffer",
 			(void **)&buffer->address, B_ANY_KERNEL_ADDRESS, size,
-			B_32_BIT_FULL_LOCK, 0);
+			B_32_BIT_FULL_LOCK, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA);
 				// TODO: Use B_FULL_LOCK, if possible!
 		if (buffer->area < 0) {
 			SHOW_ERROR(2, "Cannot create DMA buffer of %" B_PRIu32 " bytes",
@@ -226,7 +233,7 @@ scsi_alloc_dma_buffer(dma_buffer *buffer, dma_params *dma_params, uint32 size)
 
 	buffer->sg_list_area = create_area("DMA buffer S/G table",
 		(void **)&buffer->sg_list, B_ANY_KERNEL_ADDRESS, sg_list_size,
-		B_32_BIT_FULL_LOCK, 0);
+		B_32_BIT_FULL_LOCK, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA);
 			// TODO: Use B_FULL_LOCK, if possible!
 	if (buffer->sg_list_area < 0) {
 		SHOW_ERROR( 2, "Cannot create DMA buffer S/G list of %" B_PRIuSIZE
@@ -287,7 +294,7 @@ scsi_alloc_dma_buffer_sg_orig(dma_buffer *buffer, size_t size)
 	buffer->sg_orig = create_area("S/G to original data",
 		(void **)&buffer->sg_list_orig,
 		B_ANY_KERNEL_ADDRESS, size,
-		B_NO_LOCK, 0);
+		B_NO_LOCK, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA);
 	if (buffer->sg_orig < 0) {
 		SHOW_ERROR(2, "Cannot S/G list buffer to original data of %" B_PRIuSIZE
 			" bytes", size);
@@ -296,7 +303,7 @@ scsi_alloc_dma_buffer_sg_orig(dma_buffer *buffer, size_t size)
 
 	buffer->sg_count_max_orig = size / sizeof(physical_entry);
 
-	SHOW_INFO(3, "Got up to %" B_PRIuSIZE " S/G entries to original data",
+	SHOW_INFO(3, "Got up to %" B_PRIu32 " S/G entries to original data",
 		buffer->sg_count_max_orig);
 
 	return true;
@@ -364,14 +371,14 @@ scsi_get_dma_buffer(scsi_ccb *request)
 	acquire_sem(device->dma_buffer_owner);
 
 	// make sure, clean-up daemon doesn't bother us
-	ACQUIRE_BEN(&device->dma_buffer_lock);
+	mutex_lock(&device->dma_buffer_lock);
 
 	// there is only one buffer, so no further management
 	buffer = &device->dma_buffer;
 
 	buffer->inuse = true;
 
-	RELEASE_BEN(&device->dma_buffer_lock);
+	mutex_unlock(&device->dma_buffer_lock);
 
 	// memorize buffer for cleanup
 	request->dma_buffer = buffer;
@@ -412,12 +419,12 @@ scsi_get_dma_buffer(scsi_ccb *request)
 err:
 	SHOW_INFO0(3, "error setting up DMA buffer");
 
-	ACQUIRE_BEN(&device->dma_buffer_lock);
+	mutex_lock(&device->dma_buffer_lock);
 
 	// some of this is probably not required, but I'm paranoid
 	buffer->inuse = false;
 
-	RELEASE_BEN(&device->dma_buffer_lock);
+	mutex_unlock(&device->dma_buffer_lock);
 	release_sem(device->dma_buffer_owner);
 
 	return false;
@@ -448,16 +455,17 @@ scsi_release_dma_buffer(scsi_ccb *request)
 	request->sg_count = buffer->orig_sg_count;
 
 	// free buffer
-	ACQUIRE_BEN(&device->dma_buffer_lock);
+	mutex_lock(&device->dma_buffer_lock);
 
 	buffer->last_use = system_time();
 	buffer->inuse = false;
 
-	RELEASE_BEN(&device->dma_buffer_lock);
+	mutex_unlock(&device->dma_buffer_lock);
 
 	release_sem(device->dma_buffer_owner);
 
 	request->buffered = false;
+	request->dma_buffer = NULL;
 }
 
 
@@ -469,7 +477,7 @@ scsi_dma_buffer_daemon(void *dev, int counter)
 	scsi_device_info *device = (scsi_device_info*)dev;
 	dma_buffer *buffer;
 
-	ACQUIRE_BEN(&device->dma_buffer_lock);
+	mutex_lock(&device->dma_buffer_lock);
 
 	buffer = &device->dma_buffer;
 
@@ -479,7 +487,7 @@ scsi_dma_buffer_daemon(void *dev, int counter)
 		scsi_free_dma_buffer_sg_orig(buffer);
 	}
 
-	RELEASE_BEN(&device->dma_buffer_lock);
+	mutex_unlock(&device->dma_buffer_lock);
 }
 
 

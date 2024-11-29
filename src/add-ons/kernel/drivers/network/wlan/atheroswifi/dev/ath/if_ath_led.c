@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * All rights reserved.
  *
@@ -28,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: releng/11.1/sys/dev/ath/if_ath_led.c 265115 2014-04-30 02:19:41Z adrian $");
-
 /*
  * Driver for the Atheros Wireless LAN controller.
  *
@@ -76,6 +76,7 @@ __FBSDID("$FreeBSD: releng/11.1/sys/dev/ath/if_ath_led.c 265115 2014-04-30 02:19
 #include <net/if_arp.h>
 #include <net/ethernet.h>
 #include <net/if_llc.h>
+#include <net/if_var.h>
 
 #include <net80211/ieee80211_var.h>
 #include <net80211/ieee80211_regdomain.h>
@@ -109,7 +110,6 @@ __FBSDID("$FreeBSD: releng/11.1/sys/dev/ath/if_ath_led.c 265115 2014-04-30 02:19
 /*
  * XXX TODO: move the LED sysctls here.
  */
-
 
 /*
  * Configure the hardware for software and LED blinking.

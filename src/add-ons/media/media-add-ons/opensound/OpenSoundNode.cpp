@@ -9,6 +9,7 @@
 
 #include "OpenSoundNode.h"
 
+#include <AutoDeleter.h>
 #include <Autolock.h>
 #include <Buffer.h>
 #include <BufferGroup.h>
@@ -345,7 +346,7 @@ OpenSoundNode::OpenSoundNode(BMediaAddOn* addon, const char* name,
 	// initialize our preferred format object
 	// TODO: this should go away! should use engine's preferred for each afmt.
 #if 1
-	memset(&fPreferredFormat, 0, sizeof(fPreferredFormat));
+	fPreferredFormat = media_format();
 		// set everything to wildcard first
 	fPreferredFormat.type = B_MEDIA_RAW_AUDIO;
 	fPreferredFormat.u.raw_audio = media_multi_audio_format::wildcard;
@@ -1232,10 +1233,10 @@ OpenSoundNode::Connect(status_t error, const media_source& source,
 	// Do so, then make sure we get our events early enough.
 	media_node_id id;
 	FindLatencyFor(channel->fOutput.destination, &fLatency, &id);
-	TRACE("\tdownstream latency = %Ld\n", fLatency);
+	TRACE("\tdownstream latency = %lld\n", fLatency);
 
 	fInternalLatency = BufferDuration();
-	TRACE("\tbuffer-filling took %Ld usec on this machine\n",
+	TRACE("\tbuffer-filling took %lld usec on this machine\n",
 		fInternalLatency);
 	//SetEventLatency(fLatency + fInternalLatency);
 
@@ -1601,7 +1602,7 @@ OpenSoundNode::TimeSourceOp(const time_source_op_info& op, void* _reserved)
 				media_timed_event stopEvent(0, BTimedEventQueue::B_STOP);
 				EventQueue()->AddEvent(stopEvent);
 				fTimeSourceStarted = false;
-				PublishTime(0, 0, 0);
+				PublishTime(0, 0, 1.0f);
 			}
 			break;
 		case B_TIMESOURCE_STOP_IMMEDIATELY:
@@ -1610,7 +1611,7 @@ OpenSoundNode::TimeSourceOp(const time_source_op_info& op, void* _reserved)
 				media_timed_event stopEvent(0, BTimedEventQueue::B_STOP);
 				EventQueue()->AddEvent(stopEvent);
 				fTimeSourceStarted = false;
-				PublishTime(0, 0, 0);
+				PublishTime(0, 0, 1.0f);
 			}
 			break;
 		case B_TIMESOURCE_SEEK:
@@ -2232,7 +2233,10 @@ OpenSoundNode::_PlayThread(NodeInput* input)
 	}
 
 	// cache a silence buffer
-	uint8 silenceBuffer[bufferSize];
+	uint8* silenceBuffer = (uint8*)malloc(bufferSize);
+	if (silenceBuffer == NULL)
+		return B_NO_MEMORY;
+	MemoryDeleter deleter(silenceBuffer);
 	uint8 formatSilence = 0;
 	if (input->fInput.format.u.raw_audio.format
 			== media_raw_audio_format::B_AUDIO_UCHAR)
@@ -2677,9 +2681,8 @@ OpenSoundNode::GetFlavor(flavor_info* outInfo, int32 id)
 	outInfo->out_formats = 0;
 	outInfo->internal_id = id;
 
-	outInfo->name = (char *)"OpenSoundNode Node";
-	outInfo->info = (char *)"The OpenSoundNode outputs to OpenSound System v4 "
-		"drivers.";
+	outInfo->name = "OpenSoundNode Node";
+	outInfo->info = "The OpenSoundNode outputs to OpenSound System v4 drivers.";
 	outInfo->kinds = B_BUFFER_CONSUMER | B_BUFFER_PRODUCER | B_TIME_SOURCE
 		| B_PHYSICAL_OUTPUT | B_PHYSICAL_INPUT | B_CONTROLLABLE;
 	// TODO: If the OSS engine supports outputing encoded audio,

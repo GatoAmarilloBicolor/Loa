@@ -269,18 +269,6 @@ arch_debug_contains_call(Thread *thread, const char *symbol,
 }
 
 
-void *
-arch_debug_get_caller(void)
-{
-	// TODO: implement me
-	//return __builtin_frame_address(1);
-	struct stack_frame *frame;
-	//frame = __builtin_frame_address(0);
-	frame = get_current_stack_frame();
-	return (void *)frame->previous->return_address;
-}
-
-
 int32
 arch_debug_get_stack_trace(addr_t* returnAddresses, int32 maxCount,
 	int32 skipIframes, int32 skipFrames, uint32 flags)
@@ -337,11 +325,10 @@ arch_debug_get_stack_trace(addr_t* returnAddresses, int32 maxCount,
 				break;
 		}
 
-		if (skipFrames <= 0
-			&& ((flags & STACK_TRACE_KERNEL) != 0 || onKernelStack)) {
-			returnAddresses[count++] = ip;
-		} else
+		if (skipFrames > 0)
 			skipFrames--;
+		else
+			returnAddresses[count++] = ip;
 
 		framePointer = nextFrame;
 	}

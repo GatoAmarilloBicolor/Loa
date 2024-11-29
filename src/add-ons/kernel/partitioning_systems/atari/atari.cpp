@@ -91,7 +91,7 @@ atari_identify_partition(int fd, partition_data *partition, void **_cookie)
 
 	if (arb->Checksum() == 0x55aa)
 		weight -= 0.1; /* possible but likely a PC sector */
-	if (arb->_reserved_1[1] != 0x00)
+	if (arb->_reserved_1[0] != 0x00)
 		weight -= 10;
 	/* hope so */
 	if (arb->MaxPartitionSize() < 10)
@@ -173,7 +173,7 @@ atari_scan_partition(int fd, partition_data *partition, void *_cookie)
 			continue;
 		TRACE(("atari: file system: %.3s\n", p->id));
 		if ((p->Start() + p->Size())*(uint64)SECTSZ > (uint64)partition->size) {
-			TRACE(("atari: child partition exceeds existing space (%Ld bytes)\n", p->Size()*SECTSZ));
+			TRACE(("atari: child partition exceeds existing space (%lld bytes)\n", p->Size()*SECTSZ));
 			continue;
 		}
 		if (!isalnum(p->id[0]))

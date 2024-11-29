@@ -29,13 +29,12 @@ AudioMixerAddon::AudioMixerAddon(image_id image)
 	fFormat(new media_format),
 	fInfo(new flavor_info)
 {
-	memset(fFormat, 0, sizeof(*fFormat));
 	fFormat->type = B_MEDIA_RAW_AUDIO;
 	fFormat->u.raw_audio = media_raw_audio_format::wildcard;
 
 	fInfo->internal_id = 0;
-	fInfo->name = (char *)"Audio Mixer (Haiku)";
-	fInfo->info = (char *)"Haiku Audio Mixer media addon";
+	fInfo->name = "Audio Mixer";
+	fInfo->info = "Audio Mixer media addon";
 	fInfo->kinds = B_BUFFER_PRODUCER | B_BUFFER_CONSUMER | B_SYSTEM_MIXER | B_CONTROLLABLE;
 	fInfo->flavor_flags = 0;	// 0 = global or local instantiation allowed, no restrictions
 	fInfo->possible_count = 0;	// 0 = infinite

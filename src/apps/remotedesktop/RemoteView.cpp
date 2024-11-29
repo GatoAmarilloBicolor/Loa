@@ -1256,7 +1256,6 @@ RemoteView::_DrawThread()
 
 				offscreen->DrawString(string, offsets, count);
 
-				free(string);
 				reply.Start(RP_DRAW_STRING_RESULT);
 				reply.Add(token);
 				reply.Add(offscreen->PenLocation());
@@ -1268,6 +1267,7 @@ RemoteView::_DrawThread()
 				BRect boxes[count];
 				font.GetBoundingBoxesAsGlyphs(string, count, B_SCREEN_METRIC,
 					boxes);
+				free(string);
 
 				font_height height;
 				offscreen->GetFontHeight(&height);
@@ -1293,8 +1293,7 @@ RemoteView::_DrawThread()
 				// TODO: support the drawCursor flag
 				BBitmap bitmap(bounds, B_BITMAP_NO_SERVER_LINK, B_RGB32);
 				bitmap.ImportBits(fOffscreenBitmap, bounds.LeftTop(),
-					BPoint(0, 0), bounds.IntegerWidth() + 1,
-					bounds.IntegerHeight() + 1);
+					BPoint(0, 0), bounds.Size());
 
 				reply.Start(RP_READ_BITMAP_RESULT);
 				reply.Add(token);

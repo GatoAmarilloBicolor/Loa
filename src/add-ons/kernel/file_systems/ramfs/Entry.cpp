@@ -1,4 +1,7 @@
-// Entry.cpp
+/*
+ * Copyright 2007, Ingo Weinhold, ingo_weinhold@gmx.de.
+ * All rights reserved. Distributed under the terms of the MIT license.
+ */
 
 #include "AllocationInfo.h"
 #include "DebugSupport.h"
@@ -10,7 +13,7 @@
 // constructor
 Entry::Entry(const char *name, Node *node, Directory *parent)
 	: fParent(parent),
-	  fNode(node),
+	  fNode(NULL),
 	  fName(name),
 	  fReferrerLink(),
 	  fIterators()
@@ -37,17 +40,18 @@ Entry::InitCheck() const
 status_t
 Entry::Link(Node *node)
 {
-	status_t error = (node ? B_OK : B_BAD_VALUE);
+	if (node == NULL)
+		return B_BAD_VALUE;
+	if (node == fNode)
+		return B_OK;
+
+	// We first link to the new node and then unlink the old one.
+	Node *oldNode = fNode;
+	status_t error = node->Link(this);
 	if (error == B_OK) {
-		// We first link to the new node and then unlink the old one. So, no
-		// harm is done, if both are the same.
-		Node *oldNode = fNode;
-		error = node->Link(this);
-		if (error == B_OK) {
-			fNode = node;
-			if (oldNode)
-				oldNode->Unlink(this);
-		}
+		fNode = node;
+		if (oldNode)
+			oldNode->Unlink(this);
 	}
 	return error;
 }
@@ -98,4 +102,3 @@ Entry::GetAllocationInfo(AllocationInfo &info)
 	info.AddStringAllocation(fName.GetLength());
 	fNode->GetAllocationInfo(info);
 }
-

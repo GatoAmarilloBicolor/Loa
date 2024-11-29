@@ -12,6 +12,7 @@
 
 
 #include <ListView.h>
+#include <String.h>
 #include <TranslationDefs.h>
 
 
@@ -21,9 +22,11 @@ public:
 	virtual					~TranslatorItem();
 
 			translator_id	ID() const { return fID; }
+			const BString&	Supertype() const { return fSupertype; }
 
 private:
 			translator_id	fID;
+			BString			fSupertype;
 };
 
 
@@ -36,7 +39,8 @@ public:
 			TranslatorItem*	TranslatorAt(int32 index) const;
 
 	virtual	void			MessageReceived(BMessage* message);
-	virtual	void			MouseMoved(BPoint point, uint32 transit, const BMessage* msg);
+	virtual	void			MouseMoved(BPoint point, uint32 transit,
+								const BMessage* dragMessage);
 
 			void			SortItems();
 };

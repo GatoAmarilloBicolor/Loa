@@ -10,19 +10,12 @@ class PXAInterruptController;
 
 class PXAInterruptController : public InterruptController {
 public:
-	void EnableInterrupt(int irq);
-	void DisableInterrupt(int irq);
+	PXAInterruptController(uint32_t reg_base);
+	void EnableInterrupt(int32 irq);
+	void DisableInterrupt(int32 irq);
 	void HandleInterrupt();
 
-	static status_t Init(fdt_module_info *fdt, fdt_device_node node, void *cookie) {
-		InterruptController *ic = new(std::nothrow) PXAInterruptController(fdt, node);
-		// XXX implement InitCheck() functionality
-		return ic != NULL ? B_OK : B_NO_MEMORY;
-	}
-
 protected:
-	PXAInterruptController(fdt_module_info *fdt, fdt_device_node node);
-
 	area_id fRegArea;
 	uint32 *fRegBase;
 };
@@ -34,14 +27,14 @@ public:
 	void Clear();
 	bigtime_t Time();
 
-	static status_t Init(fdt_module_info *fdt, fdt_device_node node, void *cookie) {
-		PXATimer *timer = new(std::nothrow) PXATimer(fdt, node);
+	static status_t Init(uint32_t reg_base) {
+		PXATimer *timer = new(std::nothrow) PXATimer(reg_base);
 		// XXX implement InitCheck() functionality
 		return timer != NULL ? B_OK : B_NO_MEMORY;
 	}
 
 protected:
-	PXATimer(fdt_module_info *fdt, fdt_device_node node);
+	PXATimer(uint32_t reg_base);
 
 	area_id fRegArea;
 	uint32 *fRegBase;

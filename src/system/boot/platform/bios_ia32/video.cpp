@@ -178,7 +178,7 @@ get_crtc_info_block(edid1_detailed_timing& timing)
 		/ (crtcInfo->horizontal_total / 10)
 		/ (crtcInfo->vertical_total / 10);
 
-	TRACE(("crtc: h %u/%u/%u, v %u/%u/%u, pixel clock %lu, refresh %u\n",
+	TRACE(("crtc: h %u/%u/%u, v %u/%u/%u, pixel clock %u, refresh %u\n",
 		crtcInfo->horizontal_sync_start, crtcInfo->horizontal_sync_end,
 		crtcInfo->horizontal_total, crtcInfo->vertical_sync_start,
 		crtcInfo->vertical_sync_end, crtcInfo->vertical_total,
@@ -258,6 +258,33 @@ find_edid_mode(edid1_info& info, bool allowPalette)
 }
 
 
+static void
+vesa_fixups(void *settings)
+{
+	const char *oem_string = (const char *)sInfo.oem_string;
+
+	if (!strcmp(oem_string, "NVIDIA")) {
+		const char *arg = NULL;
+		int32 scaling = -1;
+
+		if (settings != NULL)
+			arg = get_driver_parameter(settings, "nvidia_scaling", NULL, "1");
+		if (arg != NULL)
+			scaling = strtol(arg, NULL, 0);
+
+		if (scaling > -1) {
+			dprintf("Setting nvidia scaling mode to %" B_PRId32 "\n", scaling);
+			struct bios_regs regs;
+			regs.eax = 0x4f14;
+			regs.ebx = 0x0102;
+			regs.ecx = scaling;
+			call_bios(0x10, &regs);
+		}
+	}
+
+}
+
+
 static bool
 get_mode_from_settings(void)
 {
@@ -267,6 +294,8 @@ get_mode_from_settings(void)
 	void *handle = load_driver_settings("vesa");
 	if (handle == NULL)
 		return false;
+
+	vesa_fixups(handle);
 
 	bool found = false;
 
@@ -348,13 +377,13 @@ vesa_get_edid(edid1_info *info)
 	regs.edi = 0;
 	call_bios(0x10, &regs);
 
-	TRACE(("EDID1: %lx\n", regs.eax));
+	TRACE(("EDID1: %x\n", regs.eax));
 	// %ah contains the error code
 	// %al determines whether or not the function is supported
 	if (regs.eax != 0x4f)
 		return B_NOT_SUPPORTED;
 
-	TRACE(("EDID2: ebx %lx\n", regs.ebx));
+	TRACE(("EDID2: ebx %x\n", regs.ebx));
 	// test if DDC is supported by the monitor
 	if ((regs.ebx & 3) == 0)
 		return B_NOT_SUPPORTED;
@@ -369,7 +398,7 @@ vesa_get_edid(edid1_info *info)
 	regs.es = ADDRESS_SEGMENT(&edidRaw);
 	regs.edi = ADDRESS_OFFSET(&edidRaw);
 	call_bios(0x10, &regs);
-	TRACE(("EDID3: %lx\n", regs.eax));
+	TRACE(("EDID3: %x\n", regs.eax));
 
 	if (regs.eax != 0x4f)
 		return B_NOT_SUPPORTED;
@@ -423,7 +452,7 @@ vesa_get_vbe_info_block(vbe_info_block *info)
 	if (info->signature != VESA_SIGNATURE)
 		return B_ERROR;
 
-	dprintf("VESA version = %d.%d, capabilities %lx\n", info->version.major,
+	dprintf("VESA version = %d.%d, capabilities %x\n", info->version.major,
 		info->version.minor, info->capabilities);
 
 	if (info->version.major < 2) {
@@ -456,7 +485,7 @@ vesa_init(vbe_info_block *info, video_mode **_standardMode)
 
 		struct vbe_mode_info modeInfo;
 		if (vesa_get_mode_info(mode, &modeInfo) == B_OK) {
-			TRACE((" 0x%03x: %u x %u x %u (a = %d, mem = %d, phy = %lx, p = %d, b = %d)\n", mode,
+			TRACE((" 0x%03x: %u x %u x %u (a = %d, mem = %d, phy = %x, p = %d, b = %d)\n", mode,
 				   modeInfo.width, modeInfo.height, modeInfo.bits_per_pixel, modeInfo.attributes,
 				   modeInfo.memory_model, modeInfo.physical_base, modeInfo.num_planes,
 				   modeInfo.num_banks));
@@ -616,10 +645,10 @@ video_mode_hook(Menu *menu, MenuItem *item)
 	// find selected mode
 	video_mode *mode = NULL;
 
-	menu = item->Submenu();
-	item = menu->FindMarked();
-	if (item != NULL) {
-		switch (menu->IndexOf(item)) {
+	Menu* submenu = item->Submenu();
+	MenuItem* subitem = submenu->FindMarked();
+	if (subitem != NULL) {
+		switch (submenu->IndexOf(subitem)) {
 			case 0:
 				// "Default" mode special
 				sMode = sDefaultMode;
@@ -630,7 +659,7 @@ video_mode_hook(Menu *menu, MenuItem *item)
 				// sets sMode to NULL which triggers VGA mode
 				break;
 			default:
-				mode = (video_mode *)item->Data();
+				mode = (video_mode *)subitem->Data();
 				break;
 		}
 	}
@@ -679,13 +708,14 @@ video_mode_menu()
 }
 
 
-static void
+static status_t
 set_vga_mode(void)
 {
 	// sets 640x480 16 colors graphics mode
 	bios_regs regs;
 	regs.eax = 0x0012;
 	call_bios(0x10, &regs);
+	return (regs.eax == 0x4f) ? B_OK : B_NOT_SUPPORTED;
 }
 
 
@@ -843,8 +873,11 @@ platform_switch_to_logo(void)
 		gKernelArgs.frame_buffer.physical_buffer.start = modeInfo.physical_base;
 	} else {
 fallback:
-		// use standard VGA mode 640x480x4
-		set_vga_mode();
+		// try to use standard VGA mode 640x480x4
+		if (set_vga_mode() != B_OK) {
+			dprintf("no standard VGA output\n");
+			return;
+		}
 
 		gKernelArgs.frame_buffer.width = 640;
 		gKernelArgs.frame_buffer.height = 480;

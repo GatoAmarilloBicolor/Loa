@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2006 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5211/ar5211phy.h 204644 2010-03-03 17:32:32Z rpaulo $
  */
 #ifndef _DEV_ATH_AR5211PHY_H
 #define _DEV_ATH_AR5211PHY_H
@@ -45,7 +45,6 @@
 #define	AR_PHY_PLL_CTL_44	0x19	/* 44 MHz for 11b channels and FPGA */
 #define	AR_PHY_PLL_CTL_40	0x18	/* 40 MHz */
 #define	AR_PHY_PLL_CTL_20	0x13	/* 20 MHz half rate 11a for emulation */
-
 
 #define	AR_PHY_RX_DELAY	0x9914	/* PHY analog_power_on_time, in 100ns increments */
 #define	AR_PHY_RX_DELAY_M	0x00003FFF	/* Mask for delay from active assertion (wake up) */

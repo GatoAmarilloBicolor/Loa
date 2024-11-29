@@ -49,7 +49,7 @@ get_device_block_size(int fd)
 {
 	device_geometry geometry;
 
-	if (ioctl(fd, B_GET_GEOMETRY, &geometry) < 0)  {
+	if (ioctl(fd, B_GET_GEOMETRY, &geometry, sizeof(device_geometry)) < 0)  {
 		struct stat st;
 		if (fstat(fd, &st) < 0 || S_ISDIR(st.st_mode))
 			return 0;
@@ -628,7 +628,8 @@ ISOMount(const char *path, uint32 flags, iso9660_volume **_newVolume,
 
 	/* try to open the raw device to get access to the other sessions as well */
 	if (volume->fdOfSession >= 0) {
-		if (ioctl(volume->fdOfSession, B_GET_PARTITION_INFO, &partitionInfo) < 0) {
+		if (ioctl(volume->fdOfSession, B_GET_PARTITION_INFO, &partitionInfo,
+				sizeof(partition_info)) < 0) {
 			TRACE(("B_GET_PARTITION_INFO: ioctl returned error\n"));
 			strcpy(partitionInfo.device, path);
 		}
@@ -690,7 +691,7 @@ ISOMount(const char *path, uint32 flags, iso9660_volume **_newVolume,
 					maxBlocks = volume->volSpaceSize[FS_DATA_FORMAT];
 
 				/* Initialize access to the cache so that we can do cached i/o */
-				TRACE(("ISO9660: cache init: dev %d, max blocks %Ld\n", volume->fd, maxBlocks));
+				TRACE(("ISO9660: cache init: dev %d, max blocks %lld\n", volume->fd, maxBlocks));
 				volume->fBlockCache = block_cache_create(volume->fd, maxBlocks,
 					volume->logicalBlkSize[FS_DATA_FORMAT], true);
 				isISO = true;
@@ -791,18 +792,18 @@ ISOReadDirEnt(iso9660_volume *volume, dircookie *cookie, struct dirent *dirent,
 				break;
 
 			if (result == B_OK && (node.flags & ISO_IS_ASSOCIATED_FILE) == 0) {
-				size_t nameBufferSize = bufferSize - sizeof(struct dirent);
+				size_t nameBufferSize = bufferSize - offsetof(struct dirent, d_name);
 
 				dirent->d_dev = volume->id;
 				dirent->d_ino = ((ino_t)cookie->block << 30)
 					+ (cookie->pos & 0x3fffffff);
-				dirent->d_reclen = sizeof(struct dirent) + node.name_length + 1;
+				dirent->d_reclen = offsetof(struct dirent, d_name) + node.name_length + 1;
 
 				if (node.name_length <= nameBufferSize) {
 					// need to do some size checking here.
 					strlcpy(dirent->d_name, node.name, node.name_length + 1);
-					TRACE(("ISOReadDirEnt  - success, name is %s, block %Ld, "
-						"pos %Ld, inode id %Ld\n", dirent->d_name, cookie->block,
+					TRACE(("ISOReadDirEnt  - success, name is %s, block %lld, "
+						"pos %lld, inode id %lld\n", dirent->d_name, cookie->block,
 						cookie->pos, dirent->d_ino));
 				} else {
 					// TODO: this can be just normal if we support reading more

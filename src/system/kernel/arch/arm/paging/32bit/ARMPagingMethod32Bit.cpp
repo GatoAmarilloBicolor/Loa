@@ -45,7 +45,7 @@
 using ARMLargePhysicalPageMapper::PhysicalPageSlot;
 
 
-// #pragma mark - X86PagingMethod32Bit::PhysicalPageSlotPool
+// #pragma mark - ARMPagingMethod32Bit::PhysicalPageSlotPool
 
 struct ARMPagingMethod32Bit::PhysicalPageSlotPool
 	: ARMLargePhysicalPageMapper::PhysicalPageSlotPool {
@@ -181,10 +181,11 @@ ARMPagingMethod32Bit::PhysicalPageSlotPool::Map(phys_addr_t physicalAddress,
 	page_table_entry& pte = fPageTable[
 		(virtualAddress - fVirtualBase) / B_PAGE_SIZE];
 	pte = (physicalAddress & ARM_PTE_ADDRESS_MASK)
-		| ARM_MMU_L2_TYPE_SMALLEXT;
+		| ARM_MMU_L2_TYPE_SMALLNEW
+		| ARM_MMU_L2_FLAG_B | ARM_MMU_L2_FLAG_C
+		| ARM_MMU_L2_FLAG_HAIKU_KERNEL_RW | ARM_MMU_L2_FLAG_XN;
 
-	arch_cpu_invalidate_TLB_range(virtualAddress, virtualAddress + B_PAGE_SIZE);
-//	invalidate_TLB(virtualAddress);
+	arch_cpu_invalidate_TLB_page(virtualAddress);
 }
 
 
@@ -239,8 +240,7 @@ ARMPagingMethod32Bit::PhysicalPageSlotPool::AllocatePool(
 	int32 index = VADDR_TO_PDENT((addr_t)virtualBase);
 	page_directory_entry* entry
 		= &map->PagingStructures32Bit()->pgdir_virt[index];
-	PutPageTableInPageDir(entry, physicalTable,
-		B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA);
+	PutPageTableInPageDir(entry, physicalTable, ARM_MMU_L1_FLAG_PXN);
 	ARMPagingStructures32Bit::UpdateAllPageDirs(index, *entry);
 
 	// init the pool structure
@@ -273,13 +273,13 @@ status_t
 ARMPagingMethod32Bit::Init(kernel_args* args,
 	VMPhysicalPageMapper** _physicalPageMapper)
 {
-	TRACE("X86PagingMethod32Bit::Init(): entry\n");
+	TRACE("ARMPagingMethod32Bit::Init(): entry\n");
 
 	fKernelPhysicalPageDirectory = args->arch_args.phys_pgdir;
 	fKernelVirtualPageDirectory = (page_directory_entry*)
 		args->arch_args.vir_pgdir;
 
-#ifdef TRACE_X86_PAGING_METHOD_32_BIT
+#ifdef TRACE_ARM_PAGING_METHOD_32_BIT
 	TRACE("page dir: %p (physical: %#" B_PRIx32 ")\n",
 		fKernelVirtualPageDirectory, fKernelPhysicalPageDirectory);
 #endif
@@ -305,14 +305,6 @@ ARMPagingMethod32Bit::Init(kernel_args* args,
 		fPhysicalPageMapper, fKernelPhysicalPageMapper);
 		// TODO: Select the best page mapper!
 
-	// enable global page feature if available
-#if 0 //IRA: check for ARMv6!!
-	if (x86_check_feature(IA32_FEATURE_PGE, FEATURE_COMMON)) {
-		// this prevents kernel pages from being flushed from TLB on
-		// context-switch
-		x86_write_cr4(x86_read_cr4() | IA32_CR4_GLOBAL_PAGES);
-	}
-#endif
 	TRACE("ARMPagingMethod32Bit::Init(): done\n");
 
 	*_physicalPageMapper = fPhysicalPageMapper;
@@ -361,13 +353,18 @@ ARMPagingMethod32Bit::CreateTranslationMap(bool kernel, VMTranslationMap** _map)
 }
 
 
-static phys_addr_t
-get_free_pgtable(kernel_args* args)
+static void
+get_free_pgtable(kernel_args* args, phys_addr_t* phys_addr, addr_t* virt_addr)
 {
+	if (args->arch_args.next_pagetable >= args->arch_args.last_pagetable)
+		panic("ran out of early page tables");
+
 	phys_addr_t phys = args->arch_args.phys_pgdir + args->arch_args.next_pagetable;
-	//addr_t virt = args->arch_args.vir_pgdir + args->arch_args.next_pagetable;
+	addr_t virt = args->arch_args.vir_pgdir + args->arch_args.next_pagetable;
 	args->arch_args.next_pagetable += ARM_MMU_L2_COARSE_TABLE_SIZE;
-	return phys;
+
+	*phys_addr = phys;
+	*virt_addr = virt;
 }
 
 status_t
@@ -378,24 +375,29 @@ ARMPagingMethod32Bit::MapEarly(kernel_args* args, addr_t virtualAddress,
 	// check to see if a page table exists for this range
 	int index = VADDR_TO_PDENT(virtualAddress);
 	if ((fKernelVirtualPageDirectory[index] & ARM_PDE_TYPE_MASK) == 0) {
-		phys_addr_t pgtable;
+		phys_addr_t pgtable_phys;
+		addr_t pgtable_virt;
 		page_directory_entry *e;
+
 		// we need to allocate a pgtable
-		pgtable = get_free_pgtable(args);
+		get_free_pgtable(args, &pgtable_phys, &pgtable_virt);
 
 		TRACE("ARMPagingMethod32Bit::MapEarly(): asked for free page for "
-			"pgtable. %#" B_PRIxPHYSADDR "\n", pgtable);
+			"pgtable. phys=%#" B_PRIxPHYSADDR ", virt=%#" B_PRIxADDR "\n",
+			pgtable_phys, pgtable_virt);
+
+		// zero it out in it's new mapping
+		memset((void*)pgtable_virt, 0, B_PAGE_SIZE);
 
 		// put it in the pgdir
 		e = &fKernelVirtualPageDirectory[index];
-		PutPageTableInPageDir(e, pgtable, attributes);
-
-		// zero it out in it's new mapping
-		memset((void*)pgtable, 0, B_PAGE_SIZE);
+		PutPageTableInPageDir(e, pgtable_phys,
+			(virtualAddress < KERNEL_BASE) ? ARM_MMU_L1_FLAG_PXN : 0);
 	}
 
-	page_table_entry* ptEntry = (page_table_entry*)
-		(fKernelVirtualPageDirectory[index] & ARM_PDE_ADDRESS_MASK);
+	phys_addr_t ptEntryPhys = fKernelVirtualPageDirectory[index] & ARM_PDE_ADDRESS_MASK;
+	addr_t ptEntryVirt = ptEntryPhys - args->arch_args.phys_pgdir + args->arch_args.vir_pgdir;
+	page_table_entry* ptEntry = (page_table_entry*)ptEntryVirt;
 	ptEntry += VADDR_TO_PTENT(virtualAddress);
 
 	ASSERT_PRINT(
@@ -406,7 +408,8 @@ ARMPagingMethod32Bit::MapEarly(kernel_args* args, addr_t virtualAddress,
 
 	// now, fill in the pentry
 	PutPageTableEntryInTable(ptEntry,
-		physicalAddress, attributes, 0, IS_KERNEL_ADDRESS(virtualAddress));
+		physicalAddress, attributes | PAGE_ACCESSED | PAGE_MODIFIED, 0,
+		IS_KERNEL_ADDRESS(virtualAddress));
 
 	return B_OK;
 }
@@ -482,14 +485,12 @@ ARMPagingMethod32Bit::IsKernelPageAccessible(addr_t virtualAddress,
 ARMPagingMethod32Bit::PutPageTableInPageDir(page_directory_entry* entry,
 	phys_addr_t pgtablePhysical, uint32 attributes)
 {
-	*entry = (pgtablePhysical & ARM_PDE_ADDRESS_MASK) | ARM_MMU_L1_TYPE_COARSE;
-		// TODO: we ignore the attributes of the page table - for compatibility
-		// with BeOS we allow having user accessible areas in the kernel address
-		// space. This is currently being used by some drivers, mainly for the
-		// frame buffer. Our current real time data implementation makes use of
-		// this fact, too.
-		// We might want to get rid of this possibility one day, especially if
-		// we intend to port it to a platform that does not support this.
+	dsb();
+
+	*entry = (pgtablePhysical & ARM_PDE_ADDRESS_MASK) | ARM_MMU_L1_TYPE_COARSE | attributes;
+
+	dsb();
+	isb();
 }
 
 
@@ -499,23 +500,16 @@ ARMPagingMethod32Bit::PutPageTableEntryInTable(page_table_entry* entry,
 	bool globalPage)
 {
 	page_table_entry page = (physicalAddress & ARM_PTE_ADDRESS_MASK)
-		| ARM_MMU_L2_TYPE_SMALLEXT;
-#if 0 //IRA
-		| X86_PTE_PRESENT | (globalPage ? X86_PTE_GLOBAL : 0)
-		| MemoryTypeToPageTableEntryFlags(memoryType);
+		| ARM_MMU_L2_TYPE_SMALLNEW
+		| MemoryTypeToPageTableEntryFlags(memoryType)
+		| AttributesToPageTableEntryFlags(attributes)
+		| (globalPage ? 0 : ARM_MMU_L2_FLAG_NG);
 
-	// if the page is user accessible, it's automatically
-	// accessible in kernel space, too (but with the same
-	// protection)
-	if ((attributes & B_USER_PROTECTION) != 0) {
-		page |= X86_PTE_USER;
-		if ((attributes & B_WRITE_AREA) != 0)
-			page |= X86_PTE_WRITABLE;
-	} else if ((attributes & B_KERNEL_WRITE_AREA) != 0)
-		page |= X86_PTE_WRITABLE;
-#endif
 	// put it in the page table
 	*(volatile page_table_entry*)entry = page;
+
+	dsb();
+	isb();
 }
 
 
@@ -548,7 +542,7 @@ ARMPagingMethod32Bit::_EarlyPreparePageTables(page_table_entry* pageTables,
 			page_directory_entry* entry = method->KernelVirtualPageDirectory()
 				+ VADDR_TO_PDENT(address) + i;
 			PutPageTableInPageDir(entry, physicalTable,
-				B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA);
+				(address < KERNEL_BASE) ? ARM_MMU_L1_FLAG_PXN : 0);
 		}
 	}
 }
@@ -566,8 +560,12 @@ ARMPagingMethod32Bit::_EarlyQuery(addr_t virtualAddress,
 		return B_ERROR;
 	}
 
-	page_table_entry* entry = (page_table_entry*)
-		(method->KernelVirtualPageDirectory()[index] & ARM_PDE_ADDRESS_MASK);
+	phys_addr_t ptEntryPhys = method->KernelVirtualPageDirectory()[index] & ARM_PDE_ADDRESS_MASK;
+	addr_t ptEntryVirt = ptEntryPhys -
+		(uint32_t)method->KernelPhysicalPageDirectory() +
+		(uint32_t)method->KernelVirtualPageDirectory();
+
+	page_table_entry* entry = (page_table_entry*)ptEntryVirt;
 	entry += VADDR_TO_PTENT(virtualAddress);
 
 	if ((*entry & ARM_PTE_TYPE_MASK) == 0) {

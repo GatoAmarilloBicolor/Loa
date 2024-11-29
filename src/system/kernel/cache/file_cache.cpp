@@ -37,7 +37,6 @@
 
 // maximum number of iovecs per request
 #define MAX_IO_VECS			32	// 128 kB
-#define MAX_FILE_IO_VECS	32
 
 #define BYPASS_IO_SIZE		65536
 #define LAST_ACCESSES		3
@@ -110,7 +109,7 @@ static struct cache_module_info* sCacheModule;
 
 static const uint32 kZeroVecCount = 32;
 static const size_t kZeroVecSize = kZeroVecCount * B_PAGE_SIZE;
-static phys_addr_t sZeroPage;	// physical address
+static phys_addr_t sZeroPage;
 static generic_io_vec sZeroVecs[kZeroVecCount];
 
 
@@ -129,6 +128,7 @@ PrecacheIO::PrecacheIO(file_cache_ref* ref, off_t offset, generic_size_t size)
 {
 	fPageCount = (size + B_PAGE_SIZE - 1) / B_PAGE_SIZE;
 	fCache->AcquireRefLocked();
+	fCache->AcquireStoreRef();
 }
 
 
@@ -136,6 +136,7 @@ PrecacheIO::~PrecacheIO()
 {
 	delete[] fPages;
 	delete[] fVecs;
+	fCache->ReleaseStoreRef();
 	fCache->ReleaseRefLocked();
 }
 
@@ -196,7 +197,7 @@ PrecacheIO::IOFinished(status_t status, bool partialTransfer,
 	phys_size_t pagesTransferred
 		= (bytesTransferred + B_PAGE_SIZE - 1) / B_PAGE_SIZE;
 
-	if (fOffset + (off_t)bytesTransferred > fCache->virtual_end)
+	if ((fOffset + (off_t)bytesTransferred) > fCache->virtual_end)
 		bytesTransferred = fCache->virtual_end - fOffset;
 
 	for (uint32 i = 0; i < pagesTransferred; i++) {
@@ -263,7 +264,7 @@ static inline void
 push_access(file_cache_ref* ref, off_t offset, generic_size_t bytes,
 	bool isWrite)
 {
-	TRACE(("%p: push %Ld, %ld, %s\n", ref, offset, bytes,
+	TRACE(("%p: push %lld, %ld, %s\n", ref, offset, bytes,
 		isWrite ? "write" : "read"));
 
 	int32 index = ref->last_access_index;
@@ -377,7 +378,7 @@ read_into_cache(file_cache_ref* ref, void* cookie, off_t offset,
 	int32 pageOffset, addr_t buffer, size_t bufferSize, bool useBuffer,
 	vm_page_reservation* reservation, size_t reservePages)
 {
-	TRACE(("read_into_cache(offset = %Ld, pageOffset = %ld, buffer = %#lx, "
+	TRACE(("read_into_cache(offset = %lld, pageOffset = %ld, buffer = %#lx, "
 		"bufferSize = %lu\n", offset, pageOffset, buffer, bufferSize));
 
 	VMCache* cache = ref->cache;
@@ -461,7 +462,7 @@ read_from_file(file_cache_ref* ref, void* cookie, off_t offset,
 	int32 pageOffset, addr_t buffer, size_t bufferSize, bool useBuffer,
 	vm_page_reservation* reservation, size_t reservePages)
 {
-	TRACE(("read_from_file(offset = %Ld, pageOffset = %ld, buffer = %#lx, "
+	TRACE(("read_from_file(offset = %lld, pageOffset = %ld, buffer = %#lx, "
 		"bufferSize = %lu\n", offset, pageOffset, buffer, bufferSize));
 
 	if (!useBuffer)
@@ -630,6 +631,43 @@ write_to_cache(file_cache_ref* ref, void* cookie, off_t offset,
 
 
 static status_t
+write_zeros_to_file(struct vnode* vnode, void* cookie, off_t offset,
+	size_t* _size)
+{
+	size_t size = *_size;
+	status_t status = B_OK;
+	while (size > 0) {
+		generic_size_t length = min_c(size, kZeroVecSize);
+		generic_io_vec* vecs = sZeroVecs;
+		generic_io_vec vec;
+		size_t count = kZeroVecCount;
+		if (length != kZeroVecSize) {
+			if (length > B_PAGE_SIZE) {
+				length = ROUNDDOWN(length, B_PAGE_SIZE);
+				count = length / B_PAGE_SIZE;
+			} else {
+				vec.base = sZeroPage;
+				vec.length = length;
+				vecs = &vec;
+				count = 1;
+			}
+		}
+
+		status = vfs_write_pages(vnode, cookie, offset,
+			vecs, count, B_PHYSICAL_IO_REQUEST, &length);
+		if (status != B_OK || length == 0)
+			break;
+
+		offset += length;
+		size -= length;
+	}
+
+	*_size = *_size - size;
+	return status;
+}
+
+
+static status_t
 write_to_file(file_cache_ref* ref, void* cookie, off_t offset, int32 pageOffset,
 	addr_t buffer, size_t bufferSize, bool useBuffer,
 	vm_page_reservation* reservation, size_t reservePages)
@@ -641,18 +679,8 @@ write_to_file(file_cache_ref* ref, void* cookie, off_t offset, int32 pageOffset,
 	status_t status = B_OK;
 
 	if (!useBuffer) {
-		while (bufferSize > 0) {
-			generic_size_t written = min_c(bufferSize, kZeroVecSize);
-			status = vfs_write_pages(ref->vnode, cookie, offset + pageOffset,
-				sZeroVecs, kZeroVecCount, B_PHYSICAL_IO_REQUEST, &written);
-			if (status != B_OK)
-				return status;
-			if (written == 0)
-				return B_ERROR;
-
-			bufferSize -= written;
-			pageOffset += written;
-		}
+		status = write_zeros_to_file(ref->vnode, cookie, offset + pageOffset,
+			&bufferSize);
 	} else {
 		generic_io_vec vec;
 		vec.base = buffer;
@@ -708,29 +736,14 @@ cache_io(void* _cacheRef, void* cookie, off_t offset, addr_t buffer,
 
 	file_cache_ref* ref = (file_cache_ref*)_cacheRef;
 	VMCache* cache = ref->cache;
-	off_t fileSize = cache->virtual_end;
 	bool useBuffer = buffer != 0;
 
-	TRACE(("cache_io(ref = %p, offset = %Ld, buffer = %p, size = %lu, %s)\n",
+	TRACE(("cache_io(ref = %p, offset = %lld, buffer = %p, size = %lu, %s)\n",
 		ref, offset, (void*)buffer, *_size, doWrite ? "write" : "read"));
-
-	// out of bounds access?
-	if (offset >= fileSize || offset < 0) {
-		*_size = 0;
-		return B_OK;
-	}
 
 	int32 pageOffset = offset & (B_PAGE_SIZE - 1);
 	size_t size = *_size;
 	offset -= pageOffset;
-
-	if ((off_t)(offset + pageOffset + size) > fileSize) {
-		// adapt size to be within the file's offsets
-		size = fileSize - pageOffset - offset;
-		*_size = size;
-	}
-	if (size == 0)
-		return B_OK;
 
 	// "offset" and "lastOffset" are always aligned to B_PAGE_SIZE,
 	// the "last*" variables always point to the end of the last
@@ -791,7 +804,7 @@ cache_io(void* _cacheRef, void* cookie, off_t offset, addr_t buffer,
 
 		size_t bytesInPage = min_c(size_t(B_PAGE_SIZE - pageOffset), bytesLeft);
 
-		TRACE(("lookup page from offset %Ld: %p, size = %lu, pageOffset "
+		TRACE(("lookup page from offset %lld: %p, size = %lu, pageOffset "
 			"= %lu\n", offset, page, bytesLeft, pageOffset));
 
 		if (page != NULL) {
@@ -948,6 +961,10 @@ cache_prefetch_vnode(struct vnode* vnode, off_t offset, size_t size)
 	VMCache* cache;
 	if (vfs_get_vnode_cache(vnode, &cache, false) != B_OK)
 		return;
+	if (cache->type != CACHE_TYPE_VNODE) {
+		cache->ReleaseRef();
+		return;
+	}
 
 	file_cache_ref* ref = ((VMVnodeCache*)cache)->FileCacheRef();
 	off_t fileSize = cache->virtual_end;
@@ -959,12 +976,12 @@ cache_prefetch_vnode(struct vnode* vnode, off_t offset, size_t size)
 	offset = ROUNDDOWN(offset, B_PAGE_SIZE);
 	size = ROUNDUP(size, B_PAGE_SIZE);
 
-	size_t reservePages = size / B_PAGE_SIZE;
+	const size_t pagesCount = size / B_PAGE_SIZE;
 
 	// Don't do anything if we don't have the resources left, or the cache
 	// already contains more than 2/3 of its pages
-	if (offset >= fileSize || vm_page_num_unused_pages() < 2 * reservePages
-		|| 3 * cache->page_count > 2 * fileSize / B_PAGE_SIZE) {
+	if (offset >= fileSize || vm_page_num_unused_pages() < 2 * pagesCount
+		|| (3 * cache->page_count) > (2 * fileSize / B_PAGE_SIZE)) {
 		cache->ReleaseRef();
 		return;
 	}
@@ -973,7 +990,7 @@ cache_prefetch_vnode(struct vnode* vnode, off_t offset, size_t size)
 	off_t lastOffset = offset;
 
 	vm_page_reservation reservation;
-	vm_page_reserve_pages(&reservation, reservePages, VM_PRIORITY_USER);
+	vm_page_reserve_pages(&reservation, pagesCount, VM_PRIORITY_USER);
 
 	cache->Lock();
 
@@ -1025,7 +1042,7 @@ cache_prefetch(dev_t mountID, ino_t vnodeID, off_t offset, size_t size)
 {
 	// ToDo: schedule prefetch
 
-	TRACE(("cache_prefetch(vnode %ld:%Ld)\n", mountID, vnodeID));
+	TRACE(("cache_prefetch(vnode %ld:%lld)\n", mountID, vnodeID));
 
 	// get the vnode for the object, this also grabs a ref to it
 	struct vnode* vnode;
@@ -1038,37 +1055,37 @@ cache_prefetch(dev_t mountID, ino_t vnodeID, off_t offset, size_t size)
 
 
 extern "C" void
-cache_node_opened(struct vnode* vnode, int32 fdType, VMCache* cache,
+cache_node_opened(struct vnode* vnode, VMCache* cache,
 	dev_t mountID, ino_t parentID, ino_t vnodeID, const char* name)
 {
 	if (sCacheModule == NULL || sCacheModule->node_opened == NULL)
 		return;
 
 	off_t size = -1;
-	if (cache != NULL) {
+	if (cache != NULL && cache->type == CACHE_TYPE_VNODE) {
 		file_cache_ref* ref = ((VMVnodeCache*)cache)->FileCacheRef();
 		if (ref != NULL)
 			size = cache->virtual_end;
 	}
 
-	sCacheModule->node_opened(vnode, fdType, mountID, parentID, vnodeID, name,
+	sCacheModule->node_opened(vnode, mountID, parentID, vnodeID, name,
 		size);
 }
 
 
 extern "C" void
-cache_node_closed(struct vnode* vnode, int32 fdType, VMCache* cache,
+cache_node_closed(struct vnode* vnode, VMCache* cache,
 	dev_t mountID, ino_t vnodeID)
 {
 	if (sCacheModule == NULL || sCacheModule->node_closed == NULL)
 		return;
 
 	int32 accessType = 0;
-	if (cache != NULL) {
+	if (cache != NULL && cache->type == CACHE_TYPE_VNODE) {
 		// ToDo: set accessType
 	}
 
-	sCacheModule->node_closed(vnode, fdType, mountID, vnodeID, accessType);
+	sCacheModule->node_closed(vnode, mountID, vnodeID, accessType);
 }
 
 
@@ -1123,7 +1140,7 @@ file_cache_init(void)
 extern "C" void*
 file_cache_create(dev_t mountID, ino_t vnodeID, off_t size)
 {
-	TRACE(("file_cache_create(mountID = %ld, vnodeID = %Ld, size = %Ld)\n",
+	TRACE(("file_cache_create(mountID = %ld, vnodeID = %lld, size = %lld)\n",
 		mountID, vnodeID, size));
 
 	file_cache_ref* ref = new file_cache_ref;
@@ -1239,7 +1256,7 @@ file_cache_set_size(void* _cacheRef, off_t newSize)
 {
 	file_cache_ref* ref = (file_cache_ref*)_cacheRef;
 
-	TRACE(("file_cache_set_size(ref = %p, size = %Ld)\n", ref, newSize));
+	TRACE(("file_cache_set_size(ref = %p, size = %lld)\n", ref, newSize));
 
 	if (ref == NULL)
 		return B_OK;
@@ -1285,8 +1302,19 @@ file_cache_read(void* _cacheRef, void* cookie, off_t offset, void* buffer,
 {
 	file_cache_ref* ref = (file_cache_ref*)_cacheRef;
 
-	TRACE(("file_cache_read(ref = %p, offset = %Ld, buffer = %p, size = %lu)\n",
+	TRACE(("file_cache_read(ref = %p, offset = %lld, buffer = %p, size = %lu)\n",
 		ref, offset, buffer, *_size));
+
+	// Bounds checking. We do this here so it applies to uncached I/O.
+	if (offset < 0)
+		return B_BAD_VALUE;
+	const off_t fileSize = ref->cache->virtual_end;
+	if (offset >= fileSize || *_size == 0) {
+		*_size = 0;
+		return B_OK;
+	}
+	if ((off_t)(offset + *_size) > fileSize)
+		*_size = fileSize - offset;
 
 	if (ref->disabled_count > 0) {
 		// Caching is disabled -- read directly from the file.
@@ -1309,9 +1337,12 @@ file_cache_write(void* _cacheRef, void* cookie, off_t offset,
 {
 	file_cache_ref* ref = (file_cache_ref*)_cacheRef;
 
+	// We don't do bounds checking here, as we are relying on the
+	// file system which called us to already have done that and made
+	// adjustments as necessary, unlike in read().
+
 	if (ref->disabled_count > 0) {
 		// Caching is disabled -- write directly to the file.
-
 		if (buffer != NULL) {
 			generic_io_vec vec;
 			vec.base = (addr_t)buffer;
@@ -1322,31 +1353,13 @@ file_cache_write(void* _cacheRef, void* cookie, off_t offset,
 			*_size = size;
 			return error;
 		}
-
-		// NULL buffer -- use a dummy buffer to write zeroes
-		size_t size = *_size;
-		while (size > 0) {
-			size_t toWrite = min_c(size, kZeroVecSize);
-			generic_size_t written = toWrite;
-			status_t error = vfs_write_pages(ref->vnode, cookie, offset,
-				sZeroVecs, kZeroVecCount, B_PHYSICAL_IO_REQUEST, &written);
-			if (error != B_OK)
-				return error;
-			if (written == 0)
-				break;
-
-			offset += written;
-			size -= written;
-		}
-
-		*_size -= size;
-		return B_OK;
+		return write_zeros_to_file(ref->vnode, cookie, offset, _size);
 	}
 
 	status_t status = cache_io(ref, cookie, offset,
 		(addr_t)const_cast<void*>(buffer), _size, true);
 
-	TRACE(("file_cache_write(ref = %p, offset = %Ld, buffer = %p, size = %lu)"
+	TRACE(("file_cache_write(ref = %p, offset = %lld, buffer = %p, size = %lu)"
 		" = %ld\n", ref, offset, buffer, *_size, status));
 
 	return status;

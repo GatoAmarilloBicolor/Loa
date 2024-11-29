@@ -166,4 +166,44 @@ cfmakeraw(struct termios *termios)
 	termios->c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
 	termios->c_cflag &= ~(CSIZE | PARENB);
 	termios->c_cflag |= CS8;
+	termios->c_cc[VMIN] = 1;	// input is available character by character
+	termios->c_cc[VTIME] = 0;
+}
+
+
+pid_t
+tcgetsid(int fd)
+{
+	int sid;
+
+	if (ioctl(fd, TIOCGSID, &sid) == 0)
+		return sid;
+
+	return -1;
+}
+
+
+int
+tcsetsid(int fd, pid_t pid)
+{
+	if (pid != getsid(0)) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	return ioctl(fd, TIOCSCTTY, NULL);
+}
+
+
+int
+tcgetwinsize(int fd, struct winsize* winsize)
+{
+	return ioctl(fd, TIOCGWINSZ, winsize, sizeof(*winsize));
+}
+
+
+int
+tcsetwinsize(int fd, const struct winsize* winsize)
+{
+	return ioctl(fd, TIOCSWINSZ, winsize, sizeof(*winsize));
 }

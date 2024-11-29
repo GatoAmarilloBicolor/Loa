@@ -7,38 +7,29 @@
 
 
 #include "efi_platform.h"
-#include "efiser.h"
+#include <efi/protocol/serial-io.h>
 #include "serial.h"
 
 #include <boot/platform.h>
 #include <arch/cpu.h>
+#include <arch/generic/debug_uart.h>
+#include <arch/generic/debug_uart_8250.h>
 #include <boot/stage2.h>
 #include <boot/stdio.h>
 
 #include <string.h>
 
 
-static EFI_GUID sSerialIOProtocolGUID = SERIAL_IO_PROTOCOL;
+static efi_guid sSerialIOProtocolGUID = EFI_SERIAL_IO_PROTOCOL_GUID;
 static const uint32 kSerialBaudRate = 115200;
 
-static SERIAL_IO_INTERFACE *sSerial = NULL;
+static efi_serial_io_protocol *sEFISerialIO = NULL;
 static bool sSerialEnabled = false;
-static bool sSerialUsesEFI = true;
+static bool sEFIAvailable = true;
 
 
-enum serial_register_offsets {
-	SERIAL_TRANSMIT_BUFFER		= 0,
-	SERIAL_RECEIVE_BUFFER		= 0,
-	SERIAL_DIVISOR_LATCH_LOW	= 0,
-	SERIAL_DIVISOR_LATCH_HIGH	= 1,
-	SERIAL_FIFO_CONTROL			= 2,
-	SERIAL_LINE_CONTROL			= 3,
-	SERIAL_MODEM_CONTROL		= 4,
-	SERIAL_LINE_STATUS			= 5,
-	SERIAL_MODEM_STATUS			= 6,
-};
-
-static uint16 sSerialBasePort = 0x3f8;
+DebugUART* gUART = NULL;
+bool gUARTSkipInit = false;
 
 
 static void
@@ -47,14 +38,30 @@ serial_putc(char ch)
 	if (!sSerialEnabled)
 		return;
 
-	if (sSerialUsesEFI) {
-		UINTN bufSize = 1;
-		sSerial->Write(sSerial, &bufSize, &ch);
-	} else {
-		while ((in8(sSerialBasePort + SERIAL_LINE_STATUS) & 0x20) == 0)
-			asm volatile ("pause;");
+	// First we use EFI serial_io output if available
+	if (sEFISerialIO != NULL) {
+		size_t bufSize = 1;
+		sEFISerialIO->Write(sEFISerialIO, &bufSize, &ch);
+		return;
+	}
 
-		out8(ch, sSerialBasePort + SERIAL_TRANSMIT_BUFFER);
+#ifdef DEBUG
+	// If we don't have EFI serial_io, fallback to EFI stdio
+	if (sEFIAvailable) {
+		char16_t ucsBuffer[2];
+		ucsBuffer[0] = ch;
+		ucsBuffer[1] = 0;
+		kSystemTable->ConOut->OutputString(kSystemTable->ConOut, ucsBuffer);
+		return;
+	}
+#endif
+
+	// If EFI services are unavailable... try any UART
+	// this can happen when serial_io is unavailable, or EFI
+	// is exiting
+	if (gUART != NULL) {
+		gUART->PutChar(ch);
+		return;
 	}
 }
 
@@ -62,7 +69,7 @@ serial_putc(char ch)
 extern "C" void
 serial_puts(const char* string, size_t size)
 {
-	if (!sSerialEnabled || (sSerial == NULL && sSerialUsesEFI))
+	if (!sSerialEnabled)
 		return;
 
 	while (size-- != 0) {
@@ -90,48 +97,63 @@ extern "C" void
 serial_enable(void)
 {
 	sSerialEnabled = true;
+	if ((gUART != NULL) && !gUARTSkipInit)
+		gUART->InitPort(kSerialBaudRate);
 }
 
 
 extern "C" void
 serial_init(void)
 {
-	EFI_STATUS status = kSystemTable->BootServices->LocateProtocol(
-		&sSerialIOProtocolGUID, NULL, (void**)&sSerial);
+	if (sEFIAvailable) {
+		// Check for EFI Serial
+		efi_status status = kSystemTable->BootServices->LocateProtocol(
+			&sSerialIOProtocolGUID, NULL, (void**)&sEFISerialIO);
 
-	if (status != EFI_SUCCESS || sSerial == NULL) {
-		sSerial = NULL;
-		return;
+		if (status != EFI_SUCCESS)
+			sEFISerialIO = NULL;
+
+		if (sEFISerialIO != NULL) {
+			// Setup serial, 0, 0 = Default Receive FIFO queue and default timeout
+			status = sEFISerialIO->SetAttributes(sEFISerialIO, kSerialBaudRate, 0, 0, NoParity, 8,
+				OneStopBit);
+
+			if (status != EFI_SUCCESS)
+				sEFISerialIO = NULL;
+
+			// serial_io was successful.
+			return;
+		}
 	}
 
-	// Setup serial, 0, 0 = Default Receive FIFO queue and default timeout
-	status = sSerial->SetAttributes(sSerial, kSerialBaudRate, 0, 0, NoParity, 8,
-		OneStopBit);
+#if defined(__i386__) || defined(__x86_64__)
+	// On x86, we can try to setup COM1 as a gUART too
+	// while this serial port may not physically exist,
+	// the location is fixed on the x86 arch.
+	// TODO: We could also try to pull from acpi?
+	if (gUART == NULL) {
+		gUART = arch_get_uart_8250(0x3f8, 1843200);
 
-	if (status != EFI_SUCCESS) {
-		sSerial = NULL;
-		return;
+		// TODO: convert over to exclusively arch_args.uart?
+		memset(gKernelArgs.platform_args.serial_base_ports, 0,
+			sizeof(uint16) * MAX_SERIAL_PORTS);
+		gKernelArgs.platform_args.serial_base_ports[0] = 0x3f8;
 	}
+#endif
+
+	if (gUART != NULL)
+		gUART->InitEarly();
 }
 
 
 extern "C" void
-serial_switch_to_legacy(void)
+serial_kernel_handoff(void)
 {
-	sSerial = NULL;
-	sSerialUsesEFI = false;
+	// The console was provided by boot services, disable it ASAP
+	stdout = NULL;
+	stderr = NULL;
 
-	memset(gKernelArgs.platform_args.serial_base_ports, 0,
-		sizeof(uint16) * MAX_SERIAL_PORTS);
-
-	gKernelArgs.platform_args.serial_base_ports[0] = sSerialBasePort;
-
-	uint16 divisor = uint16(115200 / kSerialBaudRate);
-
-	out8(0x80, sSerialBasePort + SERIAL_LINE_CONTROL);
-		// set divisor latch access bit
-	out8(divisor & 0xf, sSerialBasePort + SERIAL_DIVISOR_LATCH_LOW);
-	out8(divisor >> 8, sSerialBasePort + SERIAL_DIVISOR_LATCH_HIGH);
-	out8(3, sSerialBasePort + SERIAL_LINE_CONTROL);
-		// 8N1
+	// Disconnect from EFI serial_io services is important as we leave the bootloader
+	sEFISerialIO = NULL;
+	sEFIAvailable = false;
 }

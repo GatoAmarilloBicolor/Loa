@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2007 Marvell Semiconductor, Inc.
  * Copyright (c) 2007 Sam Leffler, Errno Consulting
  * Copyright (c) 2008 Weongyo Jeong <weongyo@freebsd.org>
@@ -27,8 +29,6 @@
  * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
- *
- * $FreeBSD: releng/11.1/sys/dev/malo/if_malohal.h 218909 2011-02-21 09:01:34Z brucec $
  */
 
 #ifndef _DEV_MALOHAL_H
@@ -46,7 +46,7 @@
 /*
  * Calibration data builtin to the firmware.  The firmware image
  * has a single set of calibration tables that we retrieve right
- * after download.  This can be overriden by the driver (e.g. for
+ * after download.  This can be overridden by the driver (e.g. for
  * a different regdomain and/or tx power setup).
  */
 struct malo_hal_caldata {
@@ -221,7 +221,7 @@ int	malo_hal_setmaxtxpwr(struct malo_hal *, uint16_t);
 int	malo_hal_settxpower(struct malo_hal *, const struct malo_hal_channel *);
 int	malo_hal_setpromisc(struct malo_hal *, int);
 int	malo_hal_setassocid(struct malo_hal *,
-	    const uint8_t[], uint16_t);
+	    const uint8_t[IEEE80211_ADDR_LEN], uint16_t);
 void	malo_hal_txstart(struct malo_hal *, int);
 void	malo_hal_getisr(struct malo_hal *, uint32_t *);
 void	malo_hal_cmddone(struct malo_hal *);

@@ -30,7 +30,6 @@
 #include <MenuPrivate.h>
 #include <Message.h>
 #include <MessageFilter.h>
-#include <Thread.h>
 #include <Window.h>
 
 #include <binary_compatibility/Interface.h>
@@ -164,6 +163,7 @@ struct BMenuField::LayoutData {
 
 // #pragma mark - MouseDownFilter
 
+namespace {
 
 class MouseDownFilter : public BMessageFilter
 {
@@ -192,6 +192,9 @@ MouseDownFilter::Filter(BMessage* message, BHandler** target)
 {
 	return message->what == B_MOUSE_DOWN ? B_SKIP_MESSAGE : B_DISPATCH_MESSAGE;
 }
+
+};
+
 
 
 // #pragma mark - BMenuField
@@ -244,36 +247,24 @@ BMenuField::BMenuField(const char* name, const char* label, BMenu* menu,
 }
 
 
-BMenuField::BMenuField(const char* label, BMenu* menu, uint32 flags)
-	:
-	BView(NULL, flags | B_FRAME_EVENTS)
-{
-	InitObject(label);
-
-	_InitMenuBar(menu, BRect(0, 0, 100, 15), true);
-
-	InitObject2();
-}
-
-
-//! Copy&Paste error, should be removed at some point (already private)
 BMenuField::BMenuField(const char* name, const char* label, BMenu* menu,
-		BMessage* message, uint32 flags)
+	bool fixedSize, uint32 flags)
 	:
 	BView(name, flags | B_FRAME_EVENTS)
 {
 	InitObject(label);
 
-	_InitMenuBar(menu, BRect(0, 0, 100, 15), true);
+	fFixedSizeMB = fixedSize;
+
+	_InitMenuBar(menu, BRect(0, 0, 100, 15), fixedSize);
 
 	InitObject2();
 }
 
 
-//! Copy&Paste error, should be removed at some point (already private)
-BMenuField::BMenuField(const char* label, BMenu* menu, BMessage* message)
+BMenuField::BMenuField(const char* label, BMenu* menu, uint32 flags)
 	:
-	BView(NULL, B_WILL_DRAW | B_NAVIGABLE | B_FRAME_EVENTS)
+	BView(NULL, flags | B_FRAME_EVENTS)
 {
 	InitObject(label);
 
@@ -484,8 +475,7 @@ BMenuField::MouseDown(BPoint where)
 		if (fMouseDownFilter->Looper() == NULL)
 			Window()->AddCommonFilter(fMouseDownFilter);
 
-		MouseDownThread<BMenuField>::TrackMouse(this, &BMenuField::_DoneTracking,
-			&BMenuField::_Track);
+		SetMouseEventMask(B_POINTER_EVENTS, B_NO_POINTER_HISTORY);
 	}
 }
 
@@ -557,6 +547,7 @@ BMenuField::MouseMoved(BPoint point, uint32 code, const BMessage* message)
 void
 BMenuField::MouseUp(BPoint where)
 {
+	Window()->RemoveCommonFilter(fMouseDownFilter);
 	BView::MouseUp(where);
 }
 
@@ -1400,19 +1391,6 @@ float
 BMenuField::_MenuBarWidth() const
 {
 	return Bounds().Width() - (_MenuBarOffset() + kVMargin);
-}
-
-
-void
-BMenuField::_DoneTracking(BPoint point)
-{
-	Window()->RemoveCommonFilter(fMouseDownFilter);
-}
-
-
-void
-BMenuField::_Track(BPoint point, uint32)
-{
 }
 
 

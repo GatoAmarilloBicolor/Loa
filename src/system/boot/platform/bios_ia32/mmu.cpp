@@ -73,6 +73,7 @@ segment_descriptor gBootGDT[BOOT_GDT_SEGMENT_COUNT];
 
 static const uint32 kDefaultPageTableFlags = 0x07;	// present, user, R/W
 static const size_t kMaxKernelSize = 0x1000000;		// 16 MB for the kernel
+static const size_t kIdentityMapEnd = 0x0800000;	// 8 MB
 
 // working page directory and page table
 static uint32 *sPageDirectory = 0;
@@ -80,6 +81,7 @@ static uint32 *sPageDirectory = 0;
 #ifdef _PXE_ENV
 
 static addr_t sNextPhysicalAddress = 0x112000;
+static addr_t sNextPhysicalKernelAddress = kIdentityMapEnd;
 static addr_t sNextVirtualAddress = KERNEL_LOAD_BASE + kMaxKernelSize;
 
 static addr_t sNextPageTableAddress = 0x7d000;
@@ -89,6 +91,7 @@ static const uint32 kPageTableRegionEnd = 0x8b000;
 #else
 
 static addr_t sNextPhysicalAddress = 0x100000;
+static addr_t sNextPhysicalKernelAddress = kIdentityMapEnd;
 static addr_t sNextVirtualAddress = KERNEL_LOAD_BASE + kMaxKernelSize;
 
 static addr_t sNextPageTableAddress = 0x90000;
@@ -99,7 +102,7 @@ static const uint32 kPageTableRegionEnd = 0x9e000;
 
 
 static addr_t
-get_next_virtual_address(size_t size)
+allocate_virtual(size_t size)
 {
 	addr_t address = sNextVirtualAddress;
 	sNextVirtualAddress += size;
@@ -109,18 +112,29 @@ get_next_virtual_address(size_t size)
 
 
 static addr_t
-get_next_physical_address(size_t size)
+allocate_physical(size_t size, bool inIdentityMap = true)
 {
-	uint64 base;
+	if ((size % B_PAGE_SIZE) != 0)
+		panic("request for non-page-aligned physical memory!");
+
+	addr_t* nextAddress = &sNextPhysicalKernelAddress;
+	if (inIdentityMap) {
+		nextAddress = &sNextPhysicalAddress;
+		if ((*nextAddress + size) > kIdentityMapEnd) {
+			panic("request too large for identity-map physical memory!");
+			return 0;
+		}
+	}
+
+	uint64 base = *nextAddress;
 	if (!get_free_address_range(gKernelArgs.physical_allocated_range,
-			gKernelArgs.num_physical_allocated_ranges, sNextPhysicalAddress,
-			size, &base)) {
+			gKernelArgs.num_physical_allocated_ranges, base, size, &base)) {
 		panic("Out of physical memory!");
 		return 0;
 	}
 
 	insert_physical_allocated_range(base, size);
-	sNextPhysicalAddress = base + size;
+	*nextAddress = base + size;
 		// TODO: Can overflow theoretically.
 
 	return base;
@@ -130,14 +144,14 @@ get_next_physical_address(size_t size)
 static addr_t
 get_next_virtual_page()
 {
-	return get_next_virtual_address(B_PAGE_SIZE);
+	return allocate_virtual(B_PAGE_SIZE);
 }
 
 
 static addr_t
 get_next_physical_page()
 {
-	return get_next_physical_address(B_PAGE_SIZE);
+	return allocate_physical(B_PAGE_SIZE, false);
 }
 
 
@@ -150,7 +164,7 @@ get_next_page_table()
 
 	addr_t address = sNextPageTableAddress;
 	if (address >= kPageTableRegionEnd)
-		return (uint32 *)get_next_physical_page();
+		return (uint32 *)allocate_physical(B_PAGE_SIZE);
 
 	sNextPageTableAddress += B_PAGE_SIZE;
 	return (uint32 *)address;
@@ -170,7 +184,7 @@ add_page_table(addr_t base)
 
 	// Get new page table and clear it out
 	uint32 *pageTable = get_next_page_table();
-	if (pageTable > (uint32 *)(8 * 1024 * 1024)) {
+	if (pageTable > (uint32 *)kIdentityMapEnd) {
 		panic("tried to add page table beyond the identity mapped 8 MB "
 			"region\n");
 		return NULL;
@@ -320,7 +334,7 @@ init_page_directory(void)
 	TRACE("init_page_directory\n");
 
 	// allocate a new pgdir
-	sPageDirectory = (uint32 *)get_next_physical_page();
+	sPageDirectory = (uint32 *)allocate_physical(B_PAGE_SIZE);
 	gKernelArgs.arch_args.phys_pgdir = (uint32)sPageDirectory;
 
 	// clear out the pgdir
@@ -392,7 +406,7 @@ mmu_allocate(void *virtualAddress, size_t size)
 	TRACE("mmu_allocate: requested vaddr: %p, next free vaddr: 0x%lx, size: "
 		"%ld\n", virtualAddress, sNextVirtualAddress, size);
 
-	size = (size + B_PAGE_SIZE - 1) / B_PAGE_SIZE;
+	size = HOWMANY(size, B_PAGE_SIZE);
 		// get number of pages to map
 
 	if (virtualAddress != NULL) {
@@ -405,7 +419,7 @@ mmu_allocate(void *virtualAddress, size_t size)
 
 		// is the address within the valid range?
 		if (address < KERNEL_LOAD_BASE || address + size * B_PAGE_SIZE
-			>= KERNEL_LOAD_BASE + kMaxKernelSize)
+				>= KERNEL_LOAD_BASE + kMaxKernelSize)
 			return NULL;
 
 		for (uint32 i = 0; i < size; i++) {
@@ -483,7 +497,8 @@ mmu_free(void *virtualAddress, size_t size)
 	addr_t address = (addr_t)virtualAddress;
 	addr_t pageOffset = address % B_PAGE_SIZE;
 	address -= pageOffset;
-	size = (size + pageOffset + B_PAGE_SIZE - 1) / B_PAGE_SIZE * B_PAGE_SIZE;
+	size += pageOffset;
+	size = ROUNDUP(size, B_PAGE_SIZE);
 
 	// is the address within the valid range?
 	if (address < KERNEL_LOAD_BASE || address + size > sNextVirtualAddress) {
@@ -631,7 +646,9 @@ mmu_init(void)
 
 	gKernelArgs.physical_allocated_range[0].start = sNextPhysicalAddress;
 	gKernelArgs.physical_allocated_range[0].size = 0;
-	gKernelArgs.num_physical_allocated_ranges = 1;
+	gKernelArgs.physical_allocated_range[1].start = sNextPhysicalKernelAddress;
+	gKernelArgs.physical_allocated_range[1].size = 0;
+	gKernelArgs.num_physical_allocated_ranges = 2;
 		// remember the start of the allocated physical pages
 
 	init_page_directory();
@@ -664,51 +681,68 @@ mmu_init(void)
 	if (extMemoryCount > 0) {
 		gKernelArgs.num_physical_memory_ranges = 0;
 
+		// first scan: add all usable ranges
 		for (uint32 i = 0; i < extMemoryCount; i++) {
 			// Type 1 is available memory
-			if (extMemoryBlock[i].type == 1) {
-				uint64 base = extMemoryBlock[i].base_addr;
-				uint64 length = extMemoryBlock[i].length;
-				uint64 end = base + length;
+			if (extMemoryBlock[i].type != 1)
+				continue;
 
-				// round everything up to page boundaries, exclusive of pages
-				// it partially occupies
-				base = ROUNDUP(base, B_PAGE_SIZE);
-				end = ROUNDDOWN(end, B_PAGE_SIZE);
+			uint64 base = extMemoryBlock[i].base_addr;
+			uint64 length = extMemoryBlock[i].length;
+			uint64 end = base + length;
 
-				// We ignore all memory beyond 4 GB, if phys_addr_t is only
-				// 32 bit wide.
-				#if B_HAIKU_PHYSICAL_BITS == 32
-					if (end > 0x100000000ULL)
-						end = 0x100000000ULL;
-				#endif
+			// round everything up to page boundaries, exclusive of pages
+			// it partially occupies
+			base = ROUNDUP(base, B_PAGE_SIZE);
+			end = ROUNDDOWN(end, B_PAGE_SIZE);
 
-				// Also ignore memory below 1 MB. Apparently some BIOSes fail to
-				// provide the correct range type for some ranges (cf. #1925).
-				// Later in the kernel we will reserve the range 0x0 - 0xa0000
-				// and apparently 0xa0000 - 0x100000 never contain usable
-				// memory, so we don't lose anything by doing that.
-				if (base < 0x100000)
-					base = 0x100000;
+			// We ignore all memory beyond 4 GB, if phys_addr_t is only
+			// 32 bit wide.
+			#if B_HAIKU_PHYSICAL_BITS == 32
+				if (end > 0x100000000ULL)
+					end = 0x100000000ULL;
+			#endif
 
-				gKernelArgs.ignored_physical_memory
-					+= length - (max_c(end, base) - base);
+			// Also ignore memory below 1 MB. Apparently some BIOSes fail to
+			// provide the correct range type for some ranges (cf. #1925).
+			// Later in the kernel we will reserve the range 0x0 - 0xa0000
+			// and apparently 0xa0000 - 0x100000 never contain usable
+			// memory, so we don't lose anything by doing that.
+			if (base < 0x100000)
+				base = 0x100000;
 
-				if (end <= base)
-					continue;
+			gKernelArgs.ignored_physical_memory
+				+= length - (max_c(end, base) - base);
 
-				status_t status = insert_physical_memory_range(base, end - base);
-				if (status == B_ENTRY_NOT_FOUND) {
-					panic("mmu_init(): Failed to add physical memory range "
-						"%#" B_PRIx64 " - %#" B_PRIx64 " : all %d entries are "
-						"used already!\n", base, end, MAX_PHYSICAL_MEMORY_RANGE);
-				} else if (status != B_OK) {
-					panic("mmu_init(): Failed to add physical memory range "
-						"%#" B_PRIx64 " - %#" B_PRIx64 "\n", base, end);
-				}
-			} else if (extMemoryBlock[i].type == 3) {
-				// ACPI reclaim -- physical memory we could actually use later
-				gKernelArgs.ignored_physical_memory += extMemoryBlock[i].length;
+			if (end <= base)
+				continue;
+
+			status_t status = insert_physical_memory_range(base, end - base);
+			if (status == B_ENTRY_NOT_FOUND) {
+				panic("mmu_init(): Failed to add physical memory range "
+					"%#" B_PRIx64 " - %#" B_PRIx64 " : all %d entries are "
+					"used already!\n", base, end, MAX_PHYSICAL_MEMORY_RANGE);
+			} else if (status != B_OK) {
+				panic("mmu_init(): Failed to add physical memory range "
+					"%#" B_PRIx64 " - %#" B_PRIx64 "\n", base, end);
+			}
+		}
+
+		uint64 initialPhysicalMemory = total_physical_memory();
+
+		// second scan: remove everything reserved that may overlap
+		for (uint32 i = 0; i < extMemoryCount; i++) {
+			if (extMemoryBlock[i].type == 1)
+				continue;
+
+			uint64 base = extMemoryBlock[i].base_addr;
+			uint64 end = ROUNDUP(base + extMemoryBlock[i].length, B_PAGE_SIZE);
+			base = ROUNDDOWN(base, B_PAGE_SIZE);
+
+			status_t status = remove_physical_memory_range(base, end - base);
+			if (status != B_OK) {
+				panic("mmu_init(): Failed to remove physical memory range "
+					"%#" B_PRIx64 " - %#" B_PRIx64 "\n", base, end);
 			}
 		}
 
@@ -725,11 +759,12 @@ mmu_init(void)
 			uint64 size = gKernelArgs.physical_memory_range[i].size;
 			if (size < 64 * 1024) {
 				uint64 start = gKernelArgs.physical_memory_range[i].start;
-				remove_address_range(gKernelArgs.physical_memory_range,
-					&gKernelArgs.num_physical_memory_ranges,
-					MAX_PHYSICAL_MEMORY_RANGE, start, size);
+				remove_physical_memory_range(start, size);
 			}
 		}
+
+		gKernelArgs.ignored_physical_memory
+			+= initialPhysicalMemory - total_physical_memory();
 	} else {
 		bios_regs regs;
 
@@ -791,25 +826,47 @@ platform_free_region(void *address, size_t size)
 }
 
 
-void
-platform_release_heap(struct stage2_args *args, void *base)
+ssize_t
+platform_allocate_heap_region(size_t size, void **_base)
 {
-	// It will be freed automatically, since it is in the
-	// identity mapped region, and not stored in the kernel's
-	// page tables.
+	size = ROUNDUP(size, B_PAGE_SIZE);
+	addr_t base = allocate_physical(size);
+	if (base == 0)
+		return B_NO_MEMORY;
+
+	*_base = (void*)base;
+	return size;
 }
 
 
-status_t
-platform_init_heap(struct stage2_args *args, void **_base, void **_top)
+void
+platform_free_heap_region(void *_base, size_t size)
 {
-	void *heap = (void *)get_next_physical_address(args->heap_size);
-	if (heap == NULL)
-		return B_NO_MEMORY;
+	addr_t base = (addr_t)_base;
+	remove_physical_allocated_range(base, size);
+	if (sNextPhysicalAddress == (base + size))
+		sNextPhysicalAddress -= size;
 
-	*_base = heap;
-	*_top = (void *)((int8 *)heap + args->heap_size);
+	// Failures don't matter very much as regions should be freed automatically,
+	// since they're in the identity map and not stored in the kernel's page tables.
+}
+
+
+extern "C" status_t
+platform_bootloader_address_to_kernel_address(void *address, addr_t *_result)
+{
+	TRACE("%s: called\n", __func__);
+	// bios_ia32 really doesn't need an address converstion
+	*_result = (addr_t)address;
 	return B_OK;
 }
 
 
+extern "C" status_t
+platform_kernel_address_to_bootloader_address(addr_t address, void **_result)
+{
+	TRACE("%s: called\n", __func__);
+	// bios_ia32 really doesn't need an address converstion
+	*_result = (void*)address;
+	return B_OK;
+}

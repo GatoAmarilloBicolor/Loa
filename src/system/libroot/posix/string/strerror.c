@@ -183,7 +183,7 @@ error_description(int error)
 		case B_FILE_ERROR:
 			// EBADF
 			return "Bad file descriptor";
-		case B_FILE_NOT_FOUND:
+		case (B_STORAGE_ERROR_BASE + 1): /* B_FILE_NOT_FOUND (deprecated) */
 		case B_ENTRY_NOT_FOUND:
 			// ENOENT
 			return "No such file or directory";
@@ -532,6 +532,10 @@ error_description(int error)
 			return "Text file busy";
 		case ENOATTR:
 			return "No such attribute";
+		case ENOTRECOVERABLE:
+			return "State not recoverable";
+		case EOWNERDEAD:
+			return "Previous owner died";
 
 		default:
 			return NULL;
@@ -579,3 +583,11 @@ strerror_r(int error, char *buffer, size_t bufferSize)
 		// TODO: could return ERANGE if buffer is too small
 }
 
+
+char *
+strerror_l(int error, locale_t locale)
+{
+	// Don't have error messages in other locales yet.
+	(void)locale;
+	return strerror(error);
+}

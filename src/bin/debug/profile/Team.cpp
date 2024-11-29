@@ -71,7 +71,8 @@ Team::Init(team_id teamID, port_id debuggerPort)
 	// install ourselves as the team debugger
 	fNubPort = install_team_debugger(teamID, debuggerPort);
 	if (fNubPort < 0) {
-		fprintf(stderr, "%s: Failed to install as debugger for team %ld: "
+		fprintf(stderr,
+			"%s: Failed to install as debugger for team %" B_PRId32 ": "
 			"%s\n", kCommandName, teamID, strerror(fNubPort));
 		return fNubPort;
 	}
@@ -79,14 +80,16 @@ Team::Init(team_id teamID, port_id debuggerPort)
 	// init debug context
 	error = init_debug_context(&fDebugContext, teamID, fNubPort);
 	if (error != B_OK) {
-		fprintf(stderr, "%s: Failed to init debug context for team %ld: "
+		fprintf(stderr,
+			"%s: Failed to init debug context for team %" B_PRId32 ": "
 			"%s\n", kCommandName, teamID, strerror(error));
 		return error;
 	}
 
 	// set team debugging flags
 	int32 teamDebugFlags = B_TEAM_DEBUG_THREADS
-		| B_TEAM_DEBUG_TEAM_CREATION | B_TEAM_DEBUG_IMAGES;
+		| B_TEAM_DEBUG_TEAM_CREATION | B_TEAM_DEBUG_IMAGES
+		| B_TEAM_DEBUG_STOP_NEW_THREADS;
 	error = set_team_debugging_flags(fNubPort, teamDebugFlags);
 	if (error != B_OK)
 		return error;
@@ -112,13 +115,14 @@ Team::InitThread(Thread* thread)
 
 	// create the sample area
 	char areaName[B_OS_NAME_LENGTH];
-	snprintf(areaName, sizeof(areaName), "profiling samples %ld",
+	snprintf(areaName, sizeof(areaName), "profiling samples %" B_PRId32,
 		thread->ID());
 	void* samples;
 	area_id sampleArea = create_area(areaName, &samples, B_ANY_ADDRESS,
 		SAMPLE_AREA_SIZE, B_NO_LOCK, B_READ_AREA | B_WRITE_AREA);
 	if (sampleArea < 0) {
-		fprintf(stderr, "%s: Failed to create sample area for thread %ld: "
+		fprintf(stderr,
+			"%s: Failed to create sample area for thread %" B_PRId32 ": "
 			"%s\n", kCommandName, thread->ID(), strerror(sampleArea));
 		return sampleArea;
 	}
@@ -134,18 +138,6 @@ Team::InitThread(Thread* thread)
 	}
 
 	if (!_SynchronousProfiling()) {
-		// set thread debugging flags and start profiling
-		int32 threadDebugFlags = 0;
-//		if (!traceTeam) {
-//			threadDebugFlags = B_THREAD_DEBUG_POST_SYSCALL
-//				| (traceChildThreads
-//					? B_THREAD_DEBUG_SYSCALL_TRACE_CHILD_THREADS : 0);
-//		}
-		status_t error = set_thread_debugging_flags(fNubPort, thread->ID(),
-			threadDebugFlags);
-		if (error != B_OK)
-			return error;
-
 		// start profiling
 		debug_nub_start_profiler message;
 		message.reply_port = fDebugContext.reply_port;
@@ -154,13 +146,15 @@ Team::InitThread(Thread* thread)
 		message.sample_area = sampleArea;
 		message.stack_depth = gOptions.stack_depth;
 		message.variable_stack_depth = gOptions.analyze_full_stack;
+		message.profile_kernel = gOptions.profile_kernel;
 
 		debug_nub_start_profiler_reply reply;
-		error = send_debug_message(&fDebugContext,
+		status_t error = send_debug_message(&fDebugContext,
 			B_DEBUG_START_PROFILER, &message, sizeof(message), &reply,
 			sizeof(reply));
 		if (error != B_OK || (error = reply.error) != B_OK) {
-			fprintf(stderr, "%s: Failed to start profiler for thread %ld: %s\n",
+			fprintf(stderr,
+				"%s: Failed to start profiler for thread %" B_PRId32 ": %s\n",
 				kCommandName, thread->ID(), strerror(error));
 			return error;
 		}
@@ -169,8 +163,8 @@ Team::InitThread(Thread* thread)
 
 		fThreads.Add(thread);
 
-		// resume the target thread to be sure, it's running
-		resume_thread(thread->ID());
+		// resume the target thread to be sure it's running
+		continue_thread(fDebugContext.nub_port, thread->ID());
 	} else {
 		// debugger-less profiling
 		thread->SetInterval(gOptions.interval);

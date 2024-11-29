@@ -1,23 +1,8 @@
 /*
-	ProcessController © 2000, Georges-Edouard Berenger, All Rights Reserved.
-	Copyright (C) 2004 beunited.org
-
-	This library is free software; you can redistribute it and/or
-	modify it under the terms of the GNU Lesser General Public
-	License as published by the Free Software Foundation; either
-	version 2.1 of the License, or (at your option) any later version.
-
-	This library is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-	Lesser General Public License for more details.
-
-	You should have received a copy of the GNU Lesser General Public
-	License along with this library; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-*/
-
-
+ * Copyright 2000, Georges-Edouard Berenger. All rights reserved.
+ * Copyright 2022, Haiku, Inc. All rights reserved.
+ * Distributed under the terms of the MIT License.
+ */
 #include "MemoryBarMenuItem.h"
 
 #include "Colors.h"
@@ -25,6 +10,7 @@
 #include "ProcessController.h"
 
 #include <Bitmap.h>
+#include <ControlLook.h>
 #include <StringForSize.h>
 
 #include <stdio.h>
@@ -32,10 +18,9 @@
 
 MemoryBarMenuItem::MemoryBarMenuItem(const char *label, team_id team,
 		BBitmap* icon, bool deleteIcon, BMessage* message)
-	: BMenuItem(label, message),
-	fTeamID(team),
-	fIcon(icon),
-	fDeleteIcon(deleteIcon)
+	:
+	IconMenuItem(icon, label, message, true, deleteIcon),
+	fTeamID(team)
 {
 	Init();
 }
@@ -43,8 +28,6 @@ MemoryBarMenuItem::MemoryBarMenuItem(const char *label, team_id team,
 
 MemoryBarMenuItem::~MemoryBarMenuItem()
 {
-	if (fDeleteIcon)
-		delete fIcon;
 }
 
 
@@ -65,41 +48,16 @@ void
 MemoryBarMenuItem::DrawContent()
 {
 	DrawIcon();
+
 	if (fWriteMemory < 0)
 		BarUpdate();
 	else
 		DrawBar(true);
 
 	BPoint loc = ContentLocation();
-	loc.x += 20;
+	loc.x += ceilf(be_control_look->DefaultLabelSpacing() * 3.3f);
 	Menu()->MovePenTo(loc);
 	BMenuItem::DrawContent();
-}
-
-
-void
-MemoryBarMenuItem::DrawIcon()
-{
-	// TODO: exact code duplication with TeamBarMenuItem::DrawIcon()
-	if (!fIcon)
-		return;
-
-	BPoint loc = ContentLocation();
-	BRect frame = Frame();
-
-	loc.y = frame.top + (frame.bottom - frame.top - 15) / 2;
-
-	BMenu* menu = Menu();
-
-	if (fIcon->ColorSpace() == B_RGBA32) {
-		menu->SetDrawingMode(B_OP_ALPHA);
-		menu->SetBlendingMode(B_PIXEL_ALPHA, B_ALPHA_OVERLAY);
-	} else
-		menu->SetDrawingMode(B_OP_OVER);
-
-	menu->DrawBitmap(fIcon, loc);
-
-	menu->SetDrawingMode(B_OP_COPY);
 }
 
 
@@ -116,10 +74,11 @@ MemoryBarMenuItem::DrawBar(bool force)
 	BMenu* menu = Menu();
 	rgb_color highColor = menu->HighColor();
 
-	// draw the bar itself
+	BFont font;
+	menu->GetFont(&font);
+	BRect rect = bar_rect(frame, &font);
 
-	BRect rect(frame.right - kMargin - kBarWidth, frame.top + 5,
-		frame.right - kMargin, frame.top + 13);
+	// draw the bar itself
 	if (fWriteMemory < 0)
 		return;
 
@@ -233,10 +192,9 @@ MemoryBarMenuItem::DrawBar(bool force)
 void
 MemoryBarMenuItem::GetContentSize(float* _width, float* _height)
 {
-	BMenuItem::GetContentSize(_width, _height);
-	if (*_height < 16)
-		*_height = 16;
-	*_width += 30 + kBarWidth + kMargin + gMemoryTextWidth;
+	IconMenuItem::GetContentSize(_width, _height);
+	*_width += ceilf(be_control_look->DefaultLabelSpacing() * 2.0f)
+		+ kBarWidth + kMargin + gMemoryTextWidth;
 }
 
 
@@ -288,10 +246,7 @@ MemoryBarMenuItem::Reset(char* name, team_id team, BBitmap* icon,
 {
 	SetLabel(name);
 	fTeamID = team;
-	if (fDeleteIcon)
-		delete fIcon;
+	IconMenuItem::Reset(icon, deleteIcon);
 
-	fDeleteIcon = deleteIcon;
-	fIcon = icon;
 	Init();
 }

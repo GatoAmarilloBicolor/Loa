@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2011 Adrian Chadd, Xenion Pty Ltd
  * All rights reserved.
  *
@@ -25,8 +27,6 @@
  * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/if_athdfs.h 244946 2013-01-02 01:36:10Z adrian $
  */
 #ifndef	__IF_ATHDFS_H__
 #define	__IF_ATHDFS_H__

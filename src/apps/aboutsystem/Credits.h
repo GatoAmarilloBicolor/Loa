@@ -1,5 +1,5 @@
 /*
- * Copyright 2005-2014, Haiku, Inc.
+ * Copyright 2005-2020, Haiku, Inc.
  * Distributed under the terms of the MIT license.
  *
  * Authors:
@@ -31,65 +31,86 @@ static const Translation kTranslations[] = {
 		"Michael Bulash\n"
 		"Siaržuk Žarski\n"
 	},
+#if 0
 	{ "bg",
 		"Ognyan Valeri Angelov\n"
 		"Росен Арабаджиев\n"
 		"cssvb94\n"
 		"naydef\n"
 	},
-#if 0
-	{ "ca",
-		"Paco Rivière\n"
-	},
 #endif
+	{ "ca",
+		"Adolfo Jayme Barrientos\n"
+		"David Medina\n" // Pootle: David MP
+		"Paco Rivière\n"
+		"jare\n"
+	},
 	{ "zh",
 		"Dong Guangyu\n"
 		"Pengfei Han (kurain)\n"
 		"Don Liu\n"
 		"adcros\n"
+		"blumia\n"
 		"cirno\n"
 		"dgy18787\n"
 		"hlwork\n"
+		"raphino\n"
 	},
 	{ "hr",
-		"Ivica Koli\n"
+		"Ivica Kolić\n" // Pootle: zvacet
 		"Zlatko Sehanović\n"
 		// "taos\n" bugfixes only, no actual translations
-		"zvacet\n"
 	},
 	{ "cs",
 		"aXeton\n"
+		"hearse\n"
+		"hor411\n"
+		"huh2\n"
 		"Ivan Masár\n"
+		"jpz\n"
+		"jsvoboda\n"
 		"Pavel Drotár\n"
 		"Martin Janiczek\n"
+		"MartinK\n"
 		"Matěj Kocián\n"
+		"mirek\n" // Pootle: mirek AT zebrak.net
+		"nkin\n"
+		"vitekpin\n"
 		"zafan\n"
 	},
 	{ "da",
-		"KapiX\n"
 		"Brian Matzon\n"
 		"Kristian Poul Herkild\n"
+		"KapiX\n"
 		"sylvester\n"
+		"scootergrisen\n"
 	},
 	{ "nl",
 		"Floris Kint\n" // FKint
 		"Puck Meerburg\n" // puckipedia
 		"Niels Sascha Reedijk\n" //nielx
-		"Meanwhile\n"
+		"Begasus\n"
 		"bilstrong5\n"
 		"lolacio\n"
+		"mauritslamers\n"
 		"madhusudansrg4\n"
+		"Meanwhile\n"
 		"michiel\n"
+		"nickbouwhuis\n"
+		"noaccount\n"
 		"Sintendo\n"
+		"SomeoneFromBelgium\n"
 		"Tagliano\n"
 		// "taos\n" bugfixes only, no actual translations
 		"wrench123456789\n"
 	},
+#if 0
 	{ "en_ca",
 		"Edwin Amsler\n"
 		"infamy\n"
 		"Simon South\n"
 	},
+#endif
 	{ "en_gb",
 		"Harsh Vardhan\n"
 		"Humdinger\n"
@@ -97,14 +118,29 @@ static const Translation kTranslations[] = {
 		"Richie Nyhus\n"
 	},
 	{ "eo",
+		"Alexey Burshtein (Hitech)\n"
+		"Anatolij\n"
 		"Travis D. Reed (Dancxjo)\n"
+		"CodeWeaver\n"
+		"jaidedpts\n"
+		"Jaidyn Ann\n"
+		"JakubFabijan\n"
+		"jmairboeck\n"
+		"kio\n"
 		"kojoto\n"
+		"Lutrulo\n"
+		"miguel-1.mx\n"
+		"Neber\n"
+		"ora_birdo\n"
+		"SandwichDoktoro\n"
+		"sikmir\n"
+		"Teashrock\n"
+		"Va\n"
 	},
 	{ "fi",
 		"Jorma Karvonen (Karvjorm)\n"
 		"Jaakko Leikas (Garjala)\n"
 		"Tommi Nieminen (SuperOscar)\n"
-		"Niels Sascha Reedijk\n"
 		"Slavi Stefanov Sotirov\n"
 		"nortti\n"
 	},
@@ -115,40 +151,59 @@ static const Translation kTranslations[] = {
 		"Adrien Destugues (PulkoMandy)\n"
 		"Jérôme Duval (korli)\n"
 		"François Revol (mmu_man)\n"
-		"Niels Sascha Reedijk\n"
 		"Florent Revest\n"
 		"Harsh Vardhan\n"
 		"abda11ah\n"
 		"Adeimantos\n"
 		"Blazkowitz\n"
+		"farvardin\n"
+		"JeremyF\n"
+		"JozanLeClerc\n"
+		"Krevar\n"
 		"Loïc\n"
 		"roptat\n"
 		"Starchaser\n"
 		"Wabouz\n"
+		"JozanLeClerc\n"
+		"Krevar\n"
+		"sunazerty\n"
+	},
+	{ "fur",
+		"Fabio Tomat\n"
 	},
 	{ "de",
-		"Atalanttore\n"
 		"Colin Günther\n"
 		"Mirko Israel\n"
-		"leszek\n"
 		"Christian Morgenroth\n"
 		"Aleksas Pantechovskis\n"
-		"Niels Sascha Reedijk\n"
 		"Joachim Seemer (Humdinger)\n"
 		"Matthias Spreiter\n"
 		"Ivaylo Tsenkov\n"
+		"Atalanttore\n"
+		"FabianR\n"
+		"leszek\n"
 		"svend\n"
 		"taos\n"
+		"FabianR\n"
+		"HonkXL\n"
 	},
 	{ "el",
 		"Γιάννης Κωνσταντινίδης [Giannis Konstantinidis] (giannisk)\n"
 		"Βαγγέλης Μαμαλάκης [Vaggelis Mamalakis]\n"
 		"Άλεξ-Π. Νάτσιος [Alex-P. Natsios] (Drakevr)\n"
 		"Efstathios Iosifidis\n"
+		"Edward Pasenidis\n"
 		"Jim Spentzos\n"
+		"Panagiotis \"Ivory\" Vasilopoulos (n0toose)\n"
+		"blu.256\n"
 		"JamesSP472\n"
+		"hxze\n"
+		"Greek_Ios_Hack\n"
+		"greekboy\n"
+		"Mavridis Philippe\n"
 		"vasper\n"
 	},
+#if 0
 	{ "hi",
 		"Abhishek Arora\n"
 		"Dhruwat Bhagat\n"
@@ -157,55 +212,70 @@ static const Translation kTranslations[] = {
 		"Harsh Vardhan\n"
 		"unitedroad\n"
 	},
+#endif
 	{ "hu",
 		"Zsolt Bicskei\n"
 		"Róbert Dancsó (dsjonny)\n"
 		"Kálmán Kéménczy\n"
 		"Zoltán Mizsei (miqlas)\n"
 		"Bence Nagy\n"
+		"Czirok Attila\n"
 		// "Reznikov Sergei (Diver)\n" bugfixes only
+		"johnny_b\n"
+		"ViktorVarga\n"
 		"Zoltán Szabó (Bird)\n"
+		"Zoltán Szatmáry\n"
 	},
 	{ "id",
-		"Raefal Dhia\n"
+		"Raefal Dhia\n" // Pootle: raefaldhia
 		"Henry Guzman\n"
+		"Dityo Nurasto\n"
+		"Bre.haviours\n"
 		"iyank4\n"
 		"mazbrili\n"
-		"nurasto\n"
+		"muriirum\n"
 	},
 	{ "it",
 		"Andrea Bernardi\n"
-		"Pavlo Bvrda\n"
-		"Dario Casalinuovo\n"
-		"Francesco Franchina\n"
-		"Michele Frau (zuMi)\n"
-		"Lorenzo Frezza\n"
-		"Mometto Nicola\n"
-		"Michael Peppers\n"
+		"andrea77\n"
 		"Daniele Tosti\n"
+		"Dario Casalinuovo\n"
 		"davide.orsi\n"
+		"errata_corrige\n"
 		"fabiusp98\n"
-		"TheClue\n"
+		"Gabriele Baldassarre\n"
+		"JackBurton\n"
+		"Fabio Tomat\n"
+		"fabiusp98\n"
+		"Francesco Franchina\n"
+		"Lorenzo Frezza\n"
+		"Michael Peppers\n"
+		"Michele Frau (zuMi)\n"
+		"Mometto Nicola\n"
+		"Pavlo Bvrda\n"
+		"pharaone\n"
 		"TropinotoHirto\n"
 		"valzant\n"
 	},
 	{ "ja",
 		"Satoshi Eguchi\n"
 		"Shota Fukumori\n"
-		"hiromu1996\n"
 		"Hironori Ichimiya\n"
 		"Jorge G. Mare (Koki)\n"
 		"Takashi Murai\n"
+		"Hiroyuki Tsutsumi\n"
+		"Hiromu Yakura\n"
+		"hiromu1996\n"
 		"nolze\n"
 		"SHINTA\n"
 		"thebowseat\n"
-		"Hiroyuki Tsutsumi\n"
-		"Hiromu Yakura\n"
 		"The JPBE.net user group\n"
 	},
+#if 0
 	{ "ko",
 		"soul.lee\n"
 	},
+#endif
 	{ "lt",
 		"Algirdas Buckus\n"
 		"Simonas Kazlauskas\n" //nagisa
@@ -215,7 +285,6 @@ static const Translation kTranslations[] = {
 	{ "fa",
 		"Mehran Rahbardar\n"
 	},
-#endif
 	{ "mi",
 		"Rob Judd\n"
 	},
@@ -223,39 +292,63 @@ static const Translation kTranslations[] = {
 		"Klapaucius\n"
 		"petterhj\n"
 	},
+#endif
 	{ "pl",
+		"arckat\n"
+		"Artur Wyszyński\n"
+		"balu\n"
 		"Dariusz Knociński\n"
-		"Szymon Barczak\n"
-		"Przemysław Buczkowski\n"
+		"FabijanJakub\n"
+		"flegmatyk\n"
 		"Grzegorz Dąbrowski\n"
 		"Hubert Hareńczyk\n" // Hubert
+		"i4096\n"
 		"Kacper Kasper (KapiX)\n"
 		"Krzysztof Miemiec\n"
+		"nawordar\n"
+		"nerd\n"
+		"Przemysław Buczkowski\n"
 		"Przemysław Pintal\n"
-		"Artur Wyszyński\n"
-		"flegmatyk\n"
+		"Qu1\n"
 		"rausman\n"
+		"sech1p\n"
+		"Szymon Barczak\n"
 		"stasinek\n"
+		"wielb\n"
 		"zzzzzzzzz\n"
 	},
 	{ "pt",
-		"Marcos Alves (Xeon3D)\n"
-		"Vasco Costa (gluon)\n"
-		"Adriano Duarte\n"
+		"Adriano A. Duarte (Sri_Dhryko)\n"
+		"bemagiw306\n"
+		"emanuel\n"
+		"hugok\n"
+		"Imivorn\n"
+		"jcfb\n"
 		"Louis de M.\n"
+		"Marcos Alves (Xeon3D)\n"
 		"pedrothegameroficialtm\n"
+		"Ricardo Simões\n"
+		"Vasco Costa (gluon)\n"
+		"Victor Domingos (victordomingos)\n"
+		"zeru\n"
 		// "taos\n" bugfixes only, no actual translations
 	},
 	{ "pt_BR",
-		"Cabral Bandeira (beyraq)\n"
 		"Adriano A. Duarte (Sri_Dhryko)\n"
-		"Wallace Maia\n"
-		"Tiago Matos (tiagoms)\n"
-		"Louis de M.\n"
-		"Michael Vinícius de Oliveira (michaelvo)\n"
-		"Luis Otte\n"
-		"Nadilson Santana (nadilsonsantana)\n"
+		"Anderson Rodrigues\n"
+		"Andrei Torres\n"
+		"Cabral Bandeira (beyraq)\n"
 		"dsaito\n"
+		"humbertocsjr\n"
+		"Louis de M.\n"
+		"Luis Otte\n"
+		"Michael Vinícius de Oliveira (michaelvo)\n"
+		"Nadilson Santana (nadilsonsantana)\n"
+		"oddybr\n"
+		"renanbirck\n"
+		"Tiago Matos (tiagoms)\n"
+		"Victor Domingos (victordomingos)\n"
+		"Wallace Maia\n"
 	},
 	{ "ro",
 		"Victor Carbune\n"
@@ -271,68 +364,99 @@ static const Translation kTranslations[] = {
 		"valzant\n"
 	},
 	{ "ru",
+		"Alexey Burshtein (Hitech)\n"
+		"bitigchi\n"
 		"Dan Aller\n"
-		"Luka Andjelkovic\n"
-		"Tatyana Fursic (iceid)\n"
-		"StoroZ Gneva\n"
-		"Rodastahm Islamov (RISC)\n"
+		"erhoof\n"
 		"Eugene Katashov (mrNoisy)\n"
-		"Pavel Kiryukhin\n"
-		"Rimas Kudelis\n"
-		"Reznikov Sergei (Diver)\n"
+		"i-Demon-i\n"
+		"iimetra\n"
+		"Luka Andjelkovic\n"
 		"Michael Smirnov\n"
-		"Sergei Sorokin\n"
-		"Vladimir Vasilenko\n"
-		"Siaržuk Žarski\n"
-		"Алексей Мехоношин\n"
+		"Oleg Feoktistov\n"
+		"Pavel Kiryukhin\n"
+		"Reznikov Sergei (Diver)\n"
+		"Rimas Kudelis\n"
+		"Rodastahm Islamov (RISC)\n"
+		"Roskin\n"
 		"Ruskidecko\n"
+		"Sergei Sorokin\n"
+		"Siaržuk Žarski\n"
+		"sikmir\n"
 		"Snowfire\n"
 		"solarcold\n"
-		"i-Demon-i\n"
+		"Sosed\n"
+		"StoroZ Gneva\n"
+		"Tatyana Fursic (iceid)\n"
+		"TK-313\n"
+		"Va Miluŝnikov\n"
+		"Vladimir Vasilenko\n"
+		"Yurii Zamotailo\n" // Pootle: IaH
+		"Yury\n"
+		"Алексей Мехоношин\n"
 		// "taos\n" bugfixes only, no actual translations
 	},
 	{ "sk",
 		"Bachoru\n"
 		"Ivan Masár\n"
 	},
+#if 0
 	{ "sl",
 		"Matej Horvat\n"
 	},
-#if 0
 	{ "sr",
 		"Luka Andjelkovic\n"
 		"Nikola Miljkovic\n"
 	},
 #endif
 	{ "es",
-		"Pedro Arregui\n"
-		"José Antonio Barranquero\n"
-		"Zola Bridges\n"
-		"Nicolás C (CapitanPico)\n"
-		"Oscar Carballal (oscarcp)\n"
-		"Dario de la Cruz\n"
-		"Francisco Gómez\n"
-		"Luis Gustavo Lira\n"
-		"Louis de M.\n"
-		"Victor Madariaga\n"
-		"Remy Matos\n"
-		"César Ortiz Pantoja (ccortiz)\n"
-		"Miguel Zúñiga González (miguel~1.mx)\n"
-		"Virgilio Leonardo Ruilova\n"
+		"Adolfo Jayme Barrientos\n"
+		"AlanBur\n"
 		"algrun\n"
 		"asak_lemon\n"
+		"bru\n"
 		"c-sanchez\n"
+		"cafeina\n"
+		"Calebin\n"
+		"César Ortiz Pantoja (ccortiz)\n"
+		"Dario de la Cruz\n"
+		"dhijazo\n"
 		"EdiNOS\n"
 		"espectalll123\n"
 		"fatigatti\n"
+		"Francisco Gómez\n"
 		"grifus\n"
 		"jdari\n"
 		"jjpx\n"
+		"jma_sp\n"
+		"jonatanpc8\n"
+		"José Antonio Barranquero\n"
+		"Jose64141\n"
+		"jzafrag\n"
+		"Louis de M.\n"
+		"Luis Gustavo Lira\n"
+		"ManuelMegias\n"
+		"Miguel Zúñiga González (miguel~1.mx)\n"
+		"mikelcaz\n"
 		"mpescador\n"
+		"Nicolás C (CapitanPico)\n"
+		"Oscar Carballal (oscarcp)\n"
 		"OscarL\n"
+		"Pedro Arregui\n"
+		"Parodper\n"
+		"Rubén Tomás\n"
+		"quique\n"
+		"Remy Matos\n"
 		"ruilovacastillo\n"
+		"snunezcr\n"
+		"valenxia\n"
 		"valzant\n"
+		"Victor Madariaga\n"
+		"Virgilio Leonardo Ruilova\n"
+		"xgrimator\n"
 		"zerabat\n"
+		"zeroxp\n"
+		"Zola Bridges\n"
 		// "taos\n" bugfixes only, no actual translations
 	},
 	{ "sv",
@@ -344,8 +468,12 @@ static const Translation kTranslations[] = {
 		"Jonas Sundström\n"
 		"Anders Trobäck\n"
 		"Victor Widell\n"
+		"Forza\n"
 	},
-#if 0
+	{ "th",
+		"Chaiwit Phonkhen\n"
+		"Sompon Chanrit\n"
+	},
 	{ "tr",
 		"Hüseyin Aksu\n"
 		"Halil İbrahim Azak\n"
@@ -354,6 +482,7 @@ static const Translation kTranslations[] = {
 		"Enes Burhan Kuran\n"
 		"Ali Rıza Nazlı\n"
 		"Anıl Özbek\n"
+		"Emir Sarı\n" // bitigchi
 		"Sinan Talebi\n"
 		"csakirt\n"
 		"Hezarfen\n"
@@ -361,58 +490,61 @@ static const Translation kTranslations[] = {
 		"Kardanadam\n"
 		"ocingiler\n"
 		"yakup\n"
+		"ctasan\n"
+		"husaral\n"
 	},
-#endif
 	{ "uk",
-		"Pavlo Bvrda\n"
-		"Mariya Pilipchuk\n"
 		"Alex Rudyk (totish)\n"
-		// "Reznikov Sergei (Diver)\n" bugfixes only
-		"Oleg Varunok\n"
+		"Alexey Lugin\n"
 		"axeller\n"
+		// "Reznikov Sergei (Diver)\n" bugfixes only
+		"Mariya Pilipchuk\n"
+		"mayk77\n"
 		"neiron13\n"
+		"Oleg Varunok\n"
+		"Pavlo Bvrda\n"
+		"Yurii Zamotailo\n" // Pootle: IaH
 	},
 };
 
 #define kNumberOfTranslations (sizeof(kTranslations) / sizeof(Translation))
 
 #define kCurrentMaintainers \
-	"Stephan Aßmus\n" \
-	"Dario Casalinuovo\n" \
+	"Pascal R. G. Abresch\n" \
+	"Máximo Castañeda\n" \
 	"Augustin Cavalier\n" \
 	"Stefano Ceccherini\n" \
+	"Rudolf Cornelissen\n" \
 	"Adrien Destugues\n" \
 	"Axel Dörfler\n" \
 	"Jérôme Duval\n" \
+	"Alexander von Gluck IV\n" \
 	"René Gollent\n" \
 	"Jessica Hamilton\n" \
-	"Julian Harnath\n" \
-	"Brian Hill\n" \
 	"Fredrik Holmqvist\n" \
-	"Philippe Houdoin\n" \
+	"David Karoly\n" \
 	"Kacper Kasper\n" \
+	"Ryan Leavengood\n" \
 	"Andrew Lindesay\n" \
 	"Michael Lotz\n" \
 	"Scott McCreary\n" \
 	"Puck Meerburg\n" \
-	"Fredrik Modéen\n" \
-	"Joseph R. Prostko\n" \
 	"Niels Sascha Reedijk\n" \
 	"François Revol\n" \
-	"Philippe Saint-Pierre\n" \
 	"Jonathan Schleifer\n" \
 	"John Scipione\n" \
+	"Joachim Seemer (Humdinger)\n" \
 	"Gerasim Troeglazov\n" \
-	"Alexander von Gluck IV\n" \
-	"Ingo Weinhold\n" \
 	"\n"
 
 #define kPastMaintainers \
 	"Ithamar R. Adema\n" \
 	"Bruno G. Albuquerque\n" \
+	"Kyle Ambroff-Kao\n" \
+	"Stephan Aßmus\n" \
 	"Andrew Bachmann\n" \
 	"Salvatore Benedetto\n" \
-	"Rudolf Cornelissen\n" \
+	"Dario Casalinuovo\n" \
 	"Tyler Dauwalder\n" \
 	"Alexandre Deckner\n" \
 	"Oliver Ruiz Dorantes\n" \
@@ -421,25 +553,30 @@ static const Translation kTranslations[] = {
 	"Andre Alves Garzia\n" \
 	"Bryce Groff\n" \
 	"Colin Günther\n" \
+	"Julian Harnath\n" \
 	"Karsten Heimrich\n" \
+	"Brian Hill\n" \
+	"Philippe Houdoin\n" \
 	"Erik Jaesler\n" \
 	"Maurice Kalinowski\n" \
 	"Euan Kirkhope\n" \
 	"Marcin Konicki\n" \
 	"Waldemar Kornewald\n" \
 	"Thomas Kurschel\n" \
-	"Ryan Leavengood\n" \
 	"Brecht Machiels\n" \
 	"Matt Madia\n" \
 	"David McPaul\n" \
 	"Wim van der Meer\n" \
+	"Fredrik Modéen\n" \
 	"Hamish Morrison\n" \
-	"Michael Pfeiffer\n" \
 	"Frans Van Nispen\n" \
 	"Adi Oanca\n" \
 	"Marcus Overhagen\n" \
+	"Michael Pfeiffer\n" \
 	"Michael Phipps\n" \
+	"Joseph R. Prostko\n" \
 	"David Reid\n" \
+	"Philippe Saint-Pierre\n" \
 	"Hugo Santos\n" \
 	"Alex Smith\n" \
 	"Alexander G. M. Smith\n" \
@@ -447,6 +584,7 @@ static const Translation kTranslations[] = {
 	"Jonas Sundström\n" \
 	"Oliver Tappe\n" \
 	"Bryan Varner\n" \
+	"Ingo Weinhold\n" \
 	"Nathan Whitehorn\n" \
 	"Michael Wilber\n" \
 	"Alex Wilson\n" \
@@ -454,17 +592,26 @@ static const Translation kTranslations[] = {
 	"Jonathan Yoder\n" \
 	"Clemens Zeidler\n" \
 	"Siarzhuk Zharski\n" \
+	"Janus\n" \
+	"\n"
+
+#define kTestingTeam \
+	"luroh\n" \
+	"Robert Mercer (Vidrep)\n" \
+	"Sergei Reznikov\n" \
 	"\n"
 
 #define kContributors \
 	"Andrea Anzani\n" \
 	"Sean Bartell\n" \
 	"Sambuddha Basu\n" \
+	"Shubham Bhagat\n" \
 	"Hannah Boneß\n" \
 	"Andre Braga\n" \
 	"Michael Bulash\n" \
 	"Bruce Cameron\n" \
 	"Jean-Loïc Charroud\n" \
+	"Ilya Chugin (X512)\n" \
 	"Greg Crain\n" \
 	"Michael Davidson\n" \
 	"David Dengg\n" \
@@ -484,6 +631,7 @@ static const Translation kTranslations[] = {
 	"Marc Flerackers\n" \
 	"Michele Frau (zuMi)\n" \
 	"Landon Fuller\n" \
+	"Rajagopalan Gangadharan\n" \
 	"Deyan Genovski\n" \
 	"Pete Goodeve\n" \
 	"Lucian Adrian Grijincu\n" \
@@ -499,6 +647,7 @@ static const Translation kTranslations[] = {
 	"Carwyn Jones\n" \
 	"Prasad Joshi\n" \
 	"Vasilis Kaoutsis\n" \
+	"Preetpal Kaur\n" \
 	"James Kim\n" \
 	"Shintaro Kinugawa\n" \
 	"Jan Klötzke\n" \
@@ -515,13 +664,12 @@ static const Translation kTranslations[] = {
 	"Brian Luft\n" \
 	"Christof Lutteroth\n" \
 	"Graham MacDonald\n" \
-	"Jorge G. Mare (Koki)\n" \
 	"Jan Matějek\n" \
 	"Brian Matzon\n" \
 	"Christopher ML Zumwalt May\n" \
 	"Andrew McCall\n" \
+	"Suhel Mehta\n" \
 	"Nathan Mentley\n" \
-	"Robert Mercer (Vidrep)\n" \
 	"Marius Middelthon\n" \
 	"Marco Minutoli\n" \
 	"Misza\n" \
@@ -538,11 +686,11 @@ static const Translation kTranslations[] = {
 	"Romain Picard\n" \
 	"Francesco Piccinno\n" \
 	"Peter Poláčik\n" \
+	"Niklas Poslovski\n" \
 	"David Powell\n" \
 	"Jeremy Rand\n" \
 	"Hartmut Reh\n" \
 	"Daniel Reinhold\n" \
-	"Sergei Reznikov\n" \
 	"Chris Roberts\n" \
 	"Samuel Rodríguez Pérez\n" \
 	"Thomas Roell\n" \
@@ -555,6 +703,7 @@ static const Translation kTranslations[] = {
 	"Atsushi Takamatsu\n" \
 	"James Urquhart\n" \
 	"Jason Vandermark\n" \
+	"Panagiotis \"Ivory\" Vasilopoulos (n0toose)\n" \
 	"Sandor Vroemisse\n" \
 	"Jürgen Wall\n" \
 	"Denis Washington\n" \
@@ -577,6 +726,7 @@ static const Translation kTranslations[] = {
 #define kPastWebsiteTeam  \
 	"Phil Greenway\n" \
 	"Gavin James\n" \
+	"Jorge G. Mare (Koki)\n" \
 	"Urias McCullough\n" \
 	"Richie Nyhus\n" \
 	"Jonathan Yoder\n" \

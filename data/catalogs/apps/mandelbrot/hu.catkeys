@@ -1,23 +1,28 @@
-1	hungarian	x-vnd.Haiku-Mandelbrot	1781779654
-About	MandelbrotWindow		Információk
-Julia	MandelbrotWindow		Júlia
+1	hungarian	x-vnd.Haiku-Mandelbrot	2302392624
 Grassland	MandelbrotWindow		Legelő
-Spring	MandelbrotWindow		Tavasz
-High contrast	MandelbrotWindow		Magas kontraszt
-Fire	MandelbrotWindow		Tűz
-Royal	MandelbrotWindow		Királyi
-File	MandelbrotWindow		Fájl
-Lightning	MandelbrotWindow		Villám
-Midnight	MandelbrotWindow		Éjfél
-Palette	MandelbrotWindow		Paletta
-Mandelbrot	MandelbrotWindow		Mandelbrot
-Burning Ship	MandelbrotWindow		Égő hajó
-Quit	MandelbrotWindow		Kilépés
-Frost	MandelbrotWindow		Zúzmara
-Set	MandelbrotWindow		Beállítás
-Iterations	MandelbrotWindow		Iterációk
-Mandelbrot	System name		Mandelbrot
-Deepfrost	MandelbrotWindow		Mély fagy
 Tricorn	MandelbrotWindow		Tricorn
-Multibrot	MandelbrotWindow		Multibrot
 Orbit Trap	MandelbrotWindow		Körkörös csapda
+Deepfrost	MandelbrotWindow		Mély fagy
+1 (none)	MandelbrotWindow		1 (nincs)
+Quit	MandelbrotWindow		Kilépés
+Save as image…	MandelbrotWindow		Mentés képként…
+Fire	MandelbrotWindow		Tűz
+High contrast	MandelbrotWindow		Magas kontraszt
+Full screen	MandelbrotWindow		Teljesképernyő
+Midnight	MandelbrotWindow		Éjfél
+Burning Ship	MandelbrotWindow		Égő hajó
+Lightning	MandelbrotWindow		Villám
+About	MandelbrotWindow		Névjegy
+Palette	MandelbrotWindow		Paletta
+Set	MandelbrotWindow		Beállítás
+Royal	MandelbrotWindow		Királyi
+Subsampling	MandelbrotWindow		Színfelbontás
+File	MandelbrotWindow		Fájl
+Julia	MandelbrotWindow		Júlia
+Frost	MandelbrotWindow		Zúzmara
+View	MandelbrotWindow		Nézet
+Mandelbrot	System name		Mandelbrot
+Multibrot	MandelbrotWindow		Multibrot
+Iterations	MandelbrotWindow		Iterációk
+Spring	MandelbrotWindow		Tavasz
+Mandelbrot	MandelbrotWindow		Mandelbrot

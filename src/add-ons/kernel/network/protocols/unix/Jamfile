@@ -10,8 +10,6 @@ KernelAddon unix :
 	UnixEndpoint.cpp
 	UnixFifo.cpp
 
-	Referenceable.cpp
+	UnixDatagramEndpoint.cpp
+	UnixStreamEndpoint.cpp
 ;
-
-SEARCH on [ FGristFiles Referenceable.cpp ]
-	= [ FDirName $(HAIKU_TOP) src kits support ] ;

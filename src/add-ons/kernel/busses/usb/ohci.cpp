@@ -9,57 +9,269 @@
  *		Siarzhuk Zharski <imker@gmx.li>
  */
 
+
+#include <stdio.h>
+
 #include <module.h>
-#include <PCI.h>
-#include <PCI_x86.h>
+#include <bus/PCI.h>
 #include <USB3.h>
 #include <KernelExport.h>
 #include <util/AutoLock.h>
 
 #include "ohci.h"
 
+
+#define CALLED(x...)	TRACE_MODULE("CALLED %s\n", __PRETTY_FUNCTION__)
+
 #define USB_MODULE_NAME "ohci"
 
-pci_module_info *OHCI::sPCIModule = NULL;
-pci_x86_module_info *OHCI::sPCIx86Module = NULL;
+device_manager_info* gDeviceManager;
+static usb_for_controller_interface* gUSB;
 
 
-static int32
-ohci_std_ops(int32 op, ...)
+#define OHCI_PCI_DEVICE_MODULE_NAME "busses/usb/ohci/pci/driver_v1"
+#define OHCI_PCI_USB_BUS_MODULE_NAME "busses/usb/ohci/device_v1"
+
+
+typedef struct {
+	OHCI* ohci;
+	pci_device_module_info* pci;
+	pci_device* device;
+
+	pci_info pciinfo;
+
+	device_node* node;
+	device_node* driver_node;
+} ohci_pci_sim_info;
+
+
+//	#pragma mark -
+
+
+static status_t
+init_bus(device_node* node, void** bus_cookie)
 {
-	switch (op)	{
-		case B_MODULE_INIT:
-			TRACE_MODULE("init module\n");
-			return B_OK;
-		case B_MODULE_UNINIT:
-			TRACE_MODULE("uninit module\n");
-			return B_OK;
+	CALLED();
+
+	driver_module_info* driver;
+	ohci_pci_sim_info* bus;
+	device_node* parent = gDeviceManager->get_parent_node(node);
+	gDeviceManager->get_driver(parent, &driver, (void**)&bus);
+	gDeviceManager->put_node(parent);
+
+	Stack *stack;
+	if (gUSB->get_stack((void**)&stack) != B_OK)
+		return B_ERROR;
+
+	OHCI *ohci = new(std::nothrow) OHCI(&bus->pciinfo, bus->pci, bus->device, stack, node);
+	if (ohci == NULL) {
+		return B_NO_MEMORY;
 	}
 
-	return EINVAL;
+	if (ohci->InitCheck() < B_OK) {
+		TRACE_MODULE_ERROR("bus failed init check\n");
+		delete ohci;
+		return B_ERROR;
+	}
+
+	if (ohci->Start() != B_OK) {
+		delete ohci;
+		return B_ERROR;
+	}
+
+	*bus_cookie = ohci;
+
+	return B_OK;
 }
 
 
-usb_host_controller_info ohci_module = {
+static void
+uninit_bus(void* bus_cookie)
+{
+	CALLED();
+	OHCI* ohci = (OHCI*)bus_cookie;
+	delete ohci;
+}
+
+
+static status_t
+register_child_devices(void* cookie)
+{
+	CALLED();
+	ohci_pci_sim_info* bus = (ohci_pci_sim_info*)cookie;
+	device_node* node = bus->driver_node;
+
+	char prettyName[25];
+	sprintf(prettyName, "OHCI Controller %" B_PRIu16, 0);
+
+	device_attr attrs[] = {
+		// properties of this controller for the usb bus manager
+		{ B_DEVICE_PRETTY_NAME, B_STRING_TYPE,
+			{ .string = prettyName }},
+		{ B_DEVICE_FIXED_CHILD, B_STRING_TYPE,
+			{ .string = USB_FOR_CONTROLLER_MODULE_NAME }},
+
+		// private data to identify the device
+		{ NULL }
+	};
+
+	return gDeviceManager->register_node(node, OHCI_PCI_USB_BUS_MODULE_NAME,
+		attrs, NULL, NULL);
+}
+
+
+static status_t
+init_device(device_node* node, void** device_cookie)
+{
+	CALLED();
+	ohci_pci_sim_info* bus = (ohci_pci_sim_info*)calloc(1,
+		sizeof(ohci_pci_sim_info));
+	if (bus == NULL)
+		return B_NO_MEMORY;
+
+	pci_device_module_info* pci;
+	pci_device* device;
 	{
-		"busses/usb/ohci",
-		0,
-		ohci_std_ops
-	},
-	NULL,
-	OHCI::AddTo
+		device_node* pciParent = gDeviceManager->get_parent_node(node);
+		gDeviceManager->get_driver(pciParent, (driver_module_info**)&pci,
+			(void**)&device);
+		gDeviceManager->put_node(pciParent);
+	}
+
+	bus->pci = pci;
+	bus->device = device;
+	bus->driver_node = node;
+
+	pci_info *pciInfo = &bus->pciinfo;
+	pci->get_pci_info(device, pciInfo);
+
+	*device_cookie = bus;
+	return B_OK;
+}
+
+
+static void
+uninit_device(void* device_cookie)
+{
+	CALLED();
+	ohci_pci_sim_info* bus = (ohci_pci_sim_info*)device_cookie;
+	free(bus);
+}
+
+
+static status_t
+register_device(device_node* parent)
+{
+	CALLED();
+	device_attr attrs[] = {
+		{B_DEVICE_PRETTY_NAME, B_STRING_TYPE, {.string = "OHCI PCI"}},
+		{}
+	};
+
+	return gDeviceManager->register_node(parent,
+		OHCI_PCI_DEVICE_MODULE_NAME, attrs, NULL, NULL);
+}
+
+
+static float
+supports_device(device_node* parent)
+{
+	CALLED();
+	const char* bus;
+	uint16 type, subType, api;
+
+	// make sure parent is a OHCI PCI device node
+	if (gDeviceManager->get_attr_string(parent, B_DEVICE_BUS, &bus, false)
+		< B_OK) {
+		return -1;
+	}
+
+	if (strcmp(bus, "pci") != 0)
+		return 0.0f;
+
+	if (gDeviceManager->get_attr_uint16(parent, B_DEVICE_SUB_TYPE, &subType,
+			false) < B_OK
+		|| gDeviceManager->get_attr_uint16(parent, B_DEVICE_TYPE, &type,
+			false) < B_OK
+		|| gDeviceManager->get_attr_uint16(parent, B_DEVICE_INTERFACE, &api,
+			false) < B_OK) {
+		TRACE_MODULE("Could not find type/subtype/interface attributes\n");
+		return -1;
+	}
+
+	if (type == PCI_serial_bus && subType == PCI_usb && api == PCI_usb_ohci) {
+		pci_device_module_info* pci;
+		pci_device* device;
+		gDeviceManager->get_driver(parent, (driver_module_info**)&pci,
+			(void**)&device);
+		TRACE_MODULE("OHCI Device found!\n");
+
+		return 0.8f;
+	}
+
+	return 0.0f;
+}
+
+
+module_dependency module_dependencies[] = {
+	{ USB_FOR_CONTROLLER_MODULE_NAME, (module_info**)&gUSB },
+	{ B_DEVICE_MANAGER_MODULE_NAME, (module_info**)&gDeviceManager },
+	{}
 };
 
 
-module_info *modules[] = {
-	(module_info *)&ohci_module,
+static usb_bus_interface gOHCIPCIDeviceModule = {
+	{
+		{
+			OHCI_PCI_USB_BUS_MODULE_NAME,
+			0,
+			NULL
+		},
+		NULL,  // supports device
+		NULL,  // register device
+		init_bus,
+		uninit_bus,
+		NULL,  // register child devices
+		NULL,  // rescan
+		NULL,  // device removed
+	},
+};
+
+// Root device that binds to the PCI bus. It will register an usb_bus_interface
+// node for each device.
+static driver_module_info sOHCIDevice = {
+	{
+		OHCI_PCI_DEVICE_MODULE_NAME,
+		0,
+		NULL
+	},
+	supports_device,
+	register_device,
+	init_device,
+	uninit_device,
+	register_child_devices,
+	NULL, // rescan
+	NULL, // device removed
+};
+
+module_info* modules[] = {
+	(module_info* )&sOHCIDevice,
+	(module_info* )&gOHCIPCIDeviceModule,
 	NULL
 };
 
 
-OHCI::OHCI(pci_info *info, Stack *stack)
-	:	BusManager(stack),
+//
+// #pragma mark -
+//
+
+
+OHCI::OHCI(pci_info *info, pci_device_module_info* pci, pci_device* device, Stack *stack,
+	device_node* node)
+	:	BusManager(stack, node),
 		fPCIInfo(info),
+		fPci(pci),
+		fDevice(device),
 		fStack(stack),
 		fOperationalRegisters(NULL),
 		fRegisterArea(-1),
@@ -93,17 +305,14 @@ OHCI::OHCI(pci_info *info, Stack *stack)
 	mutex_init(&fEndpointLock, "ohci endpoint lock");
 
 	// enable busmaster and memory mapped access
-	uint16 command = sPCIModule->read_pci_config(fPCIInfo->bus,
-		fPCIInfo->device, fPCIInfo->function, PCI_command, 2);
+	uint16 command = fPci->read_pci_config(fDevice, PCI_command, 2);
 	command &= ~PCI_command_io;
 	command |= PCI_command_master | PCI_command_memory;
 
-	sPCIModule->write_pci_config(fPCIInfo->bus, fPCIInfo->device,
-		fPCIInfo->function, PCI_command, 2, command);
+	fPci->write_pci_config(fDevice, PCI_command, 2, command);
 
 	// map the registers
-	uint32 offset = sPCIModule->read_pci_config(fPCIInfo->bus,
-		fPCIInfo->device, fPCIInfo->function, PCI_base_registers, 4);
+	uint32 offset = fPci->read_pci_config(fDevice, PCI_base_registers, 4);
 	offset &= PCI_address_memory_32_mask;
 	TRACE_ALWAYS("iospace offset: 0x%" B_PRIx32 "\n", offset);
 	fRegisterArea = map_physical_memory("OHCI memory mapped registers",
@@ -335,17 +544,23 @@ OHCI::OHCI(pci_info *info, Stack *stack)
 
 	// Find the right interrupt vector, using MSIs if available.
 	fIRQ = fPCIInfo->u.h0.interrupt_line;
-	if (sPCIx86Module != NULL && sPCIx86Module->get_msi_count(fPCIInfo->bus,
-			fPCIInfo->device, fPCIInfo->function) >= 1) {
-		uint8 msiVector = 0;
-		if (sPCIx86Module->configure_msi(fPCIInfo->bus, fPCIInfo->device,
-				fPCIInfo->function, 1, &msiVector) == B_OK
-			&& sPCIx86Module->enable_msi(fPCIInfo->bus, fPCIInfo->device,
-				fPCIInfo->function) == B_OK) {
+	if (fIRQ == 0xFF)
+		fIRQ = 0;
+
+	if (fPci->get_msi_count(fDevice) >= 1) {
+		uint32 msiVector = 0;
+		if (fPci->configure_msi(fDevice, 1, &msiVector) == B_OK
+			&& fPci->enable_msi(fDevice) == B_OK) {
 			TRACE_ALWAYS("using message signaled interrupts\n");
 			fIRQ = msiVector;
 			fUseMSI = true;
 		}
+	}
+
+	if (fIRQ == 0) {
+		TRACE_MODULE_ERROR("device PCI:%d:%d:%d was assigned an invalid IRQ\n",
+			fPCIInfo->bus, fPCIInfo->device, fPCIInfo->function);
+		return;
 	}
 
 	// Install the interrupt handler
@@ -391,16 +606,9 @@ OHCI::~OHCI()
 	delete [] fInterruptEndpoints;
 	delete fRootHub;
 
-	if (fUseMSI && sPCIx86Module != NULL) {
-		sPCIx86Module->disable_msi(fPCIInfo->bus,
-			fPCIInfo->device, fPCIInfo->function);
-		sPCIx86Module->unconfigure_msi(fPCIInfo->bus,
-			fPCIInfo->device, fPCIInfo->function);
-	}
-	put_module(B_PCI_MODULE_NAME);
-	if (sPCIx86Module != NULL) {
-		sPCIx86Module = NULL;
-		put_module(B_PCI_X86_MODULE_NAME);
+	if (fUseMSI) {
+		fPci->disable_msi(fDevice);
+		fPci->unconfigure_msi(fDevice);
 	}
 }
 
@@ -431,6 +639,9 @@ OHCI::Start()
 	}
 
 	SetRootHub(fRootHub);
+
+	fRootHub->RegisterNode(Node());
+
 	TRACE_ALWAYS("successfully started the controller\n");
 	return BusManager::Start();
 }
@@ -493,38 +704,34 @@ OHCI::CancelQueuedTransfers(Pipe *pipe, bool force)
 			current->endpoint->head_physical_descriptor
 				= current->endpoint->tail_physical_descriptor;
 
-			if (!force) {
-				if (pipe->Type() & USB_OBJECT_ISO_PIPE) {
-					ohci_isochronous_td *descriptor
-						= (ohci_isochronous_td *)current->first_descriptor;
-					while (descriptor) {
-						uint16 frame = OHCI_ITD_GET_STARTING_FRAME(
-							descriptor->flags);
-						_ReleaseIsochronousBandwidth(frame,
-							OHCI_ITD_GET_FRAME_COUNT(descriptor->flags));
-						if (descriptor
-								== (ohci_isochronous_td*)current->last_descriptor)
-							// this is the last ITD of the transfer
-							break;
+			if (pipe->Type() & USB_OBJECT_ISO_PIPE) {
+				ohci_isochronous_td *descriptor
+					= (ohci_isochronous_td *)current->first_descriptor;
+				while (descriptor) {
+					uint16 frame = OHCI_ITD_GET_STARTING_FRAME(
+						descriptor->flags);
+					_ReleaseIsochronousBandwidth(frame,
+						OHCI_ITD_GET_FRAME_COUNT(descriptor->flags));
+					if (descriptor
+							== (ohci_isochronous_td*)current->last_descriptor)
+						// this is the last ITD of the transfer
+						break;
 
-						descriptor
-							= (ohci_isochronous_td *)
-							descriptor->next_done_descriptor;
-					}
-				}
-
-				// If the transfer is canceled by force, the one causing the
-				// cancel is probably not the one who initiated the transfer
-				// and the callback is likely not safe anymore
-				transfer_entry *entry
-					= (transfer_entry *)malloc(sizeof(transfer_entry));
-				if (entry != NULL) {
-					entry->transfer = current->transfer;
-					current->transfer = NULL;
-					entry->next = list;
-					list = entry;
+					descriptor
+						= (ohci_isochronous_td *)
+						descriptor->next_done_descriptor;
 				}
 			}
+
+			transfer_entry *entry
+				= (transfer_entry *)malloc(sizeof(transfer_entry));
+			if (entry != NULL) {
+				entry->transfer = current->transfer;
+				current->transfer = NULL;
+				entry->next = list;
+				list = entry;
+			}
+
 			current->canceled = true;
 		}
 		current = current->link;
@@ -534,7 +741,13 @@ OHCI::CancelQueuedTransfers(Pipe *pipe, bool force)
 
 	while (list != NULL) {
 		transfer_entry *next = list->next;
-		list->transfer->Finished(B_CANCELED, 0);
+
+		// If the transfer is canceled by force, the one causing the
+		// cancel is possibly not the one who initiated the transfer
+		// and the callback is likely not safe anymore
+		if (!force)
+			list->transfer->Finished(B_CANCELED, 0);
+
 		delete list->transfer;
 		free(list);
 		list = next;
@@ -575,99 +788,6 @@ OHCI::NotifyPipeChange(Pipe *pipe, usb_change change)
 			return B_ERROR;
 	}
 
-	return B_OK;
-}
-
-
-status_t
-OHCI::AddTo(Stack *stack)
-{
-#ifdef TRACE_USB
-	set_dprintf_enabled(true);
-#endif
-
-	if (!sPCIModule) {
-		status_t status = get_module(B_PCI_MODULE_NAME, (module_info **)&sPCIModule);
-		if (status < B_OK) {
-			TRACE_MODULE_ERROR("getting pci module failed! 0x%08" B_PRIx32 "\n",
-				status);
-			return status;
-		}
-	}
-
-	TRACE_MODULE("searching devices\n");
-	bool found = false;
-	pci_info *item = new(std::nothrow) pci_info;
-	if (!item) {
-		sPCIModule = NULL;
-		put_module(B_PCI_MODULE_NAME);
-		return B_NO_MEMORY;
-	}
-
-	// Try to get the PCI x86 module as well so we can enable possible MSIs.
-	if (sPCIx86Module == NULL && get_module(B_PCI_X86_MODULE_NAME,
-			(module_info **)&sPCIx86Module) != B_OK) {
-		// If it isn't there, that's not critical though.
-		TRACE_MODULE_ERROR("failed to get pci x86 module\n");
-		sPCIx86Module = NULL;
-	}
-
-	for (uint32 i = 0 ; sPCIModule->get_nth_pci_info(i, item) >= B_OK; i++) {
-		if (item->class_base == PCI_serial_bus && item->class_sub == PCI_usb
-			&& item->class_api == PCI_usb_ohci) {
-			if (item->u.h0.interrupt_line == 0
-				|| item->u.h0.interrupt_line == 0xFF) {
-				TRACE_MODULE_ERROR("found device with invalid IRQ -"
-					" check IRQ assignement\n");
-				continue;
-			}
-
-			TRACE_MODULE("found device at IRQ %u\n",
-				item->u.h0.interrupt_line);
-			OHCI *bus = new(std::nothrow) OHCI(item, stack);
-			if (!bus) {
-				delete item;
-				sPCIModule = NULL;
-				put_module(B_PCI_MODULE_NAME);
-
-				if (sPCIx86Module != NULL) {
-					sPCIx86Module = NULL;
-					put_module(B_PCI_X86_MODULE_NAME);
-				}
-
-				return B_NO_MEMORY;
-			}
-
-			if (bus->InitCheck() < B_OK) {
-				TRACE_MODULE_ERROR("bus failed init check\n");
-				delete bus;
-				continue;
-			}
-
-			// the bus took it away
-			item = new(std::nothrow) pci_info;
-
-			bus->Start();
-			stack->AddBusManager(bus);
-			found = true;
-		}
-	}
-
-	if (!found) {
-		TRACE_MODULE_ERROR("no devices found\n");
-		delete item;
-		sPCIModule = NULL;
-		put_module(B_PCI_MODULE_NAME);
-
-		if (sPCIx86Module != NULL) {
-			sPCIx86Module = NULL;
-			put_module(B_PCI_X86_MODULE_NAME);
-		}
-
-		return ENODEV;
-	}
-
-	delete item;
 	return B_OK;
 }
 
@@ -1146,13 +1266,13 @@ OHCI::_FinishTransfers()
 				if (callbackStatus == B_OK) {
 					if (transfer->data_descriptor && transfer->incoming) {
 						// data to read out
-						iovec *vector = transfer->transfer->Vector();
+						generic_io_vec *vector = transfer->transfer->Vector();
 						size_t vectorCount = transfer->transfer->VectorCount();
 
 						transfer->transfer->PrepareKernelAccess();
 						actualLength = _ReadDescriptorChain(
 							transfer->data_descriptor,
-							vector, vectorCount);
+							vector, vectorCount, transfer->transfer->IsPhysical());
 					} else if (transfer->data_descriptor) {
 						// read the actual length that was sent
 						actualLength = _ReadActualLength(
@@ -1168,9 +1288,9 @@ OHCI::_FinishTransfers()
 						// this transfer may still have data left
 						TRACE("advancing fragmented transfer\n");
 						transfer->transfer->AdvanceByFragment(actualLength);
-						if (transfer->transfer->VectorLength() > 0) {
+						if (transfer->transfer->FragmentLength() > 0) {
 							TRACE("still %ld bytes left on transfer\n",
-								transfer->transfer->VectorLength());
+								transfer->transfer->FragmentLength());
 							// TODO actually resubmit the transfer
 						}
 
@@ -1315,13 +1435,13 @@ OHCI::_FinishIsochronousTransfer(transfer_data *transfer,
 		if (callbackStatus == B_OK && actualLength > 0) {
 			if (transfer->data_descriptor && transfer->incoming) {
 				// data to read out
-				iovec *vector = transfer->transfer->Vector();
+				generic_io_vec *vector = transfer->transfer->Vector();
 				size_t vectorCount = transfer->transfer->VectorCount();
 
 				transfer->transfer->PrepareKernelAccess();
 				_ReadIsochronousDescriptorChain(
 					(ohci_isochronous_td*)transfer->data_descriptor,
-					vector, vectorCount);
+					vector, vectorCount, transfer->transfer->IsPhysical());
 			}
 		}
 
@@ -1367,10 +1487,10 @@ OHCI::_SubmitRequest(Transfer *transfer)
 		| OHCI_TD_TOGGLE_1
 		| OHCI_TD_SET_DELAY_INTERRUPT(OHCI_TD_INTERRUPT_IMMEDIATE);
 
-	iovec vector;
-	vector.iov_base = requestData;
-	vector.iov_len = sizeof(usb_request_data);
-	_WriteDescriptorChain(setupDescriptor, &vector, 1);
+	generic_io_vec vector;
+	vector.base = (generic_addr_t)requestData;
+	vector.length = sizeof(usb_request_data);
+	_WriteDescriptorChain(setupDescriptor, &vector, 1, false);
 
 	status_t result;
 	ohci_general_td *dataDescriptor = NULL;
@@ -1378,7 +1498,7 @@ OHCI::_SubmitRequest(Transfer *transfer)
 		ohci_general_td *lastDescriptor = NULL;
 		result = _CreateDescriptorChain(&dataDescriptor, &lastDescriptor,
 			directionIn ? OHCI_TD_DIRECTION_PID_IN : OHCI_TD_DIRECTION_PID_OUT,
-			transfer->VectorLength());
+			transfer->FragmentLength());
 		if (result < B_OK) {
 			_FreeGeneralDescriptor(setupDescriptor);
 			_FreeGeneralDescriptor(statusDescriptor);
@@ -1387,7 +1507,7 @@ OHCI::_SubmitRequest(Transfer *transfer)
 
 		if (!directionIn) {
 			_WriteDescriptorChain(dataDescriptor, transfer->Vector(),
-				transfer->VectorCount());
+				transfer->VectorCount(), transfer->IsPhysical());
 		}
 
 		_LinkDescriptors(setupDescriptor, dataDescriptor);
@@ -1430,7 +1550,7 @@ OHCI::_SubmitTransfer(Transfer *transfer)
 	ohci_general_td *lastDescriptor = NULL;
 	status_t result = _CreateDescriptorChain(&firstDescriptor, &lastDescriptor,
 		directionIn ? OHCI_TD_DIRECTION_PID_IN : OHCI_TD_DIRECTION_PID_OUT,
-		transfer->VectorLength());
+		transfer->FragmentLength());
 
 	if (result < B_OK)
 		return result;
@@ -1447,7 +1567,7 @@ OHCI::_SubmitTransfer(Transfer *transfer)
 
 	if (!directionIn) {
 		_WriteDescriptorChain(firstDescriptor, transfer->Vector(),
-			transfer->VectorCount());
+			transfer->VectorCount(), transfer->IsPhysical());
 	}
 
 	// Add to the transfer list
@@ -1455,6 +1575,19 @@ OHCI::_SubmitTransfer(Transfer *transfer)
 		= (ohci_endpoint_descriptor *)pipe->ControllerCookie();
 
 	MutexLocker endpointLocker(endpoint->lock);
+
+	// We do not support queuing other transfers in tandem with a fragmented one.
+	transfer_data *it = fFirstTransfer;
+	while (it) {
+		if (it->transfer && it->transfer->TransferPipe() == pipe && it->transfer->IsFragmented()) {
+			TRACE_ERROR("cannot submit transfer: a fragmented transfer is queued\n");
+			_FreeDescriptorChain(firstDescriptor);
+			return B_DEV_RESOURCE_CONFLICT;
+		}
+
+		it = it->link;
+	}
+
 	result = _AddPendingTransfer(transfer, endpoint, firstDescriptor,
 		firstDescriptor, lastDescriptor, directionIn);
 	if (result < B_OK) {
@@ -1482,7 +1615,6 @@ OHCI::_SubmitIsochronousTransfer(Transfer *transfer)
 {
 	Pipe *pipe = transfer->TransferPipe();
 	bool directionIn = (pipe->Direction() == Pipe::In);
-	usb_isochronous_data *isochronousData = transfer->IsochronousData();
 
 	ohci_isochronous_td *firstDescriptor = NULL;
 	ohci_isochronous_td *lastDescriptor = NULL;
@@ -1503,13 +1635,7 @@ OHCI::_SubmitIsochronousTransfer(Transfer *transfer)
 	// If direction is out set every descriptor data
 	if (pipe->Direction() == Pipe::Out)
 		_WriteIsochronousDescriptorChain(firstDescriptor,
-			transfer->Vector(), transfer->VectorCount());
-	else
-		// Initialize the packet descriptors
-		for (uint32 i = 0; i < isochronousData->packet_count; i++) {
-			isochronousData->packet_descriptors[i].actual_length = 0;
-			isochronousData->packet_descriptors[i].status = B_NO_INIT;
-		}
+			transfer->Vector(), transfer->VectorCount(), transfer->IsPhysical());
 
 	// Add to the transfer list
 	ohci_endpoint_descriptor *endpoint
@@ -2026,7 +2152,7 @@ OHCI::_CreateIsochronousDescriptorChain(ohci_isochronous_td **_firstDescriptor,
 	Pipe *pipe = transfer->TransferPipe();
 	usb_isochronous_data *isochronousData = transfer->IsochronousData();
 
-	size_t dataLength = transfer->VectorLength();
+	size_t dataLength = transfer->FragmentLength();
 	size_t packet_count = isochronousData->packet_count;
 
 	if (packet_count == 0) {
@@ -2150,8 +2276,8 @@ OHCI::_FreeIsochronousDescriptorChain(ohci_isochronous_td *topDescriptor)
 
 
 size_t
-OHCI::_WriteDescriptorChain(ohci_general_td *topDescriptor, iovec *vector,
-	size_t vectorCount)
+OHCI::_WriteDescriptorChain(ohci_general_td *topDescriptor, generic_io_vec *vector,
+	size_t vectorCount, bool physical)
 {
 	ohci_general_td *current = topDescriptor;
 	size_t actualLength = 0;
@@ -2165,19 +2291,21 @@ OHCI::_WriteDescriptorChain(ohci_general_td *topDescriptor, iovec *vector,
 
 		while (true) {
 			size_t length = min_c(current->buffer_size - bufferOffset,
-				vector[vectorIndex].iov_len - vectorOffset);
+				vector[vectorIndex].length - vectorOffset);
 
 			TRACE("copying %ld bytes to bufferOffset %ld from"
 				" vectorOffset %ld at index %ld of %ld\n", length, bufferOffset,
 				vectorOffset, vectorIndex, vectorCount);
-			memcpy((uint8 *)current->buffer_logical + bufferOffset,
-				(uint8 *)vector[vectorIndex].iov_base + vectorOffset, length);
+			status_t status = generic_memcpy(
+				(generic_addr_t)current->buffer_logical + bufferOffset, false,
+				vector[vectorIndex].base + vectorOffset, physical, length);
+			ASSERT_ALWAYS(status == B_OK);
 
 			actualLength += length;
 			vectorOffset += length;
 			bufferOffset += length;
 
-			if (vectorOffset >= vector[vectorIndex].iov_len) {
+			if (vectorOffset >= vector[vectorIndex].length) {
 				if (++vectorIndex >= vectorCount) {
 					TRACE("wrote descriptor chain (%ld bytes, no"
 						" more vectors)\n", actualLength);
@@ -2206,7 +2334,7 @@ OHCI::_WriteDescriptorChain(ohci_general_td *topDescriptor, iovec *vector,
 
 size_t
 OHCI::_WriteIsochronousDescriptorChain(ohci_isochronous_td *topDescriptor,
-	iovec *vector, size_t vectorCount)
+	generic_io_vec *vector, size_t vectorCount, bool physical)
 {
 	ohci_isochronous_td *current = topDescriptor;
 	size_t actualLength = 0;
@@ -2220,19 +2348,21 @@ OHCI::_WriteIsochronousDescriptorChain(ohci_isochronous_td *topDescriptor,
 
 		while (true) {
 			size_t length = min_c(current->buffer_size - bufferOffset,
-				vector[vectorIndex].iov_len - vectorOffset);
+				vector[vectorIndex].length - vectorOffset);
 
 			TRACE("copying %ld bytes to bufferOffset %ld from"
 				" vectorOffset %ld at index %ld of %ld\n", length, bufferOffset,
 				vectorOffset, vectorIndex, vectorCount);
-			memcpy((uint8 *)current->buffer_logical + bufferOffset,
-				(uint8 *)vector[vectorIndex].iov_base + vectorOffset, length);
+			status_t status = generic_memcpy(
+				(generic_addr_t)current->buffer_logical + bufferOffset, false,
+				vector[vectorIndex].base + vectorOffset, physical, length);
+			ASSERT_ALWAYS(status == B_OK);
 
 			actualLength += length;
 			vectorOffset += length;
 			bufferOffset += length;
 
-			if (vectorOffset >= vector[vectorIndex].iov_len) {
+			if (vectorOffset >= vector[vectorIndex].length) {
 				if (++vectorIndex >= vectorCount) {
 					TRACE("wrote descriptor chain (%ld bytes, no"
 						" more vectors)\n", actualLength);
@@ -2260,8 +2390,8 @@ OHCI::_WriteIsochronousDescriptorChain(ohci_isochronous_td *topDescriptor,
 
 
 size_t
-OHCI::_ReadDescriptorChain(ohci_general_td *topDescriptor, iovec *vector,
-	size_t vectorCount)
+OHCI::_ReadDescriptorChain(ohci_general_td *topDescriptor, generic_io_vec *vector,
+	size_t vectorCount, bool physical)
 {
 	ohci_general_td *current = topDescriptor;
 	size_t actualLength = 0;
@@ -2282,19 +2412,21 @@ OHCI::_ReadDescriptorChain(ohci_general_td *topDescriptor, iovec *vector,
 
 		while (true) {
 			size_t length = min_c(bufferSize - bufferOffset,
-				vector[vectorIndex].iov_len - vectorOffset);
+				vector[vectorIndex].length - vectorOffset);
 
 			TRACE("copying %ld bytes to vectorOffset %ld from"
 				" bufferOffset %ld at index %ld of %ld\n", length, vectorOffset,
 				bufferOffset, vectorIndex, vectorCount);
-			memcpy((uint8 *)vector[vectorIndex].iov_base + vectorOffset,
-				(uint8 *)current->buffer_logical + bufferOffset, length);
+			status_t status = generic_memcpy(
+				vector[vectorIndex].base + vectorOffset, physical,
+				(generic_addr_t)current->buffer_logical + bufferOffset, false, length);
+			ASSERT_ALWAYS(status == B_OK);
 
 			actualLength += length;
 			vectorOffset += length;
 			bufferOffset += length;
 
-			if (vectorOffset >= vector[vectorIndex].iov_len) {
+			if (vectorOffset >= vector[vectorIndex].length) {
 				if (++vectorIndex >= vectorCount) {
 					TRACE("read descriptor chain (%ld bytes, no more vectors)\n",
 						actualLength);
@@ -2320,7 +2452,7 @@ OHCI::_ReadDescriptorChain(ohci_general_td *topDescriptor, iovec *vector,
 
 void
 OHCI::_ReadIsochronousDescriptorChain(ohci_isochronous_td *topDescriptor,
-	iovec *vector, size_t vectorCount)
+	generic_io_vec *vector, size_t vectorCount, bool physical)
 {
 	ohci_isochronous_td *current = topDescriptor;
 	size_t actualLength = 0;
@@ -2334,19 +2466,21 @@ OHCI::_ReadIsochronousDescriptorChain(ohci_isochronous_td *topDescriptor,
 		if (current->buffer_logical != NULL && bufferSize > 0) {
 			while (true) {
 				size_t length = min_c(bufferSize - bufferOffset,
-					vector[vectorIndex].iov_len - vectorOffset);
+					vector[vectorIndex].length - vectorOffset);
 
 				TRACE("copying %ld bytes to vectorOffset %ld from bufferOffset"
 					" %ld at index %ld of %ld\n", length, vectorOffset,
 					bufferOffset, vectorIndex, vectorCount);
-				memcpy((uint8 *)vector[vectorIndex].iov_base + vectorOffset,
-					(uint8 *)current->buffer_logical + bufferOffset, length);
+				status_t status = generic_memcpy(
+					vector[vectorIndex].base + vectorOffset, physical,
+					(generic_addr_t)current->buffer_logical + bufferOffset, false, length);
+				ASSERT_ALWAYS(status == B_OK);
 
 				actualLength += length;
 				vectorOffset += length;
 				bufferOffset += length;
 
-				if (vectorOffset >= vector[vectorIndex].iov_len) {
+				if (vectorOffset >= vector[vectorIndex].length) {
 					if (++vectorIndex >= vectorCount) {
 						TRACE("read descriptor chain (%ld bytes, "
 							"no more vectors)\n", actualLength);
@@ -2465,10 +2599,10 @@ OHCI::_GetStatusOfConditionCode(uint8 conditionCode)
 			return B_DEV_DATA_UNDERRUN;
 
 		case OHCI_TD_CONDITION_BUFFER_OVERRUN:
-			return B_DEV_FIFO_OVERRUN;
+			return B_DEV_WRITE_ERROR;
 
 		case OHCI_TD_CONDITION_BUFFER_UNDERRUN:
-			return B_DEV_FIFO_UNDERRUN;
+			return B_DEV_READ_ERROR;
 
 		case OHCI_TD_CONDITION_NOT_ACCESSED:
 			return B_DEV_PENDING;

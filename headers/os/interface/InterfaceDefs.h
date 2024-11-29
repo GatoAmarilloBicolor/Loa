@@ -8,6 +8,7 @@
 
 #include <GraphicsDefs.h>
 #include <OS.h>
+#include <String.h>
 
 
 class BBitmap;
@@ -62,11 +63,10 @@ enum {
 
 	B_FUNCTION_KEY		= 0x10,
 
-	// for Japanese and Korean keyboards
+	// For Japanese keyboards, two modifier keys are mapped to invalid UTF-8, with just a single
+	// byte having the 8th bit set.
 	B_KATAKANA_HIRAGANA	= 0xf2,
 	B_HANKAKU_ZENKAKU	= 0xf3,
-	B_HANGUL			= 0xf0,
-	B_HANGUL_HANJA		= 0xf1
 };
 
 enum {
@@ -84,7 +84,14 @@ enum {
 	B_F12_KEY			= 0x0d,
 	B_PRINT_KEY			= 0x0e,
 	B_SCROLL_KEY		= 0x0f,
-	B_PAUSE_KEY			= 0x10
+	B_PAUSE_KEY			= 0x10,
+	B_NUM_LOCK_KEY		= 0x22,
+	B_CAPS_LOCK_KEY		= 0x3b,
+	B_SPACE_BAR_KEY		= 0x5e,
+	B_NUMPAD_EQUAL_KEY	= 0x6a,
+	// For Korean keyboards
+	B_HANGUL_KEY		= 0xf0,
+	B_HANGUL_HANJA_KEY	= 0xf1
 };
 
 struct key_map {
@@ -228,18 +235,22 @@ enum vertical_alignment {
 // Layout spacing and insets, see BControlLook::ComposeSpacing()
 
 
-enum {
+enum BSpacing {
 	B_USE_DEFAULT_SPACING = -1002,
 	B_USE_ITEM_SPACING = -1003,
-	B_USE_ITEM_INSETS = -1003,
+	B_USE_ITEM_INSETS = B_USE_ITEM_SPACING,
 	B_USE_HALF_ITEM_SPACING = -1004,
-	B_USE_HALF_ITEM_INSETS = -1004,
-	B_USE_WINDOW_INSETS = -1005,
+	B_USE_HALF_ITEM_INSETS = B_USE_HALF_ITEM_SPACING,
 	B_USE_WINDOW_SPACING = -1005,
-	B_USE_SMALL_INSETS = -1006,
+	B_USE_WINDOW_INSETS = B_USE_WINDOW_SPACING,
 	B_USE_SMALL_SPACING = -1006,
-	B_USE_BIG_INSETS = -1007,
-	B_USE_BIG_SPACING = -1007
+	B_USE_SMALL_INSETS = B_USE_SMALL_SPACING,
+	B_USE_CORNER_SPACING = -1007,
+	B_USE_CORNER_INSETS = B_USE_CORNER_SPACING,
+	B_USE_BIG_SPACING = -1008,
+	B_USE_BIG_INSETS = B_USE_BIG_SPACING,
+	B_USE_BORDER_SPACING = -1009,
+	B_USE_BORDER_INSETS = B_USE_BORDER_SPACING,
 };
 
 
@@ -417,16 +428,23 @@ status_t		set_screen_space(int32 index, uint32 resolution,
 status_t		get_scroll_bar_info(scroll_bar_info* info);
 status_t		set_scroll_bar_info(scroll_bar_info* info);
 
-status_t		get_mouse_type(int32* type);
-status_t		set_mouse_type(int32 type);
-status_t		get_mouse_map(mouse_map* map);
-status_t		set_mouse_map(mouse_map* map);
-status_t		get_click_speed(bigtime_t* speed);
-status_t		set_click_speed(bigtime_t speed);
-status_t		get_mouse_speed(int32* speed);
-status_t		set_mouse_speed(int32 speed);
-status_t		get_mouse_acceleration(int32* speed);
-status_t		set_mouse_acceleration(int32 speed);
+status_t		get_mouse_type(int32* type); // deprecated
+status_t		get_mouse_type(const char* mouse_name, int32* type);
+status_t		set_mouse_type(const char* mouse_name, int32 type);
+status_t		get_mouse_map(mouse_map* map); // deprecated
+status_t		get_mouse_map(const char* mouse_name, mouse_map* map);
+status_t		set_mouse_map(mouse_map* map); // deprecated
+status_t		set_mouse_map(const char* mouse_name, mouse_map* map);
+status_t		get_click_speed(bigtime_t* speed); // deprecated
+status_t		get_click_speed(const char* mouse_name, bigtime_t* speed);
+status_t		set_click_speed(bigtime_t speed); // deprecated
+status_t		set_click_speed(const char* mouse_name, bigtime_t speed);
+status_t		get_mouse_speed(int32* speed); // deprecated
+status_t		get_mouse_speed(const char* mouse_name, int32* speed);
+status_t		set_mouse_speed(const char* mouse_name, int32 speed);
+status_t		get_mouse_acceleration(int32* speed); // deprecated
+status_t		get_mouse_acceleration(const char* mouse_name, int32* speed);
+status_t		set_mouse_acceleration(const char* mouse_name, int32 speed);
 
 status_t		get_key_repeat_rate(int32* rate);
 status_t		set_key_repeat_rate(int32 rate);

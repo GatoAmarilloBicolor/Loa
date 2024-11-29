@@ -18,23 +18,27 @@ static bigtime_t sMaximumQuantumLengths[kMaximumQuantumLengthsCount];
 void
 ThreadData::_InitBase()
 {
-	fPriorityPenalty = 0;
-	fAdditionalPenalty = 0;
-	fEffectivePriority = GetPriority();
-	fBaseQuantum = sQuantumLengths[GetEffectivePriority()];
-
-	fTimeUsed = 0;
 	fStolenTime = 0;
-
-	fMeasureAvailableActiveTime = 0;
-	fLastMeasureAvailableTime = 0;
-	fMeasureAvailableTime = 0;
+	fQuantumStart = 0;
+	fLastInterruptTime = 0;
 
 	fWentSleep = 0;
 	fWentSleepActive = 0;
 
 	fEnqueued = false;
 	fReady = false;
+
+	fPriorityPenalty = 0;
+	fAdditionalPenalty = 0;
+
+	fEffectivePriority = GetPriority();
+	fBaseQuantum = sQuantumLengths[GetEffectivePriority()];
+
+	fTimeUsed = 0;
+
+	fMeasureAvailableActiveTime = 0;
+	fLastMeasureAvailableTime = 0;
+	fMeasureAvailableTime = 0;
 }
 
 
@@ -55,10 +59,15 @@ ThreadData::_ChooseCPU(CoreEntry* core, bool& rescheduleNeeded) const
 
 	int32 threadPriority = GetEffectivePriority();
 
-	if (fThread->previous_cpu != NULL) {
+	CPUSet mask = GetCPUMask();
+	const bool useMask = !mask.IsEmpty();
+	ASSERT(!useMask || mask.Matches(core->CPUMask()));
+
+	if (fThread->previous_cpu != NULL && !fThread->previous_cpu->disabled
+			&& (!useMask || mask.GetBit(fThread->previous_cpu->cpu_num))) {
 		CPUEntry* previousCPU
 			= CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
-		if (previousCPU->Core() == core && !fThread->previous_cpu->disabled) {
+		if (previousCPU->Core() == core) {
 			CoreCPUHeapLocker _(core);
 			if (CPUPriorityHeap::GetKey(previousCPU) < threadPriority) {
 				previousCPU->UpdatePriority(threadPriority);
@@ -69,7 +78,11 @@ ThreadData::_ChooseCPU(CoreEntry* core, bool& rescheduleNeeded) const
 	}
 
 	CoreCPUHeapLocker _(core);
-	CPUEntry* cpu = core->CPUHeap()->PeekRoot();
+	int32 index = 0;
+	CPUEntry* cpu;
+	do {
+		cpu = core->CPUHeap()->PeekRoot(index++);
+	} while (useMask && cpu != NULL && !mask.GetBit(cpu->ID()));
 	ASSERT(cpu != NULL);
 
 	if (CPUPriorityHeap::GetKey(cpu) < threadPriority) {
@@ -152,12 +165,21 @@ ThreadData::ChooseCoreAndCPU(CoreEntry*& targetCore, CPUEntry*& targetCPU)
 
 	bool rescheduleNeeded = false;
 
+	CPUSet mask = GetCPUMask();
+	const bool useMask = !mask.IsEmpty();
+
+	if (targetCore != NULL && (useMask && !targetCore->CPUMask().Matches(mask)))
+		targetCore = NULL;
+	if (targetCPU != NULL && (useMask && !mask.GetBit(targetCPU->ID())))
+		targetCPU = NULL;
+
 	if (targetCore == NULL && targetCPU != NULL)
 		targetCore = targetCPU->Core();
 	else if (targetCore != NULL && targetCPU == NULL)
 		targetCPU = _ChooseCPU(targetCore, rescheduleNeeded);
 	else if (targetCore == NULL && targetCPU == NULL) {
 		targetCore = _ChooseCore();
+		ASSERT(!useMask || mask.Matches(targetCore->CPUMask()));
 		targetCPU = _ChooseCPU(targetCore, rescheduleNeeded);
 	}
 

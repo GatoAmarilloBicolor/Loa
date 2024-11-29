@@ -76,8 +76,8 @@ iterative_io_finished_hook(void *cookie, io_request *request, status_t status,
 static float
 udf_identify_partition(int fd, partition_data *partition, void **_cookie)
 {
-	TRACE(("udf_identify_partition: fd = %d, id = %ld, offset = %Ld, size = %Ld "
-		"content_size = %Ld, block_size = %lu\n", fd, partition->id,
+	TRACE(("udf_identify_partition: fd = %d, id = %ld, offset = %lld, size = %lld "
+		"content_size = %lld, block_size = %lu\n", fd, partition->id,
 		partition->offset, partition->size, partition->content_size,
 		partition->block_size));
 
@@ -180,7 +180,7 @@ udf_get_vnode(fs_volume *_volume, ino_t id, fs_vnode *node, int *_type,
 
 	// Convert the given vnode id to an address, and create
 	// and return a corresponding Icb object for it.
-	TRACE(("udf_get_vnode: id = %Ld, blockSize = %lu\n", id,
+	TRACE(("udf_get_vnode: id = %lld, blockSize = %lu\n", id,
 		volume->BlockSize()));
 
 	Icb *icb = new(std::nothrow) Icb(volume,
@@ -233,7 +233,7 @@ udf_lookup(fs_volume *_volume, fs_vnode *_directory, const char *file,
 		if (status != B_OK)
 			return B_ENTRY_NOT_FOUND;
 	}
-	TRACE(("udf_lookup: vnodeId = %Ld found!\n", *vnodeID));
+	TRACE(("udf_lookup: vnodeId = %lld found!\n", *vnodeID));
 
 	return B_OK;
 }
@@ -282,7 +282,7 @@ udf_read_stat(fs_volume *_volume, fs_vnode *node, struct stat *stat)
 	stat->st_nlink = icb->FileLinkCount();
 	stat->st_blksize = volume->BlockSize();
 
-	TRACE(("udf_read_stat: st_dev = %ld, st_ino = %Ld, st_blksize = %d\n",
+	TRACE(("udf_read_stat: st_dev = %ld, st_ino = %lld, st_blksize = %d\n",
 		stat->st_dev, stat->st_ino, stat->st_blksize));
 
 	stat->st_uid = icb->Uid();
@@ -302,7 +302,7 @@ udf_read_stat(fs_volume *_volume, fs_vnode *node, struct stat *stat)
 	//icb->GetChangeTime(stat->st_ctim);
 	//icb->GetCreationTime(stat->st_crtim);
 
-	TRACE(("udf_read_stat: mode = 0x%x, st_ino: %Ld\n", stat->st_mode,
+	TRACE(("udf_read_stat: mode = 0x%x, st_ino: %lld\n", stat->st_mode,
 		stat->st_ino));
 
 	return B_OK;
@@ -345,11 +345,13 @@ static status_t
 udf_read(fs_volume *volume, fs_vnode *vnode, void *cookie, off_t pos,
 	void *buffer, size_t *length)
 {
-	TRACE(("udf_read: ID = %ld, pos = %lld, length = %lu\n",
+	TRACE(("udf_read: ID = %" B_PRIdDEV ", pos = %" B_PRIdOFF ", "
+			"length = %lu\n",
 		((Volume *)volume->private_volume)->ID(), pos, *length));
 
 	Icb *icb = (Icb *)vnode->private_node;
-	DEBUG_INIT_ETC("udf_read", ("ID = %ld, pos = %lld, length = %lu",
+	DEBUG_INIT_ETC("udf_read", ("ID = %" B_PRIdDEV ", pos = %" B_PRIdOFF ", "
+			"length = %lu",
 		((Volume *)volume->private_volume)->ID(), pos, *length));
 
 //	if (!inode->HasUserAccessableStream()) {
@@ -393,7 +395,7 @@ static status_t
 udf_open_dir(fs_volume *volume, fs_vnode *vnode, void **cookie)
 {
 	TRACE(("udf_open_dir: volume = %p, vnode = %p\n", volume, vnode));
-	DEBUG_INIT_ETC("udf_open_dir", ("ID = %ld",
+	DEBUG_INIT_ETC("udf_open_dir", ("ID = %" B_PRIdDEV,
 		((Volume *)volume->private_volume)->ID()));
 
 	if (!volume || !vnode || !cookie)
@@ -453,7 +455,7 @@ udf_read_dir(fs_volume *_volume, fs_vnode *vnode, void *cookie,
 	Icb *dir = (Icb *)vnode->private_node;
 	DirectoryIterator *iterator = (DirectoryIterator *)cookie;
 
-	DEBUG_INIT_ETC("udf_read_dir", ("ID = %ld", volume->ID()));
+	DEBUG_INIT_ETC("udf_read_dir", ("ID = %" B_PRIdDEV , volume->ID()));
 
 	if (dir != iterator->Parent()) {
 		TRACE_ERROR(("udf_read_dir: Icb does not match parent Icb of given "
@@ -461,7 +463,7 @@ udf_read_dir(fs_volume *_volume, fs_vnode *vnode, void *cookie,
 		return B_BAD_VALUE;
 	}
 
-	uint32 nameLength = bufferSize - sizeof(struct dirent) + 1;
+	uint32 nameLength = bufferSize - offsetof(struct dirent, d_name);
 	ino_t id;
 	status_t status = iterator->GetNextEntry(dirent->d_name, &nameLength, &id);
 	if (!status) {
@@ -469,7 +471,7 @@ udf_read_dir(fs_volume *_volume, fs_vnode *vnode, void *cookie,
 		*_num = 1;
 		dirent->d_dev = volume->ID();
 		dirent->d_ino = id;
-		dirent->d_reclen = sizeof(struct dirent) + nameLength - 1;
+		dirent->d_reclen = offsetof(struct dirent, d_name) + nameLength + 1;
 	} else {
 		*_num = 0;
 		// Clear the status for end of directory
@@ -486,7 +488,7 @@ udf_rewind_dir(fs_volume *volume, fs_vnode *vnode, void *cookie)
 {
 	TRACE(("udf_rewind_dir: volume = %p, vnode = %p, cookie = %p\n",
 		volume, vnode, cookie));
-	DEBUG_INIT_ETC("udf_rewind_dir", ("ID = %ld",
+	DEBUG_INIT_ETC("udf_rewind_dir", ("ID = %" B_PRIdDEV,
 		((Volume *)volume->private_volume)->ID()));
 
 	if (!volume || !vnode || !cookie)
@@ -518,7 +520,7 @@ udf_rewind_dir(fs_volume *volume, fs_vnode *vnode, void *cookie)
 	      - A way to get the proper info (best)
 	      - To ignore trying to find anchor volume descriptor pointers at
 	        locations N-256 and N. (acceptable, perhaps, but not really correct)
-	      Either way we should address this problem properly for OBOS::R1.
+	      Either way we should address this problem properly for Haiku::R1.
 	\todo Looks like B_GET_GEOMETRY doesn't work on non-device files (i.e.
 	      disk images), so I need to use stat or something else for those
 	      instances.
@@ -560,10 +562,10 @@ udf_mount(fs_volume *_volume, const char *_device, uint32 flags,
 		//
 		// If that fails, you're just SOL.
 
-		if (ioctl(device, B_GET_PARTITION_INFO, &info) == 0) {
+		if (ioctl(device, B_GET_PARTITION_INFO, &info, sizeof(partition_info)) == 0) {
 			TRACE(("partition_info:\n"));
-			TRACE(("\toffset:             %Ld\n", info.offset));
-			TRACE(("\tsize:               %Ld\n", info.size));
+			TRACE(("\toffset:             %lld\n", info.offset));
+			TRACE(("\tsize:               %lld\n", info.size));
 			TRACE(("\tlogical_block_size: %ld\n", info.logical_block_size));
 			TRACE(("\tsession:            %ld\n", info.session));
 			TRACE(("\tpartition:          %ld\n", info.partition));
@@ -571,7 +573,7 @@ udf_mount(fs_volume *_volume, const char *_device, uint32 flags,
 			_device = info.device;
 			deviceOffset = info.offset / info.logical_block_size;
 			numBlock = deviceOffset + info.size / info.logical_block_size;
-		} else if (ioctl(device, B_GET_GEOMETRY, &geometry) == 0) {
+		} else if (ioctl(device, B_GET_GEOMETRY, &geometry, sizeof(device_geometry)) == 0) {
 			TRACE(("geometry_info:\n"));
 			TRACE(("\tsectors_per_track: %ld\n", geometry.sectors_per_track));
 			TRACE(("\tcylinder_count:    %ld\n", geometry.cylinder_count));
@@ -584,7 +586,7 @@ udf_mount(fs_volume *_volume, const char *_device, uint32 flags,
 			status = fstat(device, &stat) < 0 ? B_ERROR : B_OK;
 			if (!status) {
 				TRACE(("stat_info:\n"));
-				TRACE(("\tst_size: %Ld\n", stat.st_size));
+				TRACE(("\tst_size: %lld\n", stat.st_size));
 				deviceOffset = 0;
 				numBlock = stat.st_size / 2048;
 			}

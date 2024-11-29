@@ -331,48 +331,48 @@ BDirectory::Contains(const BEntry* entry, int32 nodeFlags) const
 status_t
 BDirectory::GetNextEntry(BEntry* entry, bool traverse)
 {
-	status_t error = (entry ? B_OK : B_BAD_VALUE);
-	if (error == B_OK) {
-		entry_ref ref;
-		error = GetNextRef(&ref);
-		if (error == B_OK)
-			error = entry->SetTo(&ref, traverse);
+	if (entry == NULL)
+		return B_BAD_VALUE;
+
+	entry_ref ref;
+	status_t status = GetNextRef(&ref);
+	if (status != B_OK) {
+		entry->Unset();
+		return status;
 	}
-	return error;
+	return entry->SetTo(&ref, traverse);
 }
 
 
 status_t
 BDirectory::GetNextRef(entry_ref* ref)
 {
-	status_t error = (ref ? B_OK : B_BAD_VALUE);
-	if (error == B_OK && InitCheck() != B_OK)
-		error = B_FILE_ERROR;
-	if (error == B_OK) {
-		BPrivate::Storage::LongDirEntry entry;
-		bool next = true;
-		while (error == B_OK && next) {
-			if (GetNextDirents(&entry, sizeof(entry), 1) != 1) {
-				error = B_ENTRY_NOT_FOUND;
-			} else {
-				next = (!strcmp(entry.d_name, ".")
-					|| !strcmp(entry.d_name, ".."));
-			}
-		}
-		if (error == B_OK) {
-			ref->device = entry.d_pdev;
-			ref->directory = entry.d_pino;
-			error = ref->set_name(entry.d_name);
-		}
+	if (ref == NULL)
+		return B_BAD_VALUE;
+	if (InitCheck() != B_OK)
+		return B_FILE_ERROR;
+
+	BPrivate::Storage::LongDirEntry longEntry;
+	struct dirent* entry = longEntry.dirent();
+	bool next = true;
+	while (next) {
+		if (GetNextDirents(entry, sizeof(longEntry), 1) != 1)
+			return B_ENTRY_NOT_FOUND;
+
+		next = (!strcmp(entry->d_name, ".")
+			|| !strcmp(entry->d_name, ".."));
 	}
-	return error;
+
+	ref->device = entry->d_pdev;
+	ref->directory = entry->d_pino;
+	return ref->set_name(entry->d_name);
 }
 
 
 int32
 BDirectory::GetNextDirents(dirent* buf, size_t bufSize, int32 count)
 {
-	if (!buf)
+	if (buf == NULL)
 		return B_BAD_VALUE;
 	if (InitCheck() != B_OK)
 		return B_FILE_ERROR;
@@ -396,11 +396,12 @@ BDirectory::CountEntries()
 	if (error != B_OK)
 		return error;
 	int32 count = 0;
-	BPrivate::Storage::LongDirEntry entry;
+	BPrivate::Storage::LongDirEntry longEntry;
+	struct dirent* entry = longEntry.dirent();
 	while (error == B_OK) {
-		if (GetNextDirents(&entry, sizeof(entry), 1) != 1)
+		if (GetNextDirents(entry, sizeof(longEntry), 1) != 1)
 			break;
-		if (strcmp(entry.d_name, ".") != 0 && strcmp(entry.d_name, "..") != 0)
+		if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0)
 			count++;
 	}
 	Rewind();

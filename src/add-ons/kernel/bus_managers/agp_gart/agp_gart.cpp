@@ -417,6 +417,7 @@ get_aperture(aperture_id id)
 Aperture::Aperture(agp_gart_bus_module_info *module, void *aperture)
 	:
 	fModule(module),
+	fInfo(),
 	fHashTable(fInfo),
 	fFirstMemory(NULL),
 	fPrivateAperture(aperture)
@@ -589,7 +590,7 @@ Aperture::AllocateMemory(aperture_memory *memory, uint32 flags)
 	void *address;
 	memory->area = create_area("GART memory", &address, B_ANY_KERNEL_ADDRESS,
 		size, B_FULL_LOCK | ((flags & B_APERTURE_NEED_PHYSICAL) != 0
-			? B_CONTIGUOUS : 0), 0);
+			? B_CONTIGUOUS : 0), B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA);
 	if (memory->area < B_OK) {
 		ERROR("Aperture::AllocateMemory(): create_area() failed\n");
 		return B_NO_MEMORY;
@@ -1154,7 +1155,7 @@ bind_aperture(aperture_id id, area_id area, addr_t base, size_t size,
 
 	status_t status = aperture->BindMemory(memory, base, size);
 	if (status < B_OK) {
-		if (reservedBase < 0)
+		if (reservedBase != 0)
 			aperture->DeleteMemory(memory);
 
 		return status;

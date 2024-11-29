@@ -17,7 +17,7 @@
 #include <AutoDeleter.h>
 #include <disk_device_types.h>
 
-#include "efi_gpt.h"
+#include "gpt.h"
 
 #include "GPTPartitionHandle.h"
 #include "Utility.h"
@@ -139,6 +139,7 @@ GPTDiskAddOn::Initialize(BMutablePartition* partition, const char* name,
 	partition->SetContentParameters(NULL);
 	partition->SetContentSize(
 		round_down(partition->Size(), partition->BlockSize()));
+	partition->Changed(B_PARTITION_CHANGED_INITIALIZATION);
 
 	*_handle = handle;
 	return B_OK;

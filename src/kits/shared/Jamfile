@@ -1,14 +1,9 @@
 SubDir HAIKU_TOP src kits shared ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
 AddSubDirSupportedPlatforms libbe_test ;
 
 UseLibraryHeaders agg ;
 UsePrivateHeaders shared locale ;
-
-if [ Glob $(SUBDIR) : DefaultGeolocationServiceKey.h ] {
-	SubDirC++Flags [ FDefines HAVE_DEFAULT_GEOLOCATION_SERVICE_KEY ] ;
-}
 
 local architectureObject ;
 for architectureObject in [ MultiArchSubDirSetup ] {
@@ -26,16 +21,23 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 		UsePrivateSystemHeaders ;
 		UsePrivateHeaders kernel libroot ;
 
+		# for BKeymap
+		UsePrivateHeaders interface ;
+
 		StaticLibrary <$(architecture)>libshared.a :
 			AboutMenuItem.cpp
 			ArgumentVector.cpp
 			AttributeUtilities.cpp
+			BarberPole.cpp
+			BitmapButton.cpp
 			CalendarView.cpp
+			ColorItem.cpp
 			ColorQuantizer.cpp
 			CommandPipe.cpp
+			DateTimeEdit.cpp
 			DragTrackingFilter.cpp
 			DriverSettingsMessageAdapter.cpp
-			Geolocation.cpp
+			HSL.cpp
 			HashString.cpp
 			IconButton.cpp
 			IconView.cpp
@@ -47,6 +49,8 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			Json.cpp
 			Keymap.cpp
 			LongAndDragTrackingFilter.cpp
+			md5.cpp
+			MemoryRingIO.cpp
 			MessageBuilder.cpp
 			NaturalCompare.cpp
 			PromptWindow.cpp
@@ -54,13 +58,18 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			RegExp.cpp
 			RWLocker.cpp
 			RWLockManager.cpp
+			SettingsHandler.cpp
+			SettingsMessage.cpp
 			ShakeTrackingFilter.cpp
+			StatusView.cpp
 			StringForRate.cpp
 			StringForSize.cpp
+			StripeView.cpp
 			TextTable.cpp
 			Thread.cpp
 			ToolBar.cpp
 			Variant.cpp
+			WeakReferenceable.cpp
 			;
 
 		Includes [ FGristFiles Keymap.cpp ]

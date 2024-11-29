@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <new>
+#include <util/BitUtils.h>
 
 #define TRACE(a...) dprintf("ahci: " a)
 #define FLOW(a...)	dprintf("ahci: " a)
@@ -102,21 +103,21 @@ AHCIController::Init()
 	}
 
 	fIRQ = pciInfo.u.h0.interrupt_line;
-	if (gPCIx86Module != NULL && gPCIx86Module->get_msi_count(
-			pciInfo.bus, pciInfo.device, pciInfo.function) >= 1) {
-		uint8 vector;
-		if (gPCIx86Module->configure_msi(pciInfo.bus, pciInfo.device,
-				pciInfo.function, 1, &vector) == B_OK
-			&& gPCIx86Module->enable_msi(pciInfo.bus, pciInfo.device,
-				pciInfo.function) == B_OK) {
-			TRACE("using MSI vector %u\n", vector);
+	if (fIRQ == 0xff)
+		fIRQ = 0;
+
+	if (fPCI->get_msi_count(fPCIDevice) >= 1) {
+		uint32 vector;
+		if (fPCI->configure_msi(fPCIDevice, 1, &vector) == B_OK
+			&& fPCI->enable_msi(fPCIDevice) == B_OK) {
+			TRACE("using MSI vector %" B_PRIu32 "\n", vector);
 			fIRQ = vector;
 			fUseMSI = true;
 		} else {
 			TRACE("couldn't use MSI\n");
 		}
-	}	
-	if (fIRQ == 0 || fIRQ == 0xff) {
+	}
+	if (fIRQ == 0) {
 		TRACE("Error: PCI IRQ not assigned\n");
 		return B_ERROR;
 	}
@@ -131,7 +132,8 @@ AHCIController::Init()
 		return B_ERROR;
 	}
 
-	fRegsArea = map_mem((void **)&fRegs, addr, size, 0, "AHCI HBA regs");
+	fRegsArea = map_mem((void **)&fRegs, addr, size, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
+		"AHCI HBA regs");
 	if (fRegsArea < B_OK) {
 		TRACE("mapping registers failed\n");
 		return B_ERROR;
@@ -150,6 +152,7 @@ AHCIController::Init()
 	fPortCount = 1 + ((fRegs->cap >> CAP_NP_SHIFT) & CAP_NP_MASK);
 
 	fPortImplementedMask = fRegs->pi;
+
 	// reported mask of implemented ports is sometimes empty
 	if (fPortImplementedMask == 0) {
 		fPortImplementedMask = 0xffffffff >> (32 - fPortCount);
@@ -215,9 +218,9 @@ AHCIController::Init()
 	}
 	TRACE("ghc: AHCI Enable: %s\n",	(fRegs->ghc & GHC_AE) ? "yes" : "no");
 	TRACE("Ports Implemented Mask: %#08" B_PRIx32 " Number of Available Ports:"
-		" %d\n", fPortImplementedMask, count_bits_set(fPortImplementedMask));
+		" %d\n", fPortImplementedMask, count_set_bits(fPortImplementedMask));
 	TRACE("AHCI Version %02" B_PRIx32 "%02" B_PRIx32 ".%02" B_PRIx32 ".%02"
-		B_PRIx32 " Interrupt %u\n", fRegs->vs >> 24, (fRegs->vs >> 16) & 0xff,
+		B_PRIx32 " Interrupt %" B_PRIu32 "\n", fRegs->vs >> 24, (fRegs->vs >> 16) & 0xff,
 		(fRegs->vs >> 8) & 0xff, fRegs->vs & 0xff, fIRQ);
 
 	// setup interrupt handler
@@ -245,7 +248,7 @@ AHCIController::Init()
 	// clear any pending interrupts
 	uint32 interruptsPending;
 	interruptsPending = fRegs->is;
-	fRegs->is = interruptsPending; 
+	fRegs->is = interruptsPending;
 	FlushPostedWrites();
 
 	// enable interrupts
@@ -293,16 +296,12 @@ AHCIController::Uninit()
 	fRegs->is = 0xffffffff;
 	FlushPostedWrites();
 
-  	// well...
-  	remove_io_interrupt_handler(fIRQ, Interrupt, this);
+	// well...
+	remove_io_interrupt_handler(fIRQ, Interrupt, this);
 
-	if (fUseMSI && gPCIx86Module != NULL) {
-		pci_info pciInfo;
-		fPCI->get_pci_info(fPCIDevice, &pciInfo);
-		gPCIx86Module->disable_msi(pciInfo.bus,
-			pciInfo.device, pciInfo.function);
-		gPCIx86Module->unconfigure_msi(pciInfo.bus,
-			pciInfo.device, pciInfo.function);
+	if (fUseMSI) {
+		fPCI->disable_msi(fPCIDevice);
+		fPCI->unconfigure_msi(fPCIDevice);
 	}
 
 	delete_area(fRegsArea);
@@ -337,15 +336,21 @@ AHCIController::ResetController()
 	if (fPCIVendorID == PCI_VENDOR_INTEL) {
 		// Intel PCS—Port Control and Status
 		// SATA port enable bits must be set
-		int portCount = std::max(fls(fRegs->pi), 1 + (int)((fRegs->cap >> CAP_NP_SHIFT) & CAP_NP_MASK));
+		int portCount = std::max((int)fls(fRegs->pi),
+			1 + (int)((fRegs->cap >> CAP_NP_SHIFT) & CAP_NP_MASK));
 		if (portCount > 8) {
 			// TODO: fix this when specification available
 			TRACE("don't know how to enable SATA ports 9 to %d\n", portCount);
 			portCount = 8;
 		}
+		// If not all ports are enabled, try to enable them. If they are already enabled, don't
+		// rewrite the register.
+		uint16 mask = 0xff >> (8 - portCount);
 		uint16 pcs = fPCI->read_pci_config(fPCIDevice, 0x92, 2);
-		pcs |= (0xff >> (8 - portCount));
-		fPCI->write_pci_config(fPCIDevice, 0x92, 2, pcs);
+		if ((pcs & mask) != mask) {
+			pcs |= (0xff >> (8 - portCount));
+			fPCI->write_pci_config(fPCIDevice, 0x92, 2, pcs);
+		}
 	}
 	return B_OK;
 }

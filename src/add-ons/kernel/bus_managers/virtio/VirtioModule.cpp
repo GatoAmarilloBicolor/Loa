@@ -24,6 +24,7 @@ virtio_device_init(device_node *node, void **_device)
 	status_t result = device->InitCheck();
 	if (result != B_OK) {
 		ERROR("failed to set up virtio device object\n");
+		delete device;
 		return result;
 	}
 
@@ -53,13 +54,23 @@ virtio_device_removed(void *_device)
 
 
 status_t
-virtio_negotiate_features(void* _device, uint32 supported,
-		uint32* negotiated, const char* (*get_feature_name)(uint32))
+virtio_negotiate_features(void* _device, uint64 supported,
+		uint64* negotiated, const char* (*get_feature_name)(uint64))
 {
 	CALLED();
 	VirtioDevice *device = (VirtioDevice *)_device;
 
 	return device->NegotiateFeatures(supported, negotiated, get_feature_name);
+}
+
+
+status_t
+virtio_clear_feature(void* _device, uint64 feature)
+{
+	CALLED();
+	VirtioDevice *device = (VirtioDevice *)_device;
+
+	return device->ClearFeature(feature);
 }
 
 
@@ -86,11 +97,12 @@ virtio_write_device_config(void* _device, uint8 offset,
 
 
 status_t
-virtio_alloc_queues(virtio_device _device, size_t count, virtio_queue *queues)
+virtio_alloc_queues(virtio_device _device, size_t count, virtio_queue *queues,
+	uint16 *requestedSizes)
 {
 	CALLED();
 	VirtioDevice *device = (VirtioDevice *)_device;
-	return device->AllocateQueues(count, queues);
+	return device->AllocateQueues(count, queues, requestedSizes);
 }
 
 
@@ -184,11 +196,11 @@ virtio_queue_size(virtio_queue _queue)
 }
 
 
-void*
-virtio_queue_dequeue(virtio_queue _queue, uint16* _size)
+bool
+virtio_queue_dequeue(virtio_queue _queue, void** _cookie, uint32* _usedLength)
 {
 	VirtioQueue *queue = (VirtioQueue *)_queue;
-	return queue->Dequeue(_size);
+	return queue->Dequeue(_cookie, _usedLength);
 }
 
 
@@ -209,9 +221,9 @@ virtio_added_device(device_node *parent)
 
 	device_attr attributes[] = {
 		// info about device
-		{ B_DEVICE_BUS, B_STRING_TYPE, { string: "virtio" }},
+		{ B_DEVICE_BUS, B_STRING_TYPE, { .string = "virtio" }},
 		{ VIRTIO_DEVICE_TYPE_ITEM, B_UINT16_TYPE,
-			{ ui16: deviceType }},
+			{ .ui16 = deviceType }},
 		{ NULL }
 	};
 
@@ -275,6 +287,7 @@ virtio_device_interface virtio_device_module = {
 	},
 
 	virtio_negotiate_features,
+	virtio_clear_feature,
 	virtio_read_device_config,
 	virtio_write_device_config,
 	virtio_alloc_queues,

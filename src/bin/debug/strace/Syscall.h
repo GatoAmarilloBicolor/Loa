@@ -19,7 +19,7 @@ using std::vector;
 class Type {
 public:
 	Type(string typeName, TypeHandler *handler)
-		: fTypeName(typeName), fHandler(handler) {}
+		: fTypeName(typeName), fHandler(handler), fCount(1) {}
 
 	const string &TypeName() const	{ return fTypeName; }
 
@@ -31,9 +31,13 @@ public:
 
 	TypeHandler	*Handler() const	{ return fHandler; }
 
+	uint32 Count() const			{ return fCount; }
+	void SetCount(uint32 count)		{ fCount = count; }
+
 private:
 	string		fTypeName;
 	TypeHandler	*fHandler;
+	uint32		fCount;
 };
 
 // Parameter
@@ -42,16 +46,24 @@ public:
 	Parameter(string name, int32 offset, string typeName, TypeHandler *handler)
 		: Type(typeName, handler),
 		  fName(name),
-		  fOffset(offset)
+		  fOffset(offset),
+		  fInOut(false),
+		  fOut(false)
 	{
 	}
 
 	const string &Name() const		{ return fName; }
 	int32 Offset() const			{ return fOffset; }
+	bool InOut() const				{ return fInOut; }
+	void SetInOut(bool inout)		{ fInOut = inout; }
+	bool Out() const				{ return fOut; }
+	void SetOut(bool out)			{ fOut = out; }
 
 private:
 	string	fName;
 	int32	fOffset;
+	bool	fInOut;
+	bool	fOut;
 };
 
 // Syscall
@@ -59,7 +71,8 @@ class Syscall {
 public:
 	Syscall(string name, string returnTypeName, TypeHandler *returnTypeHandler)
 		: fName(name),
-		  fReturnType(new Type(returnTypeName, returnTypeHandler))
+		  fReturnType(new Type(returnTypeName, returnTypeHandler)),
+		  fTracingEnabled(false)
 	{
 	}
 
@@ -106,10 +119,21 @@ public:
 		return NULL;
 	}
 
+	bool TracingEnabled() const
+	{
+		return fTracingEnabled;
+	}
+
+	void EnableTracing(bool enable)
+	{
+		fTracingEnabled = enable;
+	}
+
 private:
 	string				fName;
 	Type				*fReturnType;
 	vector<Parameter*>	fParameters;
+	bool				fTracingEnabled;
 };
 
 #endif	// STRACE_SYSCALL_H

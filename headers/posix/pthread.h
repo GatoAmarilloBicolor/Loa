@@ -1,6 +1,6 @@
 /*
  * Copyright 2001-2011 Haiku, Inc. All Rights Reserved.
- * Distributed under the terms of the Haiku License.
+ * Distributed under the terms of the MIT License.
  */
 #ifndef _PTHREAD_H_
 #define _PTHREAD_H_
@@ -44,10 +44,12 @@
 
 #define PTHREAD_ONCE_INIT 			{ -1 }
 
-#define PTHREAD_BARRIER_SERIAL_THREAD -1
+#define PTHREAD_BARRIER_SERIAL_THREAD 1
+
 #define PTHREAD_PRIO_NONE			0
 #define PTHREAD_PRIO_INHERIT		1
 #define PTHREAD_PRIO_PROTECT		2
+
 
 /* private structure */
 struct __pthread_cleanup_handler {
@@ -92,8 +94,10 @@ extern int pthread_mutex_init(pthread_mutex_t *mutex,
 extern int pthread_mutex_lock(pthread_mutex_t *mutex);
 extern int pthread_mutex_setprioceiling(pthread_mutex_t *mutex,
 	int newPriorityCeiling, int *_oldPriorityCeiling);
+extern int pthread_mutex_clocklock(pthread_mutex_t *mutex,
+	clockid_t clock_id, const struct timespec *abstime);
 extern int pthread_mutex_timedlock(pthread_mutex_t *mutex,
-	const struct timespec *spec);
+	const struct timespec *abstime);
 extern int pthread_mutex_trylock(pthread_mutex_t *mutex);
 extern int pthread_mutex_unlock(pthread_mutex_t *mutex);
 
@@ -136,6 +140,8 @@ extern int pthread_cond_init(pthread_cond_t *cond,
 	const pthread_condattr_t *attr);
 extern int pthread_cond_broadcast(pthread_cond_t *cond);
 extern int pthread_cond_signal(pthread_cond_t *cond);
+extern int pthread_cond_clockwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
+	clockid_t clock_id, const struct timespec *abstime);
 extern int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
 	const struct timespec *abstime);
 extern int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex);
@@ -158,12 +164,16 @@ extern int pthread_rwlock_init(pthread_rwlock_t *lock,
 extern int pthread_rwlock_destroy(pthread_rwlock_t *lock);
 extern int pthread_rwlock_rdlock(pthread_rwlock_t *lock);
 extern int pthread_rwlock_tryrdlock(pthread_rwlock_t *lock);
+extern int pthread_rwlock_clockrdlock(pthread_rwlock_t* rwlock,
+	clockid_t clock_id, const struct timespec* abstime);
 extern int pthread_rwlock_timedrdlock(pthread_rwlock_t *lock,
-	const struct timespec *timeout);
+	const struct timespec *abstime);
 extern int pthread_rwlock_wrlock(pthread_rwlock_t *lock);
 extern int pthread_rwlock_trywrlock(pthread_rwlock_t *lock);
+extern int pthread_rwlock_clockwrlock(pthread_rwlock_t* rwlock,
+	clockid_t clock_id, const struct timespec* abstime);
 extern int pthread_rwlock_timedwrlock(pthread_rwlock_t *lock,
-	const struct timespec *timeout);
+	const struct timespec *abstime);
 extern int pthread_rwlock_unlock(pthread_rwlock_t *lock);
 
 /* rwlock attribute functions */
@@ -209,6 +219,11 @@ extern int pthread_attr_getguardsize(const pthread_attr_t *attr,
 	size_t *guardsize);
 extern int pthread_attr_setguardsize(pthread_attr_t *attr, size_t guardsize);
 
+extern int pthread_attr_getstack(const pthread_attr_t *attr,
+	void **stackaddr, size_t *stacksize);
+extern int pthread_attr_setstack(pthread_attr_t *attr, void *stackaddr,
+	size_t stacksize);
+
 #if 0   /* Unimplemented attribute functions: */
 
 /* [TPS] */
@@ -220,25 +235,14 @@ extern int pthread_attr_getschedpolicy(const pthread_attr_t *attr,
 	int *policy);
 extern int pthread_attr_setschedpolicy(pthread_attr_t *attr, int policy);
 
-/* [TSA] */
-extern int pthread_attr_getstackaddr(const pthread_attr_t *attr,
-	void **stackaddr);
-extern int pthread_attr_setstackaddr(pthread_attr_t *attr, void *stackaddr);
-
-/* [TSA TSS] */
-extern int pthread_attr_getstack(const pthread_attr_t *attr,
-	void **stackaddr, size_t *stacksize);
-extern int pthread_attr_setstack(pthread_attr_t *attr, void *stackaddr, size_t stacksize);
-
 #endif	/* 0 */
-
 
 /* thread functions */
 extern int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 	void *(*start_routine)(void*), void *arg);
 extern int pthread_detach(pthread_t thread);
 extern int pthread_equal(pthread_t t1, pthread_t t2);
-extern void pthread_exit(void *value_ptr);
+extern void pthread_exit(void *value_ptr) __attribute__ ((noreturn));
 extern int pthread_join(pthread_t thread, void **_value);
 extern pthread_t pthread_self(void);
 extern int pthread_getconcurrency(void);

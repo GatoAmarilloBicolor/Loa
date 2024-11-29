@@ -6,6 +6,7 @@
 #define TWO_KEY_AVL_TREE_H
 
 
+#include <slab/Slab.h>
 #include <util/AVLTreeMap.h>
 
 
@@ -137,12 +138,42 @@ public:
 // #pragma mark - TwoKeyAVLTreeNodeStrategy
 
 
+template<typename Value>
+struct TwoKeyAVLTreeNode : AVLTreeNode {
+	static object_cache* sNodeCache;
+
+	static void* operator new(size_t size)
+	{
+		object_cache* cache = TwoKeyAVLTreeNode<void*>::sNodeCache;
+		const size_t nodeSize = sizeof(TwoKeyAVLTreeNode<void*>);
+		if (size != nodeSize || cache == NULL)
+			panic("unexpected size passed to operator new!");
+		return object_cache_alloc(cache, 0);
+	}
+	static void operator delete(void* object)
+	{
+		object_cache_free(TwoKeyAVLTreeNode<void*>::sNodeCache, object, 0);
+	}
+
+public:
+	TwoKeyAVLTreeNode(const Value& value)
+		:
+		AVLTreeNode(),
+		value(value)
+	{
+	}
+
+	Value	value;
+};
+
+
 template <typename PrimaryKey, typename SecondaryKey, typename Value,
 	typename PrimaryKeyCompare, typename SecondaryKeyCompare,
 	typename GetPrimaryKey, typename GetSecondaryKey>
 class TwoKeyAVLTreeNodeStrategy {
 public:
 	typedef TwoKeyAVLTreeKey<PrimaryKey, SecondaryKey> Key;
+	typedef TwoKeyAVLTreeNode<Value> Node;
 
 	TwoKeyAVLTreeNodeStrategy(
 		const PrimaryKeyCompare& primaryKeyCompare = PrimaryKeyCompare(),
@@ -156,21 +187,13 @@ public:
 		fGetSecondaryKey(getSecondaryKey)
 	{
 	}
-
-	struct Node : AVLTreeNode {
-		Node(const Value& value)
-			:
-			AVLTreeNode(),
-			value(value)
-		{
-		}
-
-		Value	value;
-	};
+	~TwoKeyAVLTreeNodeStrategy()
+	{
+	}
 
 	inline Node* Allocate(const Key& key, const Value& value) const
 	{
-		return new(nothrow) Node(value);
+		return new Node(value);
 	}
 
 	inline void Free(Node* node) const

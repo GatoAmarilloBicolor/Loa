@@ -12,14 +12,20 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 
 #include <OS.h>
 
 #include <AutoDeleter.h>
+#include <AutoDeleterDrivers.h>
+#include <BytePointer.h>
+#include <StackOrHeapArray.h>
 
 #include <syscalls.h>
 #include <syscall_restart.h>
+#include <slab/Slab.h>
 #include <util/AutoLock.h>
+#include <util/iovec_support.h>
 #include <vfs.h>
 #include <wait_for_objects.h>
 
@@ -34,61 +40,16 @@
 #endif
 
 
-static const size_t kMaxReadDirBufferSize = 64 * 1024;
+static const size_t kMaxReadDirBufferSize = B_PAGE_SIZE * 2;
+
+extern object_cache* sFileDescriptorCache;
 
 
-static struct file_descriptor* get_fd_locked(struct io_context* context,
+static struct file_descriptor* get_fd_locked(const struct io_context* context,
 	int fd);
 static struct file_descriptor* remove_fd(struct io_context* context, int fd);
 static void deselect_select_infos(file_descriptor* descriptor,
 	select_info* infos, bool putSyncObjects);
-
-
-struct FDGetterLocking {
-	inline bool Lock(file_descriptor* /*lockable*/)
-	{
-		return false;
-	}
-
-	inline void Unlock(file_descriptor* lockable)
-	{
-		put_fd(lockable);
-	}
-};
-
-class FDGetter : public AutoLocker<file_descriptor, FDGetterLocking> {
-public:
-	inline FDGetter()
-		: AutoLocker<file_descriptor, FDGetterLocking>()
-	{
-	}
-
-	inline FDGetter(io_context* context, int fd, bool contextLocked = false)
-		: AutoLocker<file_descriptor, FDGetterLocking>(
-			contextLocked ? get_fd_locked(context, fd) : get_fd(context, fd))
-	{
-	}
-
-	inline file_descriptor* SetTo(io_context* context, int fd,
-		bool contextLocked = false)
-	{
-		file_descriptor* descriptor
-			= contextLocked ? get_fd_locked(context, fd) : get_fd(context, fd);
-		AutoLocker<file_descriptor, FDGetterLocking>::SetTo(descriptor, true);
-		return descriptor;
-	}
-
-	inline file_descriptor* SetTo(int fd, bool kernel,
-		bool contextLocked = false)
-	{
-		return SetTo(get_current_io_context(kernel), fd, contextLocked);
-	}
-
-	inline file_descriptor* FD() const
-	{
-		return fLockable;
-	}
-};
 
 
 //	#pragma mark - General fd routines
@@ -100,10 +61,10 @@ void dump_fd(int fd, struct file_descriptor* descriptor);
 void
 dump_fd(int fd,struct file_descriptor* descriptor)
 {
-	dprintf("fd[%d] = %p: type = %" B_PRId32 ", ref_count = %" B_PRId32 ", ops "
+	dprintf("fd[%d] = %p: ref_count = %" B_PRId32 ", ops "
 		"= %p, u.vnode = %p, u.mount = %p, cookie = %p, open_mode = %" B_PRIx32
 		", pos = %" B_PRId64 "\n",
-		fd, descriptor, descriptor->type, descriptor->ref_count,
+		fd, descriptor, descriptor->ref_count,
 		descriptor->ops, descriptor->u.vnode, descriptor->u.mount,
 		descriptor->cookie, descriptor->open_mode, descriptor->pos);
 }
@@ -116,7 +77,7 @@ struct file_descriptor*
 alloc_fd(void)
 {
 	file_descriptor* descriptor
-		= (file_descriptor*)malloc(sizeof(struct file_descriptor));
+		= (file_descriptor*)object_cache_alloc(sFileDescriptorCache, 0);
 	if (descriptor == NULL)
 		return NULL;
 
@@ -125,14 +86,14 @@ alloc_fd(void)
 	descriptor->ref_count = 1;
 	descriptor->open_count = 0;
 	descriptor->open_mode = 0;
-	descriptor->pos = 0;
+	descriptor->pos = -1;
 
 	return descriptor;
 }
 
 
 bool
-fd_close_on_exec(struct io_context* context, int fd)
+fd_close_on_exec(const struct io_context* context, int fd)
 {
 	return CHECK_BIT(context->fds_close_on_exec[fd / 8], fd & 7) ? true : false;
 }
@@ -158,7 +119,10 @@ new_fd_etc(struct io_context* context, struct file_descriptor* descriptor,
 	int fd = -1;
 	uint32 i;
 
-	mutex_lock(&context->io_mutex);
+	if (firstIndex < 0 || (uint32)firstIndex >= context->table_size)
+		return B_BAD_VALUE;
+
+	WriteLocker locker(context->lock);
 
 	for (i = firstIndex; i < context->table_size; i++) {
 		if (!context->fds[i]) {
@@ -166,19 +130,14 @@ new_fd_etc(struct io_context* context, struct file_descriptor* descriptor,
 			break;
 		}
 	}
-	if (fd < 0) {
-		fd = B_NO_MORE_FDS;
-		goto err;
-	}
+	if (fd < 0)
+		return B_NO_MORE_FDS;
 
 	TFD(NewFD(context, fd, descriptor));
 
 	context->fds[fd] = descriptor;
 	context->num_used_fds++;
 	atomic_add(&descriptor->open_count, 1);
-
-err:
-	mutex_unlock(&context->io_mutex);
 
 	return fd;
 }
@@ -201,7 +160,7 @@ put_fd(struct file_descriptor* descriptor)
 
 	TFD(PutFD(descriptor));
 
-	TRACE(("put_fd(descriptor = %p [ref = %ld, cookie = %p])\n",
+	TRACE(("put_fd(descriptor = %p [ref = %" B_PRId32 ", cookie = %p])\n",
 		descriptor, descriptor->ref_count, descriptor->cookie));
 
 	// free the descriptor if we don't need it anymore
@@ -210,7 +169,7 @@ put_fd(struct file_descriptor* descriptor)
 		if (descriptor->ops != NULL && descriptor->ops->fd_free != NULL)
 			descriptor->ops->fd_free(descriptor);
 
-		free(descriptor);
+		object_cache_free(sFileDescriptorCache, descriptor, 0);
 	} else if ((descriptor->open_mode & O_DISCONNECTED) != 0
 		&& previous - 1 == descriptor->open_count
 		&& descriptor->ops != NULL) {
@@ -240,7 +199,7 @@ void
 close_fd(struct io_context* context, struct file_descriptor* descriptor)
 {
 	// POSIX advisory locks need to be released when any file descriptor closes
-	if (descriptor->type == FDTYPE_FILE)
+	if (fd_is_file(descriptor))
 		vfs_release_posix_lock(context, descriptor);
 
 	if (atomic_add(&descriptor->open_count, -1) == 1) {
@@ -289,7 +248,7 @@ inc_fd_ref_count(struct file_descriptor* descriptor)
 
 
 static struct file_descriptor*
-get_fd_locked(struct io_context* context, int fd)
+get_fd_locked(const struct io_context* context, int fd)
 {
 	if (fd < 0 || (uint32)fd >= context->table_size)
 		return NULL;
@@ -297,6 +256,10 @@ get_fd_locked(struct io_context* context, int fd)
 	struct file_descriptor* descriptor = context->fds[fd];
 
 	if (descriptor != NULL) {
+		// disconnected descriptors cannot be accessed anymore
+		if (descriptor->open_mode & O_DISCONNECTED)
+			return NULL;
+
 		TFD(GetFD(context, fd, descriptor));
 		inc_fd_ref_count(descriptor);
 	}
@@ -306,21 +269,20 @@ get_fd_locked(struct io_context* context, int fd)
 
 
 struct file_descriptor*
-get_fd(struct io_context* context, int fd)
+get_fd(const struct io_context* context, int fd)
 {
-	MutexLocker _(context->io_mutex);
-
+	ReadLocker locker(context->lock);
 	return get_fd_locked(context, fd);
 }
 
 
 struct file_descriptor*
-get_open_fd(struct io_context* context, int fd)
+get_open_fd(const struct io_context* context, int fd)
 {
-	MutexLocker _(context->io_mutex);
+	ReadLocker locker(context->lock);
 
 	file_descriptor* descriptor = get_fd_locked(context, fd);
-	if (descriptor == NULL || (descriptor->open_mode & O_DISCONNECTED) != 0)
+	if (descriptor == NULL)
 		return NULL;
 
 	atomic_add(&descriptor->open_count, 1);
@@ -339,7 +301,7 @@ remove_fd(struct io_context* context, int fd)
 	if (fd < 0)
 		return NULL;
 
-	mutex_lock(&context->io_mutex);
+	WriteLocker locker(context->lock);
 
 	if ((uint32)fd < context->table_size)
 		descriptor = context->fds[fd];
@@ -360,8 +322,6 @@ remove_fd(struct io_context* context, int fd)
 
 		disconnected = (descriptor->open_mode & O_DISCONNECTED);
 	}
-
-	mutex_unlock(&context->io_mutex);
 
 	if (selectInfos != NULL)
 		deselect_select_infos(descriptor, selectInfos, true);
@@ -386,12 +346,11 @@ dup_fd(int fd, bool kernel)
 
 	// now put the fd in place
 	status = new_fd(context, descriptor);
-	if (status < 0)
+	if (status < 0) {
 		put_fd(descriptor);
-	else {
-		mutex_lock(&context->io_mutex);
+	} else {
+		WriteLocker locker(context->lock);
 		fd_set_close_on_exec(context, status, false);
-		mutex_unlock(&context->io_mutex);
 	}
 
 	return status;
@@ -405,7 +364,7 @@ dup_fd(int fd, bool kernel)
 	We do dup2() directly to be thread-safe.
 */
 static int
-dup2_fd(int oldfd, int newfd, bool kernel)
+dup2_fd(int oldfd, int newfd, int flags, bool kernel)
 {
 	struct file_descriptor* evicted = NULL;
 	struct io_context* context;
@@ -415,10 +374,12 @@ dup2_fd(int oldfd, int newfd, bool kernel)
 	// quick check
 	if (oldfd < 0 || newfd < 0)
 		return B_FILE_ERROR;
+	if ((flags & ~O_CLOEXEC) != 0)
+		return B_BAD_VALUE;
 
 	// Get current I/O context and lock it
 	context = get_current_io_context(kernel);
-	mutex_lock(&context->io_mutex);
+	WriteLocker locker(context->lock);
 
 	// Check if the fds are valid (mutex must be locked because
 	// the table size could be changed)
@@ -426,20 +387,18 @@ dup2_fd(int oldfd, int newfd, bool kernel)
 		|| (uint32)newfd >= context->table_size
 		|| context->fds[oldfd] == NULL
 		|| (context->fds[oldfd]->open_mode & O_DISCONNECTED) != 0) {
-		mutex_unlock(&context->io_mutex);
 		return B_FILE_ERROR;
 	}
 
 	// Check for identity, note that it cannot be made above
 	// because we always want to return an error on invalid
 	// handles
-	select_info* selectInfos = NULL;
 	if (oldfd != newfd) {
 		// Now do the work
 		TFD(Dup2FD(context, oldfd, newfd));
 
 		evicted = context->fds[newfd];
-		selectInfos = context->select_infos[newfd];
+		select_info* selectInfos = context->select_infos[newfd];
 		context->select_infos[newfd] = NULL;
 		atomic_add(&context->fds[oldfd]->ref_count, 1);
 		atomic_add(&context->fds[oldfd]->open_count, 1);
@@ -447,15 +406,16 @@ dup2_fd(int oldfd, int newfd, bool kernel)
 
 		if (evicted == NULL)
 			context->num_used_fds++;
+
+		deselect_select_infos(evicted, selectInfos, true);
 	}
 
-	fd_set_close_on_exec(context, newfd, false);
+	fd_set_close_on_exec(context, newfd, (flags & O_CLOEXEC) != 0);
 
-	mutex_unlock(&context->io_mutex);
+	locker.Unlock();
 
 	// Say bye bye to the evicted fd
 	if (evicted) {
-		deselect_select_infos(evicted, selectInfos, true);
 		close_fd(context, evicted);
 		put_fd(evicted);
 	}
@@ -486,7 +446,7 @@ dup_foreign_fd(team_id fromTeam, int fd, bool kernel)
 	file_descriptor* descriptor = get_fd(fromContext, fd);
 	if (descriptor == NULL)
 		return B_FILE_ERROR;
-	CObjectDeleter<file_descriptor> descriptorPutter(descriptor, put_fd);
+	FileDescriptorPutter descriptorPutter(descriptor);
 
 	// create a new FD in the target I/O context
 	int result = new_fd(get_current_io_context(kernel), descriptor);
@@ -502,22 +462,39 @@ dup_foreign_fd(team_id fromTeam, int fd, bool kernel)
 static status_t
 fd_ioctl(bool kernelFD, int fd, uint32 op, void* buffer, size_t length)
 {
-	struct file_descriptor* descriptor;
-	int status;
-
-	descriptor = get_fd(get_current_io_context(kernelFD), fd);
-	if (descriptor == NULL || (descriptor->open_mode & O_DISCONNECTED) != 0)
+	FileDescriptorPutter descriptor(get_fd(get_current_io_context(kernelFD), fd));
+	if (!descriptor.IsSet())
 		return B_FILE_ERROR;
 
-	if (descriptor->ops->fd_ioctl != NULL)
-		status = descriptor->ops->fd_ioctl(descriptor, op, buffer, length);
+	// Special case: translate FIONBIO into fcntl(F_SETFL).
+	if (op == FIONBIO) {
+		if (buffer == NULL)
+			return B_BAD_VALUE;
+
+		int value;
+		if (is_called_via_syscall()) {
+			if (!IS_USER_ADDRESS(buffer)
+				|| user_memcpy(&value, buffer, sizeof(int)) != B_OK) {
+				return B_BAD_ADDRESS;
+			}
+		} else
+			value = *(int*)buffer;
+
+		size_t argument = descriptor->open_mode & ~O_NONBLOCK;
+		argument |= (value ? O_NONBLOCK : 0);
+
+		return (kernelFD ? _kern_fcntl : _user_fcntl)(fd, F_SETFL, argument);
+	}
+
+	status_t status;
+	if (descriptor->ops->fd_ioctl)
+		status = descriptor->ops->fd_ioctl(descriptor.Get(), op, buffer, length);
 	else
 		status = B_DEV_INVALID_IOCTL;
 
 	if (status == B_DEV_INVALID_IOCTL)
 		status = ENOTTY;
 
-	put_fd(descriptor);
 	return status;
 }
 
@@ -543,8 +520,9 @@ deselect_select_infos(file_descriptor* descriptor, select_info* infos,
 			}
 		}
 
+		select_info* next = info->next;
 		notify_select_events(info, B_EVENT_INVALID);
-		info = info->next;
+		info = next;
 
 		if (putSyncObjects)
 			put_select_sync(sync);
@@ -555,17 +533,17 @@ deselect_select_infos(file_descriptor* descriptor, select_info* infos,
 status_t
 select_fd(int32 fd, struct select_info* info, bool kernel)
 {
-	TRACE(("select_fd(fd = %ld, info = %p (%p), 0x%x)\n", fd, info,
+	TRACE(("select_fd(fd = %" B_PRId32 ", info = %p (%p), 0x%x)\n", fd, info,
 		info->sync, info->selected_events));
 
-	FDGetter fdGetter;
+	FileDescriptorPutter descriptor;
 		// define before the context locker, so it will be destroyed after it
 
 	io_context* context = get_current_io_context(kernel);
-	MutexLocker locker(context->io_mutex);
+	ReadLocker readLocker(context->lock);
 
-	struct file_descriptor* descriptor = fdGetter.SetTo(context, fd, true);
-	if (descriptor == NULL || (descriptor->open_mode & O_DISCONNECTED) != 0)
+	descriptor.SetTo(get_fd_locked(context, fd));
+	if (!descriptor.IsSet())
 		return B_FILE_ERROR;
 
 	uint16 eventsToSelect = info->selected_events & ~B_EVENT_INVALID;
@@ -575,23 +553,24 @@ select_fd(int32 fd, struct select_info* info, bool kernel)
 		// immediately notify the select call
 		eventsToSelect &= ~SELECT_OUTPUT_ONLY_FLAGS;
 		if (eventsToSelect != 0)
-			return notify_select_events(info, eventsToSelect);
-		else
-			return B_OK;
+			notify_select_events(info, eventsToSelect);
+
+		info->selected_events = 0;
+		return B_UNSUPPORTED;
 	}
 
 	// We need the FD to stay open while we're doing this, so no select()/
 	// deselect() will be called on it after it is closed.
 	atomic_add(&descriptor->open_count, 1);
 
-	locker.Unlock();
+	readLocker.Unlock();
 
 	// select any events asked for
 	uint32 selectedEvents = 0;
 
 	for (uint16 event = 1; event < 16; event++) {
 		if ((eventsToSelect & SELECT_FLAG(event)) != 0
-			&& descriptor->ops->fd_select(descriptor, event,
+			&& descriptor->ops->fd_select(descriptor.Get(), event,
 				(selectsync*)info) == B_OK) {
 			selectedEvents |= SELECT_FLAG(event);
 		}
@@ -601,15 +580,15 @@ select_fd(int32 fd, struct select_info* info, bool kernel)
 
 	// Add the info to the IO context. Even if nothing has been selected -- we
 	// always support B_EVENT_INVALID.
-	locker.Lock();
-	if (context->fds[fd] != descriptor) {
+	WriteLocker writeLocker(context->lock);
+	if (context->fds[fd] != descriptor.Get()) {
 		// Someone close()d the index in the meantime. deselect() all
 		// events.
 		info->next = NULL;
-		deselect_select_infos(descriptor, info, false);
+		deselect_select_infos(descriptor.Get(), info, false);
 
 		// Release our open reference of the descriptor.
-		close_fd(context, descriptor);
+		close_fd(context, descriptor.Get());
 		return B_FILE_ERROR;
 	}
 
@@ -620,7 +599,7 @@ select_fd(int32 fd, struct select_info* info, bool kernel)
 
 	// As long as the info is in the list, we keep a reference to the sync
 	// object.
-	atomic_add(&info->sync->ref_count, 1);
+	acquire_select_sync(info->sync);
 
 	// Finally release our open reference. It is safe just to decrement,
 	// since as long as the descriptor is associated with the slot,
@@ -634,17 +613,17 @@ select_fd(int32 fd, struct select_info* info, bool kernel)
 status_t
 deselect_fd(int32 fd, struct select_info* info, bool kernel)
 {
-	TRACE(("deselect_fd(fd = %ld, info = %p (%p), 0x%x)\n", fd, info,
+	TRACE(("deselect_fd(fd = %" B_PRId32 ", info = %p (%p), 0x%x)\n", fd, info,
 		info->sync, info->selected_events));
 
-	FDGetter fdGetter;
+	FileDescriptorPutter descriptor;
 		// define before the context locker, so it will be destroyed after it
 
 	io_context* context = get_current_io_context(kernel);
-	MutexLocker locker(context->io_mutex);
+	WriteLocker locker(context->lock);
 
-	struct file_descriptor* descriptor = fdGetter.SetTo(context, fd, true);
-	if (descriptor == NULL)
+	descriptor.SetTo(get_fd_locked(context, fd));
+	if (!descriptor.IsSet())
 		return B_FILE_ERROR;
 
 	// remove the info from the IO context
@@ -666,7 +645,7 @@ deselect_fd(int32 fd, struct select_info* info, bool kernel)
 	if (descriptor->ops->fd_deselect != NULL && eventsToDeselect != 0) {
 		for (uint16 event = 1; event < 16; event++) {
 			if ((eventsToDeselect & SELECT_FLAG(event)) != 0) {
-				descriptor->ops->fd_deselect(descriptor, event,
+				descriptor->ops->fd_deselect(descriptor.Get(), event,
 					(selectsync*)info);
 			}
 		}
@@ -687,7 +666,7 @@ fd_is_valid(int fd, bool kernel)
 {
 	struct file_descriptor* descriptor
 		= get_fd(get_current_io_context(kernel), fd);
-	if (descriptor == NULL || (descriptor->open_mode & O_DISCONNECTED) != 0)
+	if (descriptor == NULL)
 		return false;
 
 	put_fd(descriptor);
@@ -695,40 +674,14 @@ fd_is_valid(int fd, bool kernel)
 }
 
 
-struct vnode*
-fd_vnode(struct file_descriptor* descriptor)
-{
-	switch (descriptor->type) {
-		case FDTYPE_FILE:
-		case FDTYPE_DIR:
-		case FDTYPE_ATTR_DIR:
-		case FDTYPE_ATTR:
-			return descriptor->u.vnode;
-	}
-
-	return NULL;
-}
-
-
-static status_t
-common_close(int fd, bool kernel)
-{
-	return close_fd_index(get_current_io_context(kernel), fd);
-}
-
-
 static ssize_t
-common_user_io(int fd, off_t pos, void* buffer, size_t length, bool write)
+common_vector_io(int fd, off_t pos, const iovec* vecs, size_t count, bool write, bool kernel)
 {
-	if (!IS_USER_ADDRESS(buffer))
-		return B_BAD_ADDRESS;
-
 	if (pos < -1)
 		return B_BAD_VALUE;
 
-	FDGetter fdGetter;
-	struct file_descriptor* descriptor = fdGetter.SetTo(fd, false);
-	if (descriptor == NULL || (descriptor->open_mode & O_DISCONNECTED) != 0)
+	FileDescriptorPutter descriptor(get_fd(get_current_io_context(kernel), fd));
+	if (!descriptor.IsSet())
 		return B_FILE_ERROR;
 
 	if (write ? (descriptor->open_mode & O_RWMASK) == O_RDONLY
@@ -737,7 +690,7 @@ common_user_io(int fd, off_t pos, void* buffer, size_t length, bool write)
 	}
 
 	bool movePosition = false;
-	if (pos == -1) {
+	if (pos == -1 && descriptor->pos != -1) {
 		pos = descriptor->pos;
 		movePosition = true;
 	}
@@ -747,18 +700,109 @@ common_user_io(int fd, off_t pos, void* buffer, size_t length, bool write)
 		return B_BAD_VALUE;
 	}
 
+	if (!movePosition && count > 1 && (write ? descriptor->ops->fd_writev != NULL
+			: descriptor->ops->fd_readv != NULL)) {
+		ssize_t result;
+		if (write) {
+			result = descriptor->ops->fd_writev(descriptor.Get(), pos,
+				vecs, count);
+		} else {
+			result = descriptor->ops->fd_readv(descriptor.Get(), pos,
+				vecs, count);
+		}
+		if (result != B_UNSUPPORTED)
+			return result;
+		// If not supported, just fall back to the loop.
+	}
+
+	status_t status = B_OK;
+	ssize_t bytesTransferred = 0;
+	for (size_t i = 0; i < count; i++) {
+		if (vecs[i].iov_base == NULL)
+			continue;
+
+		size_t length = vecs[i].iov_len;
+		if (write) {
+			status = descriptor->ops->fd_write(descriptor.Get(), pos,
+				vecs[i].iov_base, &length);
+		} else {
+			status = descriptor->ops->fd_read(descriptor.Get(), pos,
+				vecs[i].iov_base, &length);
+		}
+
+		if (status != B_OK) {
+			if (bytesTransferred == 0)
+				return status;
+			break;
+		}
+
+		if ((uint64)bytesTransferred + length > SSIZE_MAX)
+			bytesTransferred = SSIZE_MAX;
+		else
+			bytesTransferred += (ssize_t)length;
+
+		if (pos != -1)
+			pos += length;
+
+		if (length < vecs[i].iov_len)
+			break;
+	}
+
+	if (movePosition) {
+		descriptor->pos = write && (descriptor->open_mode & O_APPEND) != 0
+			? descriptor->ops->fd_seek(descriptor.Get(), 0, SEEK_END) : pos;
+	}
+
+	return bytesTransferred;
+}
+
+
+static ssize_t
+common_user_io(int fd, off_t pos, void* buffer, size_t length, bool write)
+{
+	if (pos < -1)
+		return B_BAD_VALUE;
+
+	FileDescriptorPutter descriptor(get_fd(get_current_io_context(false), fd));
+	if (!descriptor.IsSet())
+		return B_FILE_ERROR;
+
+	if (write ? (descriptor->open_mode & O_RWMASK) == O_RDONLY
+			: (descriptor->open_mode & O_RWMASK) == O_WRONLY) {
+		return B_FILE_ERROR;
+	}
+
+	bool movePosition = false;
+	if (pos == -1 && descriptor->pos != -1) {
+		pos = descriptor->pos;
+		movePosition = true;
+	}
+
+	if (write ? descriptor->ops->fd_write == NULL
+			: descriptor->ops->fd_read == NULL) {
+		return B_BAD_VALUE;
+	}
+
+	if (length == 0)
+		return 0;
+
+	if (!is_user_address_range(buffer, length))
+		return B_BAD_ADDRESS;
+
 	SyscallRestartWrapper<status_t> status;
 
 	if (write)
-		status = descriptor->ops->fd_write(descriptor, pos, buffer, &length);
+		status = descriptor->ops->fd_write(descriptor.Get(), pos, buffer, &length);
 	else
-		status = descriptor->ops->fd_read(descriptor, pos, buffer, &length);
+		status = descriptor->ops->fd_read(descriptor.Get(), pos, buffer, &length);
 
 	if (status != B_OK)
 		return status;
 
-	if (movePosition)
-		descriptor->pos = pos + length;
+	if (movePosition) {
+		descriptor->pos = write && (descriptor->open_mode & O_APPEND) != 0
+			? descriptor->ops->fd_seek(descriptor.Get(), 0, SEEK_END) : pos + length;
+	}
 
 	return length <= SSIZE_MAX ? (ssize_t)length : SSIZE_MAX;
 }
@@ -768,80 +812,28 @@ static ssize_t
 common_user_vector_io(int fd, off_t pos, const iovec* userVecs, size_t count,
 	bool write)
 {
-	if (!IS_USER_ADDRESS(userVecs))
-		return B_BAD_ADDRESS;
-
-	if (pos < -1)
-		return B_BAD_VALUE;
-
-	// prevent integer overflow exploit in malloc()
 	if (count > IOV_MAX)
 		return B_BAD_VALUE;
 
-	FDGetter fdGetter;
-	struct file_descriptor* descriptor = fdGetter.SetTo(fd, false);
-	if (descriptor == NULL || (descriptor->open_mode & O_DISCONNECTED) != 0)
-		return B_FILE_ERROR;
-
-	if (write ? (descriptor->open_mode & O_RWMASK) == O_RDONLY
-			: (descriptor->open_mode & O_RWMASK) == O_WRONLY) {
-		return B_FILE_ERROR;
-	}
-
-	iovec* vecs = (iovec*)malloc(sizeof(iovec) * count);
-	if (vecs == NULL)
+	BStackOrHeapArray<iovec, 16> vecs(count);
+	if (!vecs.IsValid())
 		return B_NO_MEMORY;
-	MemoryDeleter _(vecs);
 
-	if (user_memcpy(vecs, userVecs, sizeof(iovec) * count) != B_OK)
-		return B_BAD_ADDRESS;
+	status_t error = get_iovecs_from_user(userVecs, count, vecs, true);
+	if (error != B_OK)
+		return error;
 
-	bool movePosition = false;
-	if (pos == -1) {
-		pos = descriptor->pos;
-		movePosition = true;
-	}
+	SyscallRestartWrapper<ssize_t> result;
+	result = common_vector_io(fd, pos, vecs, count, write, false);
 
-	if (write ? descriptor->ops->fd_write == NULL
-			: descriptor->ops->fd_read == NULL) {
-		return B_BAD_VALUE;
-	}
+	return result;
+}
 
-	SyscallRestartWrapper<status_t> status;
 
-	ssize_t bytesTransferred = 0;
-	for (uint32 i = 0; i < count; i++) {
-		size_t length = vecs[i].iov_len;
-		if (write) {
-			status = descriptor->ops->fd_write(descriptor, pos,
-				vecs[i].iov_base, &length);
-		} else {
-			status = descriptor->ops->fd_read(descriptor, pos, vecs[i].iov_base,
-				&length);
-		}
-
-		if (status != B_OK) {
-			if (bytesTransferred == 0)
-				return status;
-			status = B_OK;
-			break;
-		}
-
-		if ((uint64)bytesTransferred + length > SSIZE_MAX)
-			bytesTransferred = SSIZE_MAX;
-		else
-			bytesTransferred += (ssize_t)length;
-
-		pos += length;
-
-		if (length < vecs[i].iov_len)
-			break;
-	}
-
-	if (movePosition)
-		descriptor->pos = pos;
-
-	return bytesTransferred;
+static status_t
+common_close(int fd, bool kernel)
+{
+	return close_fd_index(get_current_io_context(kernel), fd);
 }
 
 
@@ -890,20 +882,17 @@ _user_seek(int fd, off_t pos, int seekType)
 {
 	syscall_64_bit_return_value();
 
-	struct file_descriptor* descriptor;
-
-	descriptor = get_fd(get_current_io_context(false), fd);
-	if (descriptor == NULL || (descriptor->open_mode & O_DISCONNECTED) != 0)
+	FileDescriptorPutter descriptor(get_fd(get_current_io_context(false), fd));
+	if (!descriptor.IsSet())
 		return B_FILE_ERROR;
 
 	TRACE(("user_seek(descriptor = %p)\n", descriptor));
 
-	if (descriptor->ops->fd_seek != NULL)
-		pos = descriptor->ops->fd_seek(descriptor, pos, seekType);
+	if (descriptor->ops->fd_seek)
+		pos = descriptor->ops->fd_seek(descriptor.Get(), pos, seekType);
 	else
 		pos = ESPIPE;
 
-	put_fd(descriptor);
 	return pos;
 }
 
@@ -911,10 +900,14 @@ _user_seek(int fd, off_t pos, int seekType)
 status_t
 _user_ioctl(int fd, uint32 op, void* buffer, size_t length)
 {
-	if (!IS_USER_ADDRESS(buffer))
-		return B_BAD_ADDRESS;
-
 	TRACE(("user_ioctl: fd %d\n", fd));
+
+	// "buffer" is not always a pointer depending on "op", so we cannot
+	// check that it is a userland buffer here. Instead we check that
+	// it is at least not within the bounds of kernel memory; as in
+	// the cases where it is a numeric constant it is usually a low one.
+	if (IS_KERNEL_ADDRESS(buffer))
+		return B_BAD_ADDRESS;
 
 	SyscallRestartWrapper<status_t> status;
 
@@ -927,7 +920,7 @@ _user_read_dir(int fd, struct dirent* userBuffer, size_t bufferSize,
 	uint32 maxCount)
 {
 	TRACE(("user_read_dir(fd = %d, userBuffer = %p, bufferSize = %ld, count = "
-		"%lu)\n", fd, userBuffer, bufferSize, maxCount));
+		"%" B_PRIu32 ")\n", fd, userBuffer, bufferSize, maxCount));
 
 	if (maxCount == 0)
 		return 0;
@@ -937,9 +930,8 @@ _user_read_dir(int fd, struct dirent* userBuffer, size_t bufferSize,
 
 	// get I/O context and FD
 	io_context* ioContext = get_current_io_context(false);
-	FDGetter fdGetter;
-	struct file_descriptor* descriptor = fdGetter.SetTo(ioContext, fd, false);
-	if (descriptor == NULL || (descriptor->open_mode & O_DISCONNECTED) != 0)
+	FileDescriptorPutter descriptor(get_fd(ioContext, fd));
+	if (!descriptor.IsSet())
 		return B_FILE_ERROR;
 
 	if (descriptor->ops->fd_read_dir == NULL)
@@ -955,19 +947,23 @@ _user_read_dir(int fd, struct dirent* userBuffer, size_t bufferSize,
 
 	// read the directory
 	uint32 count = maxCount;
-	status_t status = descriptor->ops->fd_read_dir(ioContext, descriptor,
+	status_t status = descriptor->ops->fd_read_dir(ioContext, descriptor.Get(),
 		buffer, bufferSize, &count);
 	if (status != B_OK)
 		return status;
 
+	ASSERT(count <= maxCount);
+
 	// copy the buffer back -- determine the total buffer size first
 	size_t sizeToCopy = 0;
-	struct dirent* entry = buffer;
+	BytePointer<struct dirent> entry = buffer;
 	for (uint32 i = 0; i < count; i++) {
 		size_t length = entry->d_reclen;
 		sizeToCopy += length;
-		entry = (struct dirent*)((uint8*)entry + length);
+		entry += length;
 	}
+
+	ASSERT(sizeToCopy <= bufferSize);
 
 	if (user_memcpy(userBuffer, buffer, sizeToCopy) != B_OK)
 		return B_BAD_ADDRESS;
@@ -979,21 +975,18 @@ _user_read_dir(int fd, struct dirent* userBuffer, size_t bufferSize,
 status_t
 _user_rewind_dir(int fd)
 {
-	struct file_descriptor* descriptor;
-	status_t status;
-
 	TRACE(("user_rewind_dir(fd = %d)\n", fd));
 
-	descriptor = get_fd(get_current_io_context(false), fd);
-	if (descriptor == NULL || (descriptor->open_mode & O_DISCONNECTED) != 0)
+	FileDescriptorPutter descriptor(get_fd(get_current_io_context(false), fd));
+	if (!descriptor.IsSet())
 		return B_FILE_ERROR;
 
-	if (descriptor->ops->fd_rewind_dir != NULL)
-		status = descriptor->ops->fd_rewind_dir(descriptor);
+	status_t status;
+	if (descriptor->ops->fd_rewind_dir)
+		status = descriptor->ops->fd_rewind_dir(descriptor.Get());
 	else
 		status = B_UNSUPPORTED;
 
-	put_fd(descriptor);
 	return status;
 }
 
@@ -1013,9 +1006,9 @@ _user_dup(int fd)
 
 
 int
-_user_dup2(int ofd, int nfd)
+_user_dup2(int ofd, int nfd, int flags)
 {
-	return dup2_fd(ofd, nfd, false);
+	return dup2_fd(ofd, nfd, flags, false);
 }
 
 
@@ -1028,16 +1021,15 @@ _kern_read(int fd, off_t pos, void* buffer, size_t length)
 	if (pos < -1)
 		return B_BAD_VALUE;
 
-	FDGetter fdGetter;
-	struct file_descriptor* descriptor = fdGetter.SetTo(fd, true);
+	FileDescriptorPutter descriptor(get_fd(get_current_io_context(true), fd));
 
-	if (!descriptor)
+	if (!descriptor.IsSet())
 		return B_FILE_ERROR;
 	if ((descriptor->open_mode & O_RWMASK) == O_WRONLY)
 		return B_FILE_ERROR;
 
 	bool movePosition = false;
-	if (pos == -1) {
+	if (pos == -1 && descriptor->pos != -1) {
 		pos = descriptor->pos;
 		movePosition = true;
 	}
@@ -1047,7 +1039,7 @@ _kern_read(int fd, off_t pos, void* buffer, size_t length)
 	if (descriptor->ops->fd_read == NULL)
 		return B_BAD_VALUE;
 
-	ssize_t bytesRead = descriptor->ops->fd_read(descriptor, pos, buffer,
+	ssize_t bytesRead = descriptor->ops->fd_read(descriptor.Get(), pos, buffer,
 		&length);
 	if (bytesRead >= B_OK) {
 		if (length > SSIZE_MAX)
@@ -1064,75 +1056,20 @@ _kern_read(int fd, off_t pos, void* buffer, size_t length)
 
 
 ssize_t
-_kern_readv(int fd, off_t pos, const iovec* vecs, size_t count)
-{
-	bool movePosition = false;
-	status_t status;
-	uint32 i;
-
-	if (pos < -1)
-		return B_BAD_VALUE;
-
-	FDGetter fdGetter;
-	struct file_descriptor* descriptor = fdGetter.SetTo(fd, true);
-
-	if (!descriptor)
-		return B_FILE_ERROR;
-	if ((descriptor->open_mode & O_RWMASK) == O_WRONLY)
-		return B_FILE_ERROR;
-
-	if (pos == -1) {
-		pos = descriptor->pos;
-		movePosition = true;
-	}
-
-	if (descriptor->ops->fd_read == NULL)
-		return B_BAD_VALUE;
-
-	SyscallFlagUnsetter _;
-
-	ssize_t bytesRead = 0;
-
-	for (i = 0; i < count; i++) {
-		size_t length = vecs[i].iov_len;
-		status = descriptor->ops->fd_read(descriptor, pos, vecs[i].iov_base,
-			&length);
-		if (status != B_OK) {
-			bytesRead = status;
-			break;
-		}
-
-		if ((uint64)bytesRead + length > SSIZE_MAX)
-			bytesRead = SSIZE_MAX;
-		else
-			bytesRead += (ssize_t)length;
-
-		pos += vecs[i].iov_len;
-	}
-
-	if (movePosition)
-		descriptor->pos = pos;
-
-	return bytesRead;
-}
-
-
-ssize_t
 _kern_write(int fd, off_t pos, const void* buffer, size_t length)
 {
 	if (pos < -1)
 		return B_BAD_VALUE;
 
-	FDGetter fdGetter;
-	struct file_descriptor* descriptor = fdGetter.SetTo(fd, true);
+	FileDescriptorPutter descriptor(get_fd(get_current_io_context(true), fd));
 
-	if (descriptor == NULL || (descriptor->open_mode & O_DISCONNECTED) != 0)
+	if (!descriptor.IsSet())
 		return B_FILE_ERROR;
 	if ((descriptor->open_mode & O_RWMASK) == O_RDONLY)
 		return B_FILE_ERROR;
 
 	bool movePosition = false;
-	if (pos == -1) {
+	if (pos == -1 && descriptor->pos != -1) {
 		pos = descriptor->pos;
 		movePosition = true;
 	}
@@ -1142,8 +1079,8 @@ _kern_write(int fd, off_t pos, const void* buffer, size_t length)
 
 	SyscallFlagUnsetter _;
 
-	ssize_t bytesWritten = descriptor->ops->fd_write(descriptor, pos, buffer,
-		&length);
+	ssize_t bytesWritten = descriptor->ops->fd_write(descriptor.Get(), pos,
+		buffer,	&length);
 	if (bytesWritten >= B_OK) {
 		if (length > SSIZE_MAX)
 			bytesWritten = SSIZE_MAX;
@@ -1159,74 +1096,33 @@ _kern_write(int fd, off_t pos, const void* buffer, size_t length)
 
 
 ssize_t
+_kern_readv(int fd, off_t pos, const iovec* vecs, size_t count)
+{
+	SyscallFlagUnsetter _;
+	return common_vector_io(fd, pos, vecs, count, false, true);
+}
+
+
+ssize_t
 _kern_writev(int fd, off_t pos, const iovec* vecs, size_t count)
 {
-	bool movePosition = false;
-	status_t status;
-	uint32 i;
-
-	if (pos < -1)
-		return B_BAD_VALUE;
-
-	FDGetter fdGetter;
-	struct file_descriptor* descriptor = fdGetter.SetTo(fd, true);
-
-	if (!descriptor)
-		return B_FILE_ERROR;
-	if ((descriptor->open_mode & O_RWMASK) == O_RDONLY)
-		return B_FILE_ERROR;
-
-	if (pos == -1) {
-		pos = descriptor->pos;
-		movePosition = true;
-	}
-
-	if (descriptor->ops->fd_write == NULL)
-		return B_BAD_VALUE;
-
 	SyscallFlagUnsetter _;
-
-	ssize_t bytesWritten = 0;
-
-	for (i = 0; i < count; i++) {
-		size_t length = vecs[i].iov_len;
-		status = descriptor->ops->fd_write(descriptor, pos,
-			vecs[i].iov_base, &length);
-		if (status != B_OK) {
-			bytesWritten = status;
-			break;
-		}
-
-		if ((uint64)bytesWritten + length > SSIZE_MAX)
-			bytesWritten = SSIZE_MAX;
-		else
-			bytesWritten += (ssize_t)length;
-
-		pos += vecs[i].iov_len;
-	}
-
-	if (movePosition)
-		descriptor->pos = pos;
-
-	return bytesWritten;
+	return common_vector_io(fd, pos, vecs, count, true, true);
 }
 
 
 off_t
 _kern_seek(int fd, off_t pos, int seekType)
 {
-	struct file_descriptor* descriptor;
-
-	descriptor = get_fd(get_current_io_context(true), fd);
-	if (!descriptor)
+	FileDescriptorPutter descriptor(get_fd(get_current_io_context(true), fd));
+	if (!descriptor.IsSet())
 		return B_FILE_ERROR;
 
 	if (descriptor->ops->fd_seek)
-		pos = descriptor->ops->fd_seek(descriptor, pos, seekType);
+		pos = descriptor->ops->fd_seek(descriptor.Get(), pos, seekType);
 	else
 		pos = ESPIPE;
 
-	put_fd(descriptor);
 	return pos;
 }
 
@@ -1246,27 +1142,24 @@ ssize_t
 _kern_read_dir(int fd, struct dirent* buffer, size_t bufferSize,
 	uint32 maxCount)
 {
-	struct file_descriptor* descriptor;
-	ssize_t retval;
-
 	TRACE(("sys_read_dir(fd = %d, buffer = %p, bufferSize = %ld, count = "
-		"%lu)\n",fd, buffer, bufferSize, maxCount));
+		"%" B_PRIu32 ")\n",fd, buffer, bufferSize, maxCount));
 
 	struct io_context* ioContext = get_current_io_context(true);
-	descriptor = get_fd(ioContext, fd);
-	if (descriptor == NULL || (descriptor->open_mode & O_DISCONNECTED) != 0)
+	FileDescriptorPutter descriptor(get_fd(ioContext, fd));
+	if (!descriptor.IsSet())
 		return B_FILE_ERROR;
 
+	ssize_t retval;
 	if (descriptor->ops->fd_read_dir) {
 		uint32 count = maxCount;
-		retval = descriptor->ops->fd_read_dir(ioContext, descriptor, buffer,
+		retval = descriptor->ops->fd_read_dir(ioContext, descriptor.Get(), buffer,
 			bufferSize, &count);
 		if (retval >= 0)
 			retval = count;
 	} else
 		retval = B_UNSUPPORTED;
 
-	put_fd(descriptor);
 	return retval;
 }
 
@@ -1274,21 +1167,18 @@ _kern_read_dir(int fd, struct dirent* buffer, size_t bufferSize,
 status_t
 _kern_rewind_dir(int fd)
 {
-	struct file_descriptor* descriptor;
-	status_t status;
-
 	TRACE(("sys_rewind_dir(fd = %d)\n",fd));
 
-	descriptor = get_fd(get_current_io_context(true), fd);
-	if (descriptor == NULL || (descriptor->open_mode & O_DISCONNECTED) != 0)
+	FileDescriptorPutter descriptor(get_fd(get_current_io_context(true), fd));
+	if (!descriptor.IsSet())
 		return B_FILE_ERROR;
 
+	status_t status;
 	if (descriptor->ops->fd_rewind_dir)
-		status = descriptor->ops->fd_rewind_dir(descriptor);
+		status = descriptor->ops->fd_rewind_dir(descriptor.Get());
 	else
 		status = B_UNSUPPORTED;
 
-	put_fd(descriptor);
 	return status;
 }
 
@@ -1308,8 +1198,8 @@ _kern_dup(int fd)
 
 
 int
-_kern_dup2(int ofd, int nfd)
+_kern_dup2(int ofd, int nfd, int flags)
 {
-	return dup2_fd(ofd, nfd, true);
+	return dup2_fd(ofd, nfd, flags, true);
 }
 

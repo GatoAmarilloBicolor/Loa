@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2002-2007 Sam Leffler, Errno Consulting
  * All rights reserved.
  *
@@ -28,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: releng/11.1/sys/dev/bwi/if_bwi_pci.c 283637 2015-05-27 22:27:15Z glebius $");
-
 /*
  * PCI/Cardbus front-end for the Broadcom Wireless LAN controller driver.
  */
@@ -51,7 +51,7 @@ __FBSDID("$FreeBSD: releng/11.1/sys/dev/bwi/if_bwi_pci.c 283637 2015-05-27 22:27
 #include <sys/rman.h>
 
 #include <sys/socket.h>
- 
+
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_media.h>
@@ -244,16 +244,18 @@ static device_method_t bwi_pci_methods[] = {
 	DEVMETHOD(device_shutdown,	bwi_pci_shutdown),
 	DEVMETHOD(device_suspend,	bwi_pci_suspend),
 	DEVMETHOD(device_resume,	bwi_pci_resume),
-
 	{ 0,0 }
 };
+
 static driver_t bwi_driver = {
 	"bwi",
 	bwi_pci_methods,
 	sizeof (struct bwi_pci_softc)
 };
-static	devclass_t bwi_devclass;
-DRIVER_MODULE(bwi, pci, bwi_driver, bwi_devclass, 0, 0);
+
+DRIVER_MODULE(bwi, pci, bwi_driver, 0, 0);
+MODULE_PNP_INFO("U16:vendor;U16:device;D:#", pci, bwi, bwi_devices,
+    nitems(bwi_devices) - 1);
 MODULE_DEPEND(bwi, wlan, 1, 1, 1);		/* 802.11 media layer */
 MODULE_DEPEND(bwi, firmware, 1, 1, 1);		/* firmware support */
 MODULE_DEPEND(bwi, wlan_amrr, 1, 1, 1);

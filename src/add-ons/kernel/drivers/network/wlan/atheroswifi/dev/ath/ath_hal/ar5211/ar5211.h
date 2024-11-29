@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2006 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5211/ar5211.h 290612 2015-11-09 15:59:42Z adrian $
  */
 #ifndef _ATH_AR5211_H_
 #define _ATH_AR5211_H_
@@ -216,7 +216,7 @@ extern	uint32_t ar5211GetRxDP(struct ath_hal *, HAL_RX_QUEUE);
 extern	void ar5211SetRxDP(struct ath_hal *, uint32_t rxdp, HAL_RX_QUEUE);
 extern	void ar5211EnableReceive(struct ath_hal *);
 extern	HAL_BOOL ar5211StopDmaReceive(struct ath_hal *);
-extern	void ar5211StartPcuReceive(struct ath_hal *);
+extern	void ar5211StartPcuReceive(struct ath_hal *, HAL_BOOL);
 extern	void ar5211StopPcuReceive(struct ath_hal *);
 extern	void ar5211SetMulticastFilter(struct ath_hal *,
 		uint32_t filter0, uint32_t filter1);
@@ -271,6 +271,8 @@ extern	HAL_BOOL ar5211SetSifsTime(struct ath_hal *, u_int);
 extern	u_int ar5211GetSifsTime(struct ath_hal *);
 extern  HAL_BOOL ar5211SetDecompMask(struct ath_hal *, uint16_t, int);
 extern	void ar5211SetCoverageClass(struct ath_hal *, uint8_t, int);
+extern	HAL_STATUS ar5211SetQuiet(struct ath_hal *, uint32_t, uint32_t,
+		uint32_t, HAL_QUIET_FLAG);
 extern	uint32_t ar5211GetCurRssi(struct ath_hal *);
 extern	u_int ar5211GetDefAntenna(struct ath_hal *);
 extern	void ar5211SetDefAntenna(struct ath_hal *ah, u_int antenna);
@@ -287,6 +289,8 @@ extern	uint32_t ar5211Get11nExtBusy(struct ath_hal *);
 extern	HAL_BOOL ar5211GetMibCycleCounts(struct ath_hal *,
 		HAL_SURVEY_SAMPLE *);
 extern	void ar5211SetChainMasks(struct ath_hal *ah, uint32_t, uint32_t);
+extern	void ar5211SetNav(struct ath_hal *ah, u_int);
+extern	u_int ar5211GetNav(struct ath_hal *ah);
 
 extern	void ar5211EnableDfs(struct ath_hal *, HAL_PHYERR_PARAM *);
 extern	void ar5211GetDfsThresh(struct ath_hal *, HAL_PHYERR_PARAM *);
@@ -300,7 +304,7 @@ extern	HAL_BOOL ar5211SetKeyCacheEntry(struct ath_hal *, uint16_t entry,
 extern	HAL_BOOL ar5211SetKeyCacheEntryMac(struct ath_hal *,
 			uint16_t, const uint8_t *);
 
-extern	HAL_BOOL ar5211SetPowerMode(struct ath_hal *, uint32_t powerRequest,
+extern	HAL_BOOL ar5211SetPowerMode(struct ath_hal *, HAL_POWER_MODE mode,
 		int setChip);
 extern	HAL_POWER_MODE ar5211GetPowerMode(struct ath_hal *);
 

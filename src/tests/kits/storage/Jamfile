@@ -1,6 +1,5 @@
 SubDir HAIKU_TOP src tests kits storage ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
 AddSubDirSupportedPlatforms libbe_test ;
 
 UsePrivateHeaders storage ;
@@ -9,6 +8,7 @@ UnitTestLib libstoragetest.so
 	: StorageKitTestAddon.cpp
 		AppFileInfoTest.cpp
 		BasicTest.cpp
+		DataIOTest.cpp
 		DirectoryTest.cpp
 		EntryTest.cpp
 		FindDirectoryTest.cpp

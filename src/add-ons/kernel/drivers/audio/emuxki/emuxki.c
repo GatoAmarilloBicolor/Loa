@@ -224,7 +224,7 @@ emuxki_mem_new(emuxki_dev *card, int ptbidx, size_t size)
 		return (NULL);
 
 	mem->ptbidx = ptbidx;
-	mem->area = alloc_mem(&mem->phy_base, &mem->log_base, size, "emuxki buffer");
+	mem->area = alloc_mem(&mem->phy_base, &mem->log_base, size, "emuxki buffer", true);
 	mem->size = size;
 	if (mem->area < B_OK) {
 		free(mem);
@@ -252,7 +252,7 @@ emuxki_pmem_alloc(emuxki_dev *card, size_t size)
 	uint32      j, *ptb, silentpage;
 
 	ptb = card->ptb_log_base;
-	silentpage = ((uint32)card->silentpage_phy_base) << 1;
+	silentpage = card->silentpage_phy_base << 1;
 	numblocks = size / EMU_PTESIZE;
 	if (size % EMU_PTESIZE)
 		numblocks++;
@@ -269,24 +269,24 @@ emuxki_pmem_alloc(emuxki_dev *card, size_t size)
 				    != silentpage)
 					break;
 			if (j == numblocks) {
-				PRINT(("emuxki_pmem_alloc : j == numblocks %ld\n", j));
+				PRINT(("emuxki_pmem_alloc : j == numblocks %" B_PRIu32 "\n",
+					j));
 				if ((mem = emuxki_mem_new(card, i, size)) == NULL) {
 					//splx(s);
 					return (NULL);
 				}
 				PRINT(("emuxki_pmem_alloc : j == numblocks emuxki_mem_new ok\n"));
-				for (j = 0; j < numblocks; j++)
-					ptb[i + j] = B_HOST_TO_LENDIAN_INT32((uint32) (
-						(( ((uint32)mem->phy_base) +
-						 j * EMU_PTESIZE) << 1)
-						| (i + j)));
+				for (j = 0; j < numblocks; j++) {
+					ptb[i + j] = B_HOST_TO_LENDIAN_INT32(
+						(uint32)((mem->phy_base + j * EMU_PTESIZE) << 1) | (i + j));
+				}
 				LIST_INSERT_HEAD(&(card->mem), mem, next);
 				PRINT(("emuxki_pmem_alloc : j == numblocks returning\n"));
 
 				//splx(s);
 				return mem->log_base;
 			} else {
-				PRINT(("emuxki_pmem_alloc : j != numblocks %ld\n", j));
+				PRINT(("emuxki_pmem_alloc : j != numblocks %" B_PRIu32 "\n", j));
 				i += j;
 			}
 			//splx(s);
@@ -322,7 +322,7 @@ emuxki_mem_free(emuxki_dev *card, void *ptr)
 	uint32      	i, *ptb, silentpage;
 
 	ptb = card->ptb_log_base;
-	silentpage = ((uint32)card->silentpage_phy_base) << 1;
+	silentpage = (card->silentpage_phy_base) << 1;
 	LOG(("emuxki_mem_free 1\n"));
 	LIST_FOREACH(mem, &card->mem, next) {
 		LOG(("emuxki_mem_free 2\n"));
@@ -540,7 +540,7 @@ emuxki_channel_commit_parms(emuxki_channel *chan)
 
 	start = chan->loop.start +
 		(voice->stereo ? 28 : 30) * (voice->b16 + 1);
-	mapval = ((uint32)card->silentpage_phy_base) << 1 | EMU_CHAN_MAP_PTI_MASK;
+	mapval = (card->silentpage_phy_base) << 1 | EMU_CHAN_MAP_PTI_MASK;
 
 	//s = splaudio();
 	emuxki_chan_write(&card->config, chano, EMU_CHAN_CPF_STEREO, voice->stereo);
@@ -1194,7 +1194,7 @@ emuxki_voice_commit_parms(emuxki_voice *voice)
 			default:
 				return B_ERROR;
 		}
-		emuxki_chan_write(&voice->stream->card->config, 0, buffaddr_reg, (uint32)voice->buffer->phy_base);
+		emuxki_chan_write(&voice->stream->card->config, 0, buffaddr_reg, voice->buffer->phy_base);
 		emuxki_chan_write(&voice->stream->card->config, 0, buffsize_reg, EMU_RECBS_BUFSIZE_NONE);
 		emuxki_chan_write(&voice->stream->card->config, 0, buffsize_reg, EMU_RECBS_BUFSIZE_4096);
 
@@ -1310,7 +1310,8 @@ emuxki_voice_adc_rate(emuxki_voice *voice)
 			if (IS_AUDIGY(&voice->stream->card->config))
 				return EMU_A_ADCCR_SAMPLERATE_12;
 			else
-				PRINT(("recording sample_rate not supported : %lu\n", voice->sample_rate));
+				PRINT(("recording sample_rate not supported : %" B_PRIu32 "\n",
+					voice->sample_rate));
 			break;
 		case 11000:
 			if (IS_AUDIGY(&voice->stream->card->config))
@@ -1325,7 +1326,8 @@ emuxki_voice_adc_rate(emuxki_voice *voice)
 				return EMU_ADCCR_SAMPLERATE_8;
 			break;
 		default:
-			PRINT(("recording sample_rate not supported : %lu\n", voice->sample_rate));
+			PRINT(("recording sample_rate not supported : %" B_PRIu32 "\n",
+				voice->sample_rate));
 	}
 	return 0;
 }
@@ -1770,11 +1772,9 @@ emuxki_gpr_set(emuxki_dev *card, emuxki_gpr *gpr, int32 type, float *values)
 			for (i = 0; i < count; i++) {
 				if (values[i]>gpr->max_gain || values[i]<gpr->min_gain)
 					return;
-				index = (int32)(values[i] / gpr->granularity);
+				index = values[i] / gpr->granularity;
 				if (index > sizeof(db_table)/sizeof(db_table[0]))
 					index = sizeof(db_table)/sizeof(db_table[0]);
-				else if (index < 0)
-					index = 0;
 				LOG(("emuxki_set_gpr gpr: %d \n", gpr->gpr + i));
 				LOG(("emuxki_set_gpr values[i]: %g \n", values[i]));
 				LOG(("emuxki_set_gpr index: %u \n", index));
@@ -1808,6 +1808,7 @@ emuxki_gpr_get(emuxki_dev *card, emuxki_gpr *gpr, int32 type, float *values)
 }
 
 
+#if DEBUG > 0
 void
 emuxki_gpr_dump(emuxki_dev * card, uint16 count)
 {
@@ -1821,6 +1822,7 @@ emuxki_gpr_dump(emuxki_dev * card, uint16 count)
 		LOG(("dsp_gpr pc=%x, value=%x\n", pc, value));
 	}
 }
+#endif
 
 
 static emuxki_gpr *
@@ -2147,8 +2149,10 @@ emuxki_setup(emuxki_dev * card)
 	} else if (card->info.device_id == CREATIVELABS_AUDIGY2_VALUE_DEVICE_ID)
 		card->config.type |= TYPE_AUDIGY | TYPE_AUDIGY2 | TYPE_AUDIGY2_VALUE;
 
-	PRINT(("%s deviceid = %#04x chiprev = %x model = %x enhanced at %lx\n", card->name, card->info.device_id,
-		card->info.revision, card->info.u.h0.subsystem_id, card->config.nabmbar));
+	PRINT(("%s deviceid = %#04x chiprev = %x model = %x "
+		"enhanced at %" B_PRIx32 "\n",
+		card->name, card->info.device_id, card->info.revision,
+		card->info.u.h0.subsystem_id, card->config.nabmbar));
 
 	cmd = (*pci->read_pci_config)(card->info.bus, card->info.device, card->info.function, PCI_command, 2);
 	PRINT(("PCI command before: %x\n", cmd));
@@ -2165,7 +2169,7 @@ emuxki_setup(emuxki_dev * card)
 
 #if MIDI
 	//SBLIVE : EMU_MUDATA, workaround 0, AUDIGY, AUDIGY2: 0, workaround 0x11020004
-	if ((err = (*mpu401->create_device)((card->config.nabmbar + !IS_AUDIGY(&card->config) ? EMU_MUDATA : 0),
+	if ((err = (*mpu401->create_device)((card->config.nabmbar + (!IS_AUDIGY(&card->config) ? EMU_MUDATA : 0)),
 		&card->midi.driver, !IS_AUDIGY(&card->config) ? 0 : 0x11020004, midi_interrupt_op, &card->midi)) < B_OK)
 		return (err);
 
@@ -2191,9 +2195,12 @@ emuxki_setup(emuxki_dev * card)
 	ac97_init(&card->config);
 	ac97_amp_enable(&card->config, true);
 
-	PRINT(("codec vendor id      = %#08lx\n",ac97_get_vendor_id(&card->config)));
-	PRINT(("codec description     = %s\n",ac97_get_vendor_id_description(&card->config)));
-	PRINT(("codec 3d enhancement = %s\n",ac97_get_3d_stereo_enhancement(&card->config)));
+	PRINT(("codec vendor id      = %#08" B_PRIx32 "\n",
+		ac97_get_vendor_id(&card->config)));
+	PRINT(("codec description     = %s\n",
+		ac97_get_vendor_id_description(&card->config)));
+	PRINT(("codec 3d enhancement = %s\n",
+		ac97_get_3d_stereo_enhancement(&card->config)));
 
 	if (IS_AUDIGY2(&card->config)) {
 		emuxki_reg_write_32(&card->config, EMU_A_IOCFG,
@@ -2272,7 +2279,7 @@ emuxki_setup(emuxki_dev * card)
 		}
 	}
 
-	PRINT(("installing interrupt : %lx\n", card->config.irq));
+	PRINT(("installing interrupt : %" B_PRIx32 "\n", card->config.irq));
 	err = install_io_interrupt_handler(card->config.irq, emuxki_int, card, 0);
 	if (err != B_OK) {
 		PRINT(("failed to install interrupt\n"));
@@ -2797,11 +2804,11 @@ emuxki_init(emuxki_dev * card)
 
 	/* allocate memory for our Page Table */
 	card->ptb_area = alloc_mem(&card->ptb_phy_base, &card->ptb_log_base,
-		EMU_MAXPTE * sizeof(uint32), "emuxki ptb");
+		EMU_MAXPTE * sizeof(uint32), "emuxki ptb", false);
 
 	/* This is necessary unless you like Metallic noise... */
 	card->silentpage_area = alloc_mem(&card->silentpage_phy_base, &card->silentpage_log_base,
-		EMU_PTESIZE, "emuxki sp");
+		EMU_PTESIZE, "emuxki sp", false);
 
 	if (card->ptb_area < B_OK || card->silentpage_area < B_OK) {
 		PRINT(("couldn't allocate memory\n"));
@@ -2821,13 +2828,13 @@ emuxki_init(emuxki_dev * card)
 	 * address by one and OR it with the page number. I don't know what
 	 * the ORed index is for, might be a very useful unused feature...
 	 */
-	silentpage = ((uint32)card->silentpage_phy_base) << 1;
+	silentpage = ((uintptr_t)card->silentpage_phy_base) << 1;
 	ptb = card->ptb_log_base;
 	for (i = 0; i < EMU_MAXPTE; i++)
 		ptb[i] = B_HOST_TO_LENDIAN_INT32(silentpage | i);
 
 	/* Write PTB address and set TCB to none */
-	emuxki_chan_write(&card->config, 0, EMU_PTB, (uint32)card->ptb_phy_base);
+	emuxki_chan_write(&card->config, 0, EMU_PTB, (uintptr_t)card->ptb_phy_base);
 	emuxki_chan_write(&card->config, 0, EMU_TCBS, 0);	/* This means 16K TCB */
 	emuxki_chan_write(&card->config, 0, EMU_TCB, 0);	/* No TCB use for now */
 
@@ -2945,7 +2952,8 @@ init_driver(void)
 			}
 #endif
 			if (emuxki_setup(&cards[num_cards])) {
-				PRINT(("Setup of emuxki %ld failed\n", num_cards+1));
+				PRINT(("Setup of emuxki %" B_PRId32 " failed\n",
+					num_cards + 1));
 #ifdef __HAIKU__
 				(*pci->unreserve_device)(info.bus, info.device, info.function,
 					DRIVER_NAME, &cards[num_cards]);

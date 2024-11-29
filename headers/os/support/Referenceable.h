@@ -23,7 +23,7 @@ public:
 			int32				ReleaseReference();
 
 			int32				CountReferences() const
-									{ return fReferenceCount; }
+									{ return atomic_get((int32*)&fReferenceCount); }
 
 protected:
 	virtual	void				FirstReferenceAcquired();
@@ -89,6 +89,11 @@ public:
 			fObject->ReleaseReference();
 			fObject = NULL;
 		}
+	}
+
+	bool IsSet() const
+	{
+		return fObject != NULL;
 	}
 
 	Type* Get() const
@@ -197,6 +202,11 @@ public:
 		fReference.Unset();
 	}
 
+	bool IsSet() const
+	{
+		return fReference.IsSet();
+	}
+
 	const Type* Get() const
 	{
 		return fReference.Get();
@@ -225,17 +235,20 @@ public:
 	BReference& operator=(const BReference<const Type>& other)
 	{
 		fReference = other.fReference;
+		return *this;
 	}
 
 	BReference& operator=(Type* other)
 	{
 		fReference = other;
+		return *this;
 	}
 
 	template<typename OtherType>
 	BReference& operator=(const BReference<OtherType>& other)
 	{
 		fReference = other.Get();
+		return *this;
 	}
 
 	bool operator==(const BReference<const Type>& other) const

@@ -216,8 +216,7 @@ get_relative_directory_path(size_t installationLocationIndex,
 		case B_FIND_PATH_SERVERS_DIRECTORY:
 			return "/servers";
 		case B_FIND_PATH_SETTINGS_DIRECTORY:
-			return installationLocationIndex == kHomeInstallationLocationIndex
-				? "/settings/global" : "/settings";
+			return "/settings";
 		case B_FIND_PATH_SOUNDS_DIRECTORY:
 			return "/data/sounds";
 		case B_FIND_PATH_SPOOL_DIRECTORY:
@@ -557,8 +556,8 @@ internal_path_for_path(char* referencePath, size_t referencePathSize,
 
 	// get the installation location
 	InstallationLocations* installationLocations = InstallationLocations::Get();
-	MethodDeleter<InstallationLocations> installationLocationsDeleter(
-		installationLocations, &InstallationLocations::Put);
+	MethodDeleter<InstallationLocations, void, &InstallationLocations::Put>
+		installationLocationsDeleter(installationLocations);
 
 	size_t installationLocationIndex;
 	const char* installationLocation = installationLocations->LocationFor(
@@ -678,8 +677,8 @@ __find_paths_etc(const char* architecture, path_base_directory baseDirectory,
 
 	// get the installation locations
 	InstallationLocations* installationLocations = InstallationLocations::Get();
-	MethodDeleter<InstallationLocations> installationLocationsDeleter(
-		installationLocations, &InstallationLocations::Put);
+	MethodDeleter<InstallationLocations, void, &InstallationLocations::Put>
+		installationLocationsDeleter(installationLocations);
 
 	// Get the relative paths and compute the total size to allocate.
 	const char* relativePaths[InstallationLocations::kCount];
@@ -756,8 +755,8 @@ __guess_secondary_architecture_from_path(const char* path,
 
 	// get an installation location relative path
 	InstallationLocations* installationLocations = InstallationLocations::Get();
-	MethodDeleter<InstallationLocations> installationLocationsDeleter(
-		installationLocations, &InstallationLocations::Put);
+	MethodDeleter<InstallationLocations, void, &InstallationLocations::Put>
+		installationLocationsDeleter(installationLocations);
 
 	size_t installationLocationIndex;
 	const char* installationLocation = installationLocations->LocationFor(

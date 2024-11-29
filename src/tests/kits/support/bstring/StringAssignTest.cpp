@@ -32,6 +32,17 @@ StringAssignTest::PerformTest(void)
 	CPPUNIT_ASSERT(strcmp(str->String(), "Something Else") == 0);
 	delete str;
 
+	// =(BString&&)
+#if __cplusplus >= 201103L
+	NextSubTest();
+	BString movableString("Something movable");
+	str = new BString();
+	*str = std::move(movableString);
+	CPPUNIT_ASSERT(strcmp(str->String(), "Something movable") == 0);
+	CPPUNIT_ASSERT(strcmp(movableString.String(), "") == 0);
+	delete str;
+#endif
+
 	// char ptr is NULL
 	NextSubTest();
 	char *s = NULL;
@@ -99,6 +110,14 @@ StringAssignTest::PerformTest(void)
 	delete str;
 
 #ifndef TEST_R5
+	// TODO: The following test cases only work with hoard2, which will not
+	// allow allocations via malloc() larger than the largest size-class
+	// (see threadHeap::malloc(size_t). Other malloc implementations like
+	// rpmalloc will allow arbitrarily large allocations via create_area().
+	//
+	// This test should be made more robust by breaking the dependency on
+	// the allocator to simulate failures in another way. This may require
+	// a tricky build configuration to avoid breaking the ABI of BString.
 	const int32 OUT_OF_MEM_VAL = 2 * 1000 * 1000 * 1000;
 	// SetTo(char, int32) with excessive length:
 	NextSubTest();

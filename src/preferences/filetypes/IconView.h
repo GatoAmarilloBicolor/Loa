@@ -1,5 +1,5 @@
 /*
- * Copyright 2006, Axel Dörfler, axeld@pinc-software.de. All rights reserved.
+ * Copyright 2006-2024, Axel Dörfler, axeld@pinc-software.de. All rights reserved.
  * Distributed under the terms of the MIT License.
  */
 #ifndef ICON_VIEW_H
@@ -61,7 +61,7 @@ public:
 			void				AdoptMini(BBitmap* mini);
 			void				AdoptData(uint8* data, size_t size);
 
-	static	BBitmap*			AllocateBitmap(int32 size, int32 space = -1);
+	static	BBitmap*			AllocateBitmap(icon_size size, int32 space = -1);
 
 private:
 			BBitmap*			fLarge;
@@ -105,7 +105,7 @@ public:
 			void				Unset();
 			void				Update();
 
-			void				SetIconSize(int32 size);
+			void				SetIconSize(icon_size size);
 			void				ShowIconHeap(bool show);
 			void				ShowEmptyFrame(bool show);
 			status_t			SetTarget(const BMessenger& target);
@@ -113,7 +113,7 @@ public:
 			status_t			Invoke(BMessage* message = NULL);
 
 			::Icon*				Icon();
-			int32				IconSize() const { return fIconSize; }
+			icon_size			IconSize() const { return fIconSize; }
 			icon_source			IconSource() const { return fSource; }
 			status_t			GetRef(entry_ref& ref) const;
 			status_t			GetMimeType(BMimeType& type) const;
@@ -144,16 +144,17 @@ private:
 
 			BMessenger			fTarget;
 			BMessage*			fModificationMessage;
-			int32				fIconSize;
-			BBitmap*			fIcon;
-			BBitmap*			fHeapIcon;
+			icon_size			fIconSize;
+			BRect				fIconRect;
+			BBitmap*			fIconBitmap;
+			BBitmap*			fHeapIconBitmap;
 
 			bool				fHasRef;
 			bool				fHasType;
 			entry_ref			fRef;
 			BMimeType			fType;
 			icon_source			fSource;
-			::Icon*				fIconData;
+			::Icon*				fIcon;
 
 			BPoint				fDragPoint;
 			bool				fTracking;

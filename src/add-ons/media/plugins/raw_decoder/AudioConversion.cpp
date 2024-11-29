@@ -106,7 +106,7 @@ public:
 	inline operator uint8() const { int32 v = (int32)(data * 127.0f) + 128; if (v > 255) v = 255; else if (v < 0) v = 0; return v; }
 	inline operator int8()  const { int32 v = (int32)(data * 127.0f); if (v > 127) v = 127; else if (v < -127) v = -127; return v; }
 	inline operator int16() const { int32 v = (int32)(data * 32767.0f); if (v > 32767) v = 32767; else if (v < -32767) v = -32767; return v; }
-	inline operator int32() const { float32 v; if (data < -1.0f) v = -1.0f; else if (data > 1.0f) v = 1.0f; else v = data; return (int32)(v * 2147483647.0f); }
+	inline operator int32() const { if (data <= -1.0f) return INT32_MIN; if (data >= 1.0f) return INT32_MAX; return (int32)(data * INT32_MAX); }
 	inline operator float() const { return data; }
 private:
 	float32 data;
@@ -118,7 +118,7 @@ public:
 	inline operator uint8() const { int32 v = (int32)(data * 127.0f) + 128; if (v > 255) v = 255; else if (v < 0) v = 0; return v; }
 	inline operator int8()  const { int32 v = (int32)(data * 127.0f); if (v > 127) v = 127; else if (v < -127) v = -127; return v; }
 	inline operator int16() const { int32 v = (int32)(data * 32767.0f); if (v > 32767) v = 32767; else if (v < -32767) v = -32767; return v; }
-	inline operator int32() const { float64 v; if (data < -1.0) v = -1.0; else if (data > 1.0) v = 1.0; else v = data; return (int32)(v * 2147483647.0f); }
+	inline operator int32() const { float64 v; if (data < -1.0) v = -1.0; else if (data > 1.0) v = 1.0; else v = data; return (int32)(v * INT32_MAX); }
 	inline operator float() const { return data; }
 private:
 	float64 data;
@@ -127,9 +127,9 @@ private:
 #define CONVERT(src_type, dst_type)				\
 void src_type##_to_##dst_type (void *dst, const void *src, int32 count) \
 {												\
-	register const src_type##_sample *s = (const src_type##_sample *) src;	\
-	register dst_type *d = (dst_type *) dst;	\
-	register int32 c = count >> 4;				\
+	const src_type##_sample *s = (const src_type##_sample *) src;	\
+	dst_type *d = (dst_type *) dst;	\
+	int32 c = count >> 4;				\
 	if (!c) goto fin1;							\
 	do {										\
 		d[0] = s[0]; d[1] = s[1];				\
@@ -204,12 +204,12 @@ swap_int16(void *data, int32 count)
 void
 swap_int24(void *data, int32 count)
 {
-	register int32 c = count;
-	register uint8 *d = (uint8 *)data;
+	int32 c = count;
+	uint8 *d = (uint8 *)data;
 	if (!c)
 		return;
 	do {
-		register uint8 temp = d[0];
+		uint8 temp = d[0];
 		d[0] = d[2];
 		d[2] = temp;
 		d += 3;

@@ -31,7 +31,12 @@
 
 #include <OS.h>
 #include <MediaDefs.h>
+#include <stdlib.h>
+#include <string.h>
 #include <strings.h>
+
+#include <kernel.h>
+
 #include "hmulti_audio.h"
 #include "multi.h"
 #include "ac97.h"
@@ -195,7 +200,7 @@ emuxki_parameter_set_mix(void *card, const void *cookie, int32 type, float *valu
 }
 
 static int32
-emuxki_create_group_control(multi_dev *multi, int32 *index, int32 parent,
+emuxki_create_group_control(multi_dev *multi, uint32 *index, int32 parent,
 	int32 string, const char* name) {
 	int32 i = *index;
 	(*index)++;
@@ -211,7 +216,7 @@ emuxki_create_group_control(multi_dev *multi, int32 *index, int32 parent,
 }
 
 static void
-emuxki_create_gpr_control(multi_dev *multi, int32 *index, int32 parent, int32 string,
+emuxki_create_gpr_control(multi_dev *multi, uint32 *index, int32 parent, int32 string,
 	const emuxki_gpr *gpr) {
 	int32 i = *index, id;
 	multi_mixer_control control;
@@ -515,7 +520,7 @@ emuxki_create_controls_list(multi_dev *multi)
 	}
 
 	multi->control_count = index;
-	PRINT(("multi->control_count %lu\n", multi->control_count));
+	PRINT(("multi->control_count %" B_PRIu32 "\n", multi->control_count));
 	return B_OK;
 }
 
@@ -528,7 +533,8 @@ emuxki_get_mix(emuxki_dev *card, multi_mix_value_info * mmvi)
 	for (i = 0; i < mmvi->item_count; i++) {
 		id = mmvi->values[i].id - EMU_MULTI_CONTROL_FIRSTID;
 		if (id < 0 || id >= card->multi.control_count) {
-			PRINT(("emuxki_get_mix : invalid control id requested : %li\n", id));
+			PRINT(("emuxki_get_mix : "
+				"invalid control id requested : %" B_PRIi32 "\n", id));
 			continue;
 		}
 		control = &card->multi.controls[id];
@@ -568,7 +574,8 @@ emuxki_set_mix(emuxki_dev *card, multi_mix_value_info * mmvi)
 	for (i = 0; i < mmvi->item_count; i++) {
 		id = mmvi->values[i].id - EMU_MULTI_CONTROL_FIRSTID;
 		if (id < 0 || id >= card->multi.control_count) {
-			PRINT(("emuxki_set_mix : invalid control id requested : %li\n", id));
+			PRINT(("emuxki_set_mix : "
+				"invalid control id requested : %" B_PRIi32 "\n", id));
 			continue;
 		}
 		control = &card->multi.controls[id];
@@ -578,7 +585,8 @@ emuxki_set_mix(emuxki_dev *card, multi_mix_value_info * mmvi)
 			if (i+1<mmvi->item_count) {
 				id = mmvi->values[i + 1].id - EMU_MULTI_CONTROL_FIRSTID;
 				if (id < 0 || id >= card->multi.control_count) {
-					PRINT(("emuxki_set_mix : invalid control id requested : %li\n", id));
+					PRINT(("emuxki_set_mix : "
+						"invalid control id requested : %" B_PRIi32 "\n", id));
 				} else {
 					control2 = &card->multi.controls[id];
 					if (control2->mix_control.master != control->mix_control.id)
@@ -921,33 +929,60 @@ emuxki_get_buffers(emuxki_dev *card, multi_buffer_list *data)
 	data->return_playback_channels = pchannels + pchannels2;		/* playback_buffers[][c] */
 	data->return_playback_buffer_size = current_settings.buffer_frames;		/* frames */
 
-	for (i = 0; i < current_settings.buffer_count; i++)
+	for (i = 0; i < current_settings.buffer_count; i++) {
+		struct buffer_desc descs[pchannels];
 		for (j=0; j<pchannels; j++)
 			emuxki_stream_get_nth_buffer(card->pstream, j, i,
-				&data->playback_buffers[i][j].base,
-				&data->playback_buffers[i][j].stride);
-
-	for (i = 0; i < current_settings.buffer_count; i++)
+				&descs[j].base,
+				&descs[j].stride);
+		if (!IS_USER_ADDRESS(data->playback_buffers[i])
+			|| user_memcpy(data->playback_buffers[i], descs, sizeof(descs))
+			< B_OK) {
+			return B_BAD_ADDRESS;
+		}
+	}
+	for (i = 0; i < current_settings.buffer_count; i++) {
+		struct buffer_desc descs[pchannels2];
 		for (j=0; j<pchannels2; j++)
 			emuxki_stream_get_nth_buffer(card->pstream2, j, i,
-				&data->playback_buffers[i][pchannels + j].base,
-				&data->playback_buffers[i][pchannels + j].stride);
+				&descs[j].base,
+				&descs[j].stride);
+		if (!IS_USER_ADDRESS(data->playback_buffers[i])
+			|| user_memcpy(&data->playback_buffers[i][pchannels], descs, sizeof(descs))
+			< B_OK) {
+			return B_BAD_ADDRESS;
+		}
+	}
 
 	data->return_record_buffers = current_settings.buffer_count;
 	data->return_record_channels = rchannels + rchannels2;
 	data->return_record_buffer_size = current_settings.buffer_frames;	/* frames */
 
-	for (i = 0; i < current_settings.buffer_count; i++)
+	for (i = 0; i < current_settings.buffer_count; i++) {
+		struct buffer_desc descs[rchannels];
 		for (j=0; j<rchannels; j++)
 			emuxki_stream_get_nth_buffer(card->rstream, j, i,
-				&data->record_buffers[i][j].base,
-				&data->record_buffers[i][j].stride);
+				&descs[j].base,
+				&descs[j].stride);
+		if (!IS_USER_ADDRESS(data->record_buffers[i])
+			|| user_memcpy(data->record_buffers[i], descs, sizeof(descs))
+			< B_OK) {
+			return B_BAD_ADDRESS;
+		}
+	}
 
-	for (i = 0; i < current_settings.buffer_count; i++)
+	for (i = 0; i < current_settings.buffer_count; i++) {
+		struct buffer_desc descs[rchannels2];
 		for (j=0; j<rchannels2; j++)
 			emuxki_stream_get_nth_buffer(card->rstream2, j, i,
-				&data->record_buffers[i][rchannels + j].base,
-				&data->record_buffers[i][rchannels + j].stride);
+				&descs[j].base,
+				&descs[j].stride);
+		if (!IS_USER_ADDRESS(data->record_buffers[i])
+			|| user_memcpy(&data->record_buffers[i][rchannels], descs, sizeof(descs))
+			< B_OK) {
+			return B_BAD_ADDRESS;
+		}
+	}
 
 	return B_OK;
 }

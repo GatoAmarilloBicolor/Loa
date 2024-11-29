@@ -10,6 +10,8 @@
 
 #include "usb_private.h"
 
+#include <StackOrHeapArray.h>
+
 
 Device::Device(Object* parent, int8 hubAddress, uint8 hubPort,
 	usb_device_descriptor& desc, int8 deviceAddress, usb_speed speed,
@@ -26,7 +28,8 @@ Device::Device(Object* parent, int8 hubAddress, uint8 hubPort,
 	fDeviceAddress(deviceAddress),
 	fHubAddress(hubAddress),
 	fHubPort(hubPort),
-	fControllerCookie(controllerCookie)
+	fControllerCookie(controllerCookie),
+	fNode(NULL)
 {
 	TRACE("creating device\n");
 
@@ -254,6 +257,27 @@ Device::Device(Object* parent, int8 hubAddress, uint8 hubPort,
 					break;
 				}
 
+				case USB_DESCRIPTOR_ENDPOINT_SS_COMPANION: {
+					if (currentInterface != NULL) {
+						usb_endpoint_descriptor* desc
+							= currentInterface->endpoint[
+								currentInterface->endpoint_count - 1].descr;
+						if ((uint8*)desc != (&configData[descriptorStart
+								- desc->length])) {
+							TRACE_ERROR("found endpoint companion descriptor "
+								"not immediately following endpoint "
+								"descriptor, ignoring!\n");
+							break;
+						}
+						// TODO: It'd be nicer if we could store the endpoint
+						// companion descriptor along with the endpoint
+						// descriptor, but as the interface struct is public
+						// API, that would be an ABI break.
+					}
+
+					// fall through
+				}
+
 				default:
 					TRACE("got generic descriptor\n");
 					usb_generic_descriptor* genericDescriptor
@@ -305,6 +329,55 @@ Device::Device(Object* parent, int8 hubAddress, uint8 hubPort,
 
 Device::~Device()
 {
+	if (fNode != NULL) {
+		status_t error = gDeviceManager->unregister_node(fNode);
+		if (error != B_OK && error != B_BUSY)
+			TRACE_ERROR("failed to unregister device node\n");
+		fNode = NULL;
+	}
+
+	// Destroy open endpoints. Do not send a device request to unconfigure
+	// though, since we may be deleted because the device was unplugged already.
+	Unconfigure(false);
+
+	// Destroy all Interfaces in the Configurations hierarchy.
+	for (int32 i = 0; fConfigurations != NULL
+			&& i < fDeviceDescriptor.num_configurations; i++) {
+		usb_configuration_info* configuration = &fConfigurations[i];
+		if (configuration == NULL || configuration->interface == NULL)
+			continue;
+
+		for (size_t j = 0; j < configuration->interface_count; j++) {
+			usb_interface_list* interfaceList = &configuration->interface[j];
+			if (interfaceList->alt == NULL)
+				continue;
+
+			for (size_t k = 0; k < interfaceList->alt_count; k++) {
+				usb_interface_info* interface = &interfaceList->alt[k];
+				Interface* interfaceObject =
+					(Interface*)GetStack()->GetObject(interface->handle);
+				interface->handle = 0;
+				if (interfaceObject != NULL)
+					interfaceObject->ReleaseReference();
+				delete interfaceObject;
+			}
+		}
+	}
+
+	if (fDefaultPipe != NULL) {
+		fDefaultPipe->PutUSBID(false);
+
+		// Also put our ID to prevent further transfers on the default pipe
+		// from being queued. (We have to do this after putting the pipe's ID,
+		// since we are its parent.)
+		PutUSBID(false);
+
+		fDefaultPipe->CancelQueuedTransfers(true);
+		fDefaultPipe->WaitForIdle();
+	}
+
+	// Ensure we are gone from the stack before deleting public structures.
+	PutUSBID(true);
 	delete fDefaultPipe;
 
 	if (fConfigurations == NULL) {
@@ -312,12 +385,7 @@ Device::~Device()
 		return;
 	}
 
-	// Destroy open endpoints. Do not send a device request to unconfigure
-	// though, since we may be deleted because the device was unplugged
-	// already.
-	Unconfigure(false);
-
-	// Free all allocated resources
+	// Free the Configurations hierarchy.
 	for (int32 i = 0; i < fDeviceDescriptor.num_configurations; i++) {
 		usb_configuration_info* configuration = &fConfigurations[i];
 		if (configuration == NULL)
@@ -334,7 +402,6 @@ Device::~Device()
 
 			for (size_t k = 0; k < interfaceList->alt_count; k++) {
 				usb_interface_info* interface = &interfaceList->alt[k];
-				delete (Interface*)GetStack()->GetObject(interface->handle);
 				free(interface->endpoint);
 				free(interface->generic);
 			}
@@ -472,6 +539,30 @@ Device::InitEndpoints(int32 interfaceIndex)
 			usb_endpoint_info* endpoint = &interfaceInfo->endpoint[i];
 			Pipe* pipe = NULL;
 
+			usb_endpoint_ss_companion_descriptor* comp_descr = NULL;
+			if (fSpeed >= USB_SPEED_SUPERSPEED) {
+				// We should have a companion descriptor for this device.
+				// Let's find it: it'll be the "i"th one.
+				size_t k = 0;
+				for (size_t j = 0; j < interfaceInfo->generic_count; j++) {
+					usb_descriptor* desc = interfaceInfo->generic[j];
+					if (desc->endpoint.descriptor_type
+							!= USB_DESCRIPTOR_ENDPOINT_SS_COMPANION) {
+						continue;
+					}
+					if (k == i) {
+						comp_descr =
+							(usb_endpoint_ss_companion_descriptor*)desc;
+						break;
+					}
+					k++;
+				}
+				if (comp_descr == NULL) {
+					TRACE_ERROR("SuperSpeed device without an endpoint companion "
+						"descriptor!");
+				}
+			}
+
 			Pipe::pipeDirection direction = Pipe::Out;
 			if ((endpoint->descr->endpoint_address & 0x80) != 0)
 				direction = Pipe::In;
@@ -505,6 +596,10 @@ Device::InitEndpoints(int32 interfaceIndex)
 				endpoint->descr->endpoint_address & 0x0f,
 				fSpeed, direction, endpoint->descr->max_packet_size,
 				endpoint->descr->interval, fHubAddress, fHubPort);
+			if (comp_descr != NULL) {
+				pipe->InitSuperSpeed(comp_descr->max_burst,
+					comp_descr->bytes_per_interval);
+			}
 			endpoint->handle = pipe->USBID();
 		}
 	}
@@ -555,7 +650,10 @@ Device::ClearEndpoints(int32 interfaceIndex)
 
 		for (size_t i = 0; i < interfaceInfo->endpoint_count; i++) {
 			usb_endpoint_info* endpoint = &interfaceInfo->endpoint[i];
-			delete (Pipe*)GetStack()->GetObject(endpoint->handle);
+			Pipe* pipe = (Pipe*)GetStack()->GetObject(endpoint->handle);
+			if (pipe != NULL)
+				pipe->ReleaseReference();
+			delete pipe;
 			endpoint->handle = 0;
 		}
 	}
@@ -743,4 +841,114 @@ Device::GetStatus(uint16* status)
 	return fDefaultPipe->SendRequest(
 		USB_REQTYPE_STANDARD | USB_REQTYPE_DEVICE_IN,
 		USB_REQUEST_GET_STATUS, 0, 0, 2, (void*)status, 2, NULL);
+}
+
+
+device_node*
+Device::RegisterNode(device_node *parent)
+{
+	usb_id id = USBID();
+	if (parent == NULL)
+		parent = ((Device*)Parent())->Node();
+
+	// determine how many attributes we will need
+	uint32 deviceAttrTotal = 1;
+	for (uint32 j = 0; j < fDeviceDescriptor.num_configurations; j++) {
+		for (uint32 k = 0; k < fConfigurations[j].interface_count; k++) {
+			for (uint32 l = 0; l < fConfigurations[j].interface[k].alt_count; l++) {
+				deviceAttrTotal += 3;
+			}
+		}
+	}
+
+	BStackOrHeapArray<device_attr, 16> attrs(deviceAttrTotal + 4 + 5);
+	attrs[0] = { B_DEVICE_BUS, B_STRING_TYPE, { .string = "usb" } };
+
+	// location
+	attrs[1] = { USB_DEVICE_ID_ITEM, B_UINT32_TYPE, { .ui32 = id } };
+	attrs[2] = { B_DEVICE_FLAGS, B_UINT32_TYPE, { .ui32 = B_FIND_MULTIPLE_CHILDREN } };
+	attrs[3] = { B_DEVICE_PRETTY_NAME, B_STRING_TYPE, { .string = "USB device" } };
+
+	uint32 attrCount = 4;
+
+	if (fDeviceDescriptor.vendor_id != 0) {
+		attrs[attrCount].name = B_DEVICE_VENDOR_ID;
+		attrs[attrCount].type = B_UINT16_TYPE;
+		attrs[attrCount].value.ui16 = fDeviceDescriptor.vendor_id;
+		attrCount++;
+
+		attrs[attrCount].name = B_DEVICE_ID;
+		attrs[attrCount].type = B_UINT16_TYPE;
+		attrs[attrCount].value.ui16 = fDeviceDescriptor.product_id;
+		attrCount++;
+	}
+
+	uint32 attrClassesIndex = attrCount;
+
+	if (fDeviceDescriptor.device_class != 0) {
+		attrs[attrCount].name = USB_DEVICE_CLASS;
+		attrs[attrCount].type = B_UINT8_TYPE;
+		attrs[attrCount].value.ui8 = fDeviceDescriptor.device_class;
+		attrCount++;
+
+		attrs[attrCount].name = USB_DEVICE_SUBCLASS;
+		attrs[attrCount].type = B_UINT8_TYPE;
+		attrs[attrCount].value.ui8 = fDeviceDescriptor.device_subclass;
+		attrCount++;
+
+		attrs[attrCount].name = USB_DEVICE_PROTOCOL;
+		attrs[attrCount].type = B_UINT8_TYPE;
+		attrs[attrCount].value.ui8 = fDeviceDescriptor.device_protocol;
+		attrCount++;
+	}
+
+	for (uint32 j = 0; j < fDeviceDescriptor.num_configurations; j++) {
+		for (uint32 k = 0; k < fConfigurations[j].interface_count; k++) {
+			for (uint32 l = 0; l < fConfigurations[j].interface[k].alt_count; l++) {
+				usb_interface_descriptor* descriptor
+					= fConfigurations[j].interface[k].alt[l].descr;
+				bool found = false;
+				for (uint32 i = attrClassesIndex; i < attrCount;) {
+					if (attrs[i++].value.ui8 != descriptor->interface_class)
+						continue;
+					if (attrs[i++].value.ui8 != descriptor->interface_subclass)
+						continue;
+					if (attrs[i++].value.ui8 != descriptor->interface_protocol)
+						continue;
+					found = true;
+					break;
+				}
+				if (found)
+					continue;
+
+				attrs[attrCount].name = USB_DEVICE_CLASS;
+				attrs[attrCount].type = B_UINT8_TYPE;
+				attrs[attrCount].value.ui8 = descriptor->interface_class;
+				attrCount++;
+
+				attrs[attrCount].name = USB_DEVICE_SUBCLASS;
+				attrs[attrCount].type = B_UINT8_TYPE;
+				attrs[attrCount].value.ui8 = descriptor->interface_subclass;
+				attrCount++;
+
+				attrs[attrCount].name = USB_DEVICE_PROTOCOL;
+				attrs[attrCount].type = B_UINT8_TYPE;
+				attrs[attrCount].value.ui8 = descriptor->interface_protocol;
+				attrCount++;
+			}
+		}
+	}
+
+	attrs[attrCount].name = NULL;
+	attrs[attrCount].type = 0;
+	attrs[attrCount].value.string = NULL;
+	attrCount++;
+
+	device_node* node = NULL;
+	if (gDeviceManager->register_node(parent, USB_DEVICE_MODULE_NAME, attrs,
+			NULL, &node) != B_OK) {
+		TRACE_ERROR("failed to register device node\n");
+	} else
+		fNode = node;
+	return node;
 }

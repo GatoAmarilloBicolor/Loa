@@ -1,4 +1,7 @@
 /*
+ * Copyright 2022-2023, Haiku Inc. All rights reserved.
+ * Distributed under the terms of the MIT License.
+ *
  * Copyright 2009, Wischert, johanneswi@gmail.com.
  * All rights reserved. Distributed under the terms of the MIT License.
  *
@@ -7,26 +10,14 @@
  */
 
 #include <arch/arm/arch_cpu.h>
+#include <arch/arm/arch_cpu_defs.h>
 
 #include <asm_defs.h>
 
 #include "asm_offsets.h"
+#include "syscall_numbers.h"
 
 .text
-
-
-/* int mmu_read_c1(void); */
-FUNCTION(mmu_read_c1):
-	mrc	p15, 0, r0, c1, c0, 0
-	bx	lr
-FUNCTION_END(mmu_read_c1)
-
-
-/* void mmu_write_c1(int val); */
-FUNCTION(mmu_write_c1):
-	mcr	p15, 0, r0, c1, c0, 0
-	bx	lr
-FUNCTION_END(mmu_write_c1)
 
 
 /* NOTE: the I bit in cpsr (bit 7) is *set* to disable... */
@@ -83,25 +74,24 @@ FUNCTION(arm_context_switch):
 FUNCTION_END(arm_context_switch)
 
 
-/* addr_t arm_get_fsr(void); */
-FUNCTION(arm_get_fsr):
-	mrc	p15, 0, r0, c5, c0, 0		@ get FSR
-	bx	lr
-FUNCTION_END(arm_get_fsr)
+/* void arm_save_fpu(struct arch_fpu_context* context); */
+FUNCTION(arm_save_fpu):
+	fstmiad		r0!, {d0-d15}
+	fstmiad		r0!, {d16-d31}
+	vmrs		r1, fpscr
+	str			r1, [r0]
+	bx			lr
+FUNCTION_END(arm_save_fpu)
 
 
-/* addr_t arm_get_far(void); */
-FUNCTION(arm_get_far):
-	mrc	p15, 0, r0, c6, c0, 0		@ get FAR
-	bx	lr
-FUNCTION_END(arm_get_far)
-
-
-/* addr_t arm_get_fp(void); */
-FUNCTION(arm_get_fp):
-	mov	r0, fp				@ get framepointer
-	bx	lr
-FUNCTION_END(arm_get_fp);
+/* void arm_restore_fpu(struct arch_fpu_context* context); */
+FUNCTION(arm_restore_fpu):
+	fldmiad		r0!, {d0-d15}
+	fldmiad		r0!, {d16-d31}
+	ldr			r1, [r0]
+	vmsr		fpscr, r1
+	bx			lr
+FUNCTION_END(arm_restore_fpu)
 
 
 /* status_t arch_cpu_user_memcpy(void *to, const void *from, size_t size, addr_t *faultHandler) */
@@ -253,3 +243,42 @@ FUNCTION(arch_debug_call_with_fault_handler):
 	mov	r1, #1
 	b	longjmp
 FUNCTION_END(arch_debug_call_with_fault_handler)
+
+
+FUNCTION(arch_return_to_userland):
+	// set SPSR to user mode, IRQ enabled, FIQ disabled
+	mrs		ip, cpsr
+	bic		ip, ip, #(CPSR_MODE_MASK | CPSR_T | CPSR_F | CPSR_I)
+	orr		ip, ip, #(CPSR_MODE_USR | CPSR_F)
+	msr		spsr, ip
+
+	// use system mode to load user mode SP and LR
+	ldr		r4, [r0, #IFRAME_usr_sp]
+	ldr		r5, [r0, #IFRAME_usr_lr]
+	mrs		ip, cpsr
+	bic		ip, ip, #(CPSR_MODE_MASK)
+	orr		ip, ip, #(CPSR_MODE_SYS)
+	msr		cpsr, ip
+	mov		sp, r4
+	mov		lr, r5
+	bic		ip, ip, #(CPSR_MODE_MASK)
+	orr		ip, ip, #(CPSR_MODE_SVC)
+	msr		cpsr, ip
+
+	// load user mode entry point in LR
+	ldr		lr, [r0, #IFRAME_pc]
+
+	// load general purpose registers
+	mov		sp, r0
+	add		sp, sp, #4
+	ldmfd	sp!, { r0-r12 }
+
+	// jump to user mode entry point
+	movs	pc, lr
+FUNCTION_END(arch_return_to_userland)
+
+
+FUNCTION(arch_user_thread_exit):
+	svc		SYSCALL_EXIT_THREAD
+	bx		lr
+FUNCTION_END(arch_user_thread_exit)

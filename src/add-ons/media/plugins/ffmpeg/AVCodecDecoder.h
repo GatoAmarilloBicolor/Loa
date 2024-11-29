@@ -22,8 +22,10 @@ extern "C" {
 	#include "avfilter.h"
 	#include "buffersink.h"
 	#include "buffersrc.h"
+	#include "imgutils.h"
 	#include "swresample.h"
 	#include "swscale.h"
+	#include "timestamp.h"
 }
 
 
@@ -34,7 +36,7 @@ extern "C" {
 #include "gfx_util.h"
 
 
-#ifdef __x86_64
+#if 1
 #define USE_SWS_FOR_COLOR_SPACE_CONVERSION 1
 #else
 #define USE_SWS_FOR_COLOR_SPACE_CONVERSION 0
@@ -101,8 +103,8 @@ private:
 			// video deinterlace filter graph
 			status_t	_InitFilterGraph(enum AVPixelFormat pixfmt,
 							int32 width, int32 height);
-			status_t	_ProcessFilterGraph(AVPicture *dst,
-							const AVPicture *src, enum AVPixelFormat pixfmt,
+			status_t	_ProcessFilterGraph(AVFrame *dst,
+							const AVFrame *src, enum AVPixelFormat pixfmt,
 							int32 width, int32 height);
 
 			media_header		fHeader;
@@ -115,7 +117,7 @@ private:
 			bool				fIsAudio;
 
 			// FFmpeg related members
-			AVCodec*			fCodec;
+			const AVCodec*		fCodec;
 			AVCodecContext*		fCodecContext;
 			SwrContext*			fResampleContext;
 			uint8_t*			fDecodedData;
@@ -138,6 +140,7 @@ private:
 			color_space			fOutputColorSpace;
 			int32				fOutputFrameCount;
 			float				fOutputFrameRate;
+									// only for audio streams
 			int					fOutputFrameSize;
 									// sample size * channel count
 			int					fInputFrameSize;
@@ -152,7 +155,7 @@ private:
 			int32				fDecodedDataBufferOffset;
 			int32				fDecodedDataBufferSize;
 
-			AVPacket			fTempPacket;
+			AVPacket*			fTempPacket;
 
 			// video deinterlace feature
 			AVFilterContext*	fBufferSinkContext;

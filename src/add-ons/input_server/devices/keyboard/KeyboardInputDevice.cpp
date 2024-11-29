@@ -194,7 +194,10 @@ KeyboardDevice::Start()
 	TRACE("name: %s\n", fDeviceRef.name);
 
 	fFD = open(fPath, O_RDWR);
+	if (fFD < 0) {
 		// let the control thread handle any error on opening the device
+		fFD = errno;
+	}
 
 	char threadName[B_OS_NAME_LENGTH];
 	snprintf(threadName, B_OS_NAME_LENGTH, "%s watcher", fDeviceRef.name);
@@ -266,7 +269,7 @@ KeyboardDevice::_ControlThread()
 
 	if (fFD < B_OK) {
 		LOG_ERR("KeyboardDevice: error when opening %s: %s\n",
-			fPath, strerror(errno));
+			fPath, strerror(fFD));
 		_ControlThreadCleanup();
 		// TOAST!
 		return B_ERROR;
@@ -284,7 +287,8 @@ KeyboardDevice::_ControlThread()
 	memset(states, 0, sizeof(states));
 
 	if (fKeyboardID == 0) {
-		if (ioctl(fFD, KB_GET_KEYBOARD_ID, &fKeyboardID) == 0) {
+		if (ioctl(fFD, KB_GET_KEYBOARD_ID, &fKeyboardID,
+				sizeof(fKeyboardID)) == 0) {
 			BMessage message(IS_SET_KEYBOARD_ID);
 			message.AddInt16("id", fKeyboardID);
 			be_app->PostMessage(&message);
@@ -529,7 +533,7 @@ KeyboardDevice::_UpdateSettings(uint32 opcode)
 		if (get_key_repeat_rate(&fSettings.key_repeat_rate) != B_OK) {
 			LOG_ERR("error when get_key_repeat_rate\n");
 		} else if (ioctl(fFD, KB_SET_KEY_REPEAT_RATE,
-			&fSettings.key_repeat_rate) != B_OK) {
+				&fSettings.key_repeat_rate, sizeof(int32)) != B_OK) {
 			LOG_ERR("error when KB_SET_KEY_REPEAT_RATE, fd:%d\n", fFD);
 		}
 	}
@@ -538,7 +542,7 @@ KeyboardDevice::_UpdateSettings(uint32 opcode)
 		if (get_key_repeat_delay(&fSettings.key_repeat_delay) != B_OK) {
 			LOG_ERR("error when get_key_repeat_delay\n");
 		} else if (ioctl(fFD, KB_SET_KEY_REPEAT_DELAY,
-			&fSettings.key_repeat_delay) != B_OK) {
+				&fSettings.key_repeat_delay, sizeof(bigtime_t)) != B_OK) {
 			LOG_ERR("error when KB_SET_KEY_REPEAT_DELAY, fd:%d\n", fFD);
 		}
 	}
@@ -570,7 +574,7 @@ KeyboardDevice::_UpdateLEDs()
 	if ((fModifiers & B_SCROLL_LOCK) != 0)
 		lockIO[2] = 1;
 
-	ioctl(fFD, KB_SET_LEDS, &lockIO);
+	ioctl(fFD, KB_SET_LEDS, &lockIO, sizeof(lockIO));
 }
 
 

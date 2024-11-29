@@ -298,13 +298,10 @@ SupportedTypeListView::AcceptsDrag(const BMessage* message)
 //	#pragma mark -
 
 
-ApplicationTypeWindow::ApplicationTypeWindow(BPoint position,
-	const BEntry& entry)
+ApplicationTypeWindow::ApplicationTypeWindow(const BMessage& settings, const BEntry& entry)
 	:
-	BWindow(BRect(0.0f, 0.0f, 250.0f, 340.0f).OffsetBySelf(position),
-		B_TRANSLATE("Application type"), B_TITLED_WINDOW,
-		B_NOT_ZOOMABLE | B_ASYNCHRONOUS_CONTROLS |
-			B_FRAME_EVENTS | B_AUTO_UPDATE_SIZE_LIMITS),
+	BWindow(_Frame(settings), B_TRANSLATE("Application type"), B_TITLED_WINDOW,
+		B_NOT_ZOOMABLE | B_ASYNCHRONOUS_CONTROLS | B_FRAME_EVENTS | B_AUTO_UPDATE_SIZE_LIMITS),
 	fChangedProperties(0)
 {
 	float padding = be_control_look->DefaultItemSpacing();
@@ -331,7 +328,7 @@ ApplicationTypeWindow::ApplicationTypeWindow(BPoint position,
 	// Signature
 
 	fSignatureControl = new BTextControl("signature",
-		B_TRANSLATE("Signature:"), new BMessage(kMsgSignatureChanged));
+		B_TRANSLATE("Signature:"), NULL, new BMessage(kMsgSignatureChanged));
 	fSignatureControl->SetModificationMessage(
 		new BMessage(kMsgSignatureChanged));
 
@@ -408,7 +405,7 @@ ApplicationTypeWindow::ApplicationTypeWindow(BPoint position,
 
 	BLayoutBuilder::Grid<>(typeBox, padding, padding)
 		.SetInsets(padding, padding * 2, padding, padding)
-		.Add(scrollView, 0, 0, 1, 4)
+		.Add(scrollView, 0, 0, 1, 5)
 		.Add(fAddTypeButton, 1, 0, 1, 2)
 		.Add(fRemoveTypeButton, 1, 2, 1, 2)
 		.Add(iconHolder, 2, 1, 1, 2)
@@ -474,33 +471,27 @@ ApplicationTypeWindow::ApplicationTypeWindow(BPoint position,
 	scrollView = new BScrollView("desc scrollview", fLongDescriptionView,
 		B_FRAME_EVENTS | B_WILL_DRAW, false, true);
 
-	// TODO: remove workaround (bug #5678)
-	BSize minScrollSize = scrollView->ScrollBar(B_VERTICAL)->MinSize();
-	minScrollSize.width += fLongDescriptionView->MinSize().width;
-	scrollView->SetExplicitMinSize(minScrollSize);
-
 	// Manually set a minimum size for the version text controls
 	// TODO: the same does not work when applied to the layout items
 	float width = be_plain_font->StringWidth("99") + 16;
 	fMajorVersionControl->TextView()->SetExplicitMinSize(
-		BSize(width, fMajorVersionControl->MinSize().height));
+		BSize(width, B_SIZE_UNSET));
 	fMiddleVersionControl->TextView()->SetExplicitMinSize(
-		BSize(width, fMiddleVersionControl->MinSize().height));
+		BSize(width, B_SIZE_UNSET));
 	fMinorVersionControl->TextView()->SetExplicitMinSize(
-		BSize(width, fMinorVersionControl->MinSize().height));
+		BSize(width, B_SIZE_UNSET));
 	fInternalVersionControl->TextView()->SetExplicitMinSize(
-		BSize(width, fInternalVersionControl->MinSize().height));
+		BSize(width, B_SIZE_UNSET));
 
 	BLayoutBuilder::Grid<>(versionBox, padding / 2, padding / 2)
 		.SetInsets(padding, padding * 2, padding, padding)
-		.Add(fMajorVersionControl->CreateLabelLayoutItem(), 0, 0)
-		.Add(fMajorVersionControl->CreateTextViewLayoutItem(), 1, 0)
+		.AddTextControl(fMajorVersionControl, 0, 0)
 		.Add(fMiddleVersionControl, 2, 0, 2)
 		.Add(fMinorVersionControl, 4, 0, 2)
 		.Add(varietyField, 6, 0, 3)
 		.Add(fInternalVersionControl, 9, 0, 2)
-		.Add(fShortDescriptionControl->CreateLabelLayoutItem(), 0, 1)
-		.Add(fShortDescriptionControl->CreateTextViewLayoutItem(), 1, 1, 10)
+		.AddTextControl(fShortDescriptionControl, 0, 1,
+			B_ALIGN_HORIZONTAL_UNSET, 1, 10)
 		.Add(longLabel, 0, 2)
 		.Add(scrollView, 1, 2, 10, 3)
 		.SetRowWeight(3, 3);
@@ -516,7 +507,7 @@ ApplicationTypeWindow::ApplicationTypeWindow(BPoint position,
 				.Add(flagsBox, 3)
 				.Add(iconBox, 1)
 				.End()
-			.Add(typeBox)
+			.Add(typeBox, 2)
 			.Add(versionBox);
 
 	SetKeyMenuBar(menuBar);
@@ -524,6 +515,8 @@ ApplicationTypeWindow::ApplicationTypeWindow(BPoint position,
 	fSignatureControl->MakeFocus(true);
 	BMimeType::StartWatching(this);
 	_SetTo(entry);
+
+	Layout(false);
 }
 
 
@@ -532,6 +525,15 @@ ApplicationTypeWindow::~ApplicationTypeWindow()
 	BMimeType::StopWatching(this);
 }
 
+BRect
+ApplicationTypeWindow::_Frame(const BMessage& settings) const
+{
+	BRect rect;
+	if (settings.FindRect("app_type_next_frame", &rect) == B_OK)
+		return rect;
+
+	return BRect(100.0f, 110.0f, 250.0f, 340.0f);
+}
 
 BString
 ApplicationTypeWindow::_Title(const BEntry& entry)
@@ -905,14 +907,6 @@ ApplicationTypeWindow::_VersionInfo() const
 
 
 void
-ApplicationTypeWindow::FrameResized(float width, float height)
-{
-	// This works around a flaw of BTextView
-	fLongDescriptionView->SetTextRect(fLongDescriptionView->Bounds());
-}
-
-
-void
 ApplicationTypeWindow::MessageReceived(BMessage* message)
 {
 	switch (message->what) {
@@ -1084,6 +1078,10 @@ ApplicationTypeWindow::QuitRequested()
 				break;
 		}
 	}
+
+	BMessage update(kMsgSettingsChanged);
+	update.AddRect("app_type_next_frame", Frame());
+	be_app_messenger.SendMessage(&update);
 
 	be_app->PostMessage(kMsgTypeWindowClosed);
 	return true;

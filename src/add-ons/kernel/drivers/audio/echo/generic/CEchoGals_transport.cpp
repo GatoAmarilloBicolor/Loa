@@ -30,8 +30,6 @@
 
 #include "CEchoGals.h"
 
-#pragma optimize("",off)
-
 
 /******************************************************************************
 
@@ -241,7 +239,6 @@ ECHOSTATUS CEchoGals::CloseAudio
 	m_cmAudioOpen -= cmMask;
 	m_cmAudioCyclic -= cmMask;
 
-	wPipeIndex = wPipeIndex;
 	m_ProcessId[ wPipeIndex ] = NULL;
 	m_Pipes[ wPipeIndex ].wInterleave = 0;
 	

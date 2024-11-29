@@ -22,6 +22,7 @@ public:
 		TRAVERSE_LEAF_LINK = 0x02,
 		LAZY_ALLOC = 0x04
 	};
+
 public:
 								KPath(size_t bufferSize = B_PATH_NAME_LENGTH);
 								KPath(const char* path, int32 flags = DEFAULT,
@@ -67,6 +68,7 @@ public:
 
 private:
 			status_t			_AllocateBuffer();
+			void				_FreeBuffer();
 			status_t			_Normalize(const char* path,
 									bool traverseLeafLink);
 			void				_ChopTrailingSlashes();

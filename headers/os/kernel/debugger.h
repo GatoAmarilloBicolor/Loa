@@ -18,11 +18,14 @@
 #include <arch/m68k/arch_debugger.h>
 #include <arch/mipsel/arch_debugger.h>
 #include <arch/arm/arch_debugger.h>
+#include <arch/arm64/arch_debugger.h>
+#include <arch/riscv64/arch_debugger.h>
+#include <arch/sparc/arch_debugger.h>
 
 
 #if defined(__x86_64__)
 	typedef struct x86_64_debug_cpu_state debug_cpu_state;
-#elif defined(__INTEL__)
+#elif defined(__i386__)
 	typedef struct x86_debug_cpu_state debug_cpu_state;
 #elif defined(__POWERPC__)
 	typedef struct ppc_debug_cpu_state debug_cpu_state;
@@ -32,6 +35,12 @@
 	typedef struct mipsel_debug_cpu_state debug_cpu_state;
 #elif defined(__arm__)
 	typedef struct arm_debug_cpu_state debug_cpu_state;
+#elif (defined(__riscv) && __riscv_xlen == 64)
+	typedef struct riscv64_debug_cpu_state debug_cpu_state;
+#elif defined(__sparc64__)
+	typedef struct sparc_debug_cpu_state debug_cpu_state;
+#elif defined(__aarch64__) || defined(__arm64__)
+	typedef struct arm64_debug_cpu_state debug_cpu_state;
 #else
 	#error unsupported architecture
 #endif
@@ -184,6 +193,7 @@ typedef enum {
 											// one
 	B_DEBUGGER_MESSAGE_TEAM_DELETED,		// the debugged team is gone
 	B_DEBUGGER_MESSAGE_TEAM_EXEC,			// the debugged team executes exec()
+											// (implies all images have been deleted)
 	B_DEBUGGER_MESSAGE_THREAD_CREATED,		// a thread has been created
 	B_DEBUGGER_MESSAGE_THREAD_DELETED,		// a thread has been deleted
 	B_DEBUGGER_MESSAGE_IMAGE_CREATED,		// an image has been created
@@ -398,6 +408,7 @@ typedef struct {
 	bool				variable_stack_depth;
 										// variable number of samples per hit;
 										// cf. debug_profiler_update
+	bool				profile_kernel;	// sample kernel stack frames
 } debug_nub_start_profiler;
 
 typedef struct {
@@ -524,6 +535,7 @@ typedef struct {
 	debug_origin		origin;
 	int					signal;		// the signal
 	struct sigaction	handler;	// the signal handler
+	siginfo_t			info;		// the signal info
 	bool				deadly;		// true, if handling the signal will kill
 									// the team
 } debug_signal_received;
@@ -550,6 +562,9 @@ typedef struct {
 typedef struct {
 	debug_origin	origin;			// thread is < 0, team is the deleted team
 									// (asynchronous message)
+	status_t		status;			// the exit code of the team
+	int				signal;			// the signal causing the exit, < 0 if none
+	team_usage_info	usage;			// the usage info of the team
 } debug_team_deleted;
 
 // B_DEBUGGER_MESSAGE_TEAM_EXEC
@@ -570,6 +585,7 @@ typedef struct {
 
 typedef struct {
 	debug_origin	origin;			// the deleted thread (asynchronous message)
+	status_t		status;			// the exit code of the thread
 } debug_thread_deleted;
 
 // B_DEBUGGER_MESSAGE_IMAGE_CREATED
@@ -608,6 +624,7 @@ typedef struct {
 										//   <sample 1> ... <sample stack_depth>
 	bool				stopped;		// if true, the thread is no longer
 										// being profiled
+	bigtime_t			last_cpu_time;	// only set if "stopped" is
 } debug_profiler_update;
 
 // B_DEBUGGER_MESSAGE_HANDED_OVER

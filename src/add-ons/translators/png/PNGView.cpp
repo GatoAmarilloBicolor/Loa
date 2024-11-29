@@ -18,7 +18,6 @@
 #include <MenuItem.h>
 #include <PopUpMenu.h>
 #include <StringView.h>
-#include <TextView.h>
 
 #include <stdio.h>
 #define PNG_NO_PEDANTIC_WARNINGS
@@ -63,19 +62,15 @@ PNGView::PNGView(const BRect &frame, const char *name, uint32 resizeMode,
 		item->SetMarked(true);
 	fInterlaceMenu->AddItem(item);
 
-	BMenuField* menuField = new BMenuField(
-		B_TRANSLATE("PNG Interlace Menu"),
+	BMenuField* menuField = new BMenuField("PNG Interlace Menu",
 		B_TRANSLATE("Interlacing type:"), fInterlaceMenu);
 	menuField->SetDivider(menuField->StringWidth(menuField->Label()) + 7.0f);
 	menuField->ResizeToPreferred();
 
-	fCopyrightView = new BTextView("PNG copyright");
-	fCopyrightView->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
-	fCopyrightView->SetLowColor(fCopyrightView->ViewColor());
-	fCopyrightView->MakeEditable(false);
-	fCopyrightView->SetWordWrap(false);
-	fCopyrightView->MakeResizable(true);
-	fCopyrightView->SetText(png_get_copyright(NULL));
+	BString pngCopyright = png_get_copyright(NULL);
+	pngCopyright.ReplaceLast("\n", "");
+	BStringView* pngCopyrightView = new BStringView(
+		"PNG copyright", pngCopyright);
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
 		.SetInsets(B_USE_DEFAULT_SPACING)
@@ -88,7 +83,7 @@ PNGView::PNGView(const BRect &frame, const char *name, uint32 resizeMode,
 			.AddGlue()
 			.End()
 		.AddGlue()
-		.Add(fCopyrightView);
+		.Add(pngCopyrightView);
 }
 
 
@@ -115,14 +110,6 @@ PNGView::AttachedToWindow()
 
 	// set target for interlace options menu items
 	fInterlaceMenu->SetTargetForItems(this);
-}
-
-
-void
-PNGView::FrameResized(float width, float height)
-{
-	// This works around a flaw of BTextView
-	fCopyrightView->SetTextRect(fCopyrightView->Bounds());
 }
 
 

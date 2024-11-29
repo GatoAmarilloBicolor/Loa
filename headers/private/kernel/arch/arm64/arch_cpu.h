@@ -9,10 +9,11 @@
 #define CPU_MAX_CACHE_LEVEL 	8
 #define CACHE_LINE_SIZE 		64
 
-#define set_ac()
-#define clear_ac()
+// TODO: These will require a real implementation when PAN is enabled
+#define arch_cpu_enable_user_access()
+#define arch_cpu_disable_user_access()
 
-#include <kernel/arch/arm64/armreg.h>
+#include <kernel/arch/arm64/arm_registers.h>
 
 #ifndef _ASSEMBLER
 
@@ -25,6 +26,7 @@
 #define arm64_dmb()  		__asm__ __volatile__("dmb" : : : "memory")
 #define arm64_isb()  		__asm__ __volatile__("isb" : : : "memory")
 #define arm64_nop()  		__asm__ __volatile__("nop" : : : "memory")
+#define arm64_wfi()  		__asm__ __volatile__("wfi" : : : "memory")
 #define arm64_yield() 	__asm__ __volatile__("yield" : : : "memory")
 
 /* Extract CPU affinity levels 0-3 */
@@ -104,49 +106,78 @@ arm64_address_translate_ ##stage (uint64 addr)		\
 	uint64 ret;											\
 														\
 	__asm __volatile(									\
-	    "at " __STRING(stage) ", %1 \n"					\
+	    "at " __ARMREG_STRING(stage) ", %1 \n"					\
 	    "mrs %0, par_el1" : "=r"(ret) : "r"(addr));		\
 														\
 	return (ret);										\
 }
+
 
 ADDRESS_TRANSLATE_FUNC(s1e0r)
 ADDRESS_TRANSLATE_FUNC(s1e0w)
 ADDRESS_TRANSLATE_FUNC(s1e1r)
 ADDRESS_TRANSLATE_FUNC(s1e1w)
 
-/* raw exception frames */
-struct iframe {
-	uint64			sp;
-	uint64			lr;
-	uint64			elr;
-	uint32			spsr;
-	uint32			esr;
-	uint64			x[30];
+
+struct aarch64_fpu_state
+{
+	uint64 regs[32 * 2];
+	uint64 fpsr;
+	uint64 fpcr;
 };
 
+
+/* raw exception frames */
+struct iframe {
+	// return info
+	uint64 elr;
+	uint64 spsr;
+	uint64 x[29];
+	uint64 fp;
+	uint64 lr;
+	uint64 sp;
+
+	// exception info
+	uint64 esr;
+	uint64 far;
+
+	// fpu
+	struct aarch64_fpu_state fpu;
+};
+
+
+#ifdef __cplusplus
 namespace BKernel {
 	struct Thread;
 }  // namespace BKernel
+
 
 typedef struct arch_cpu_info {
 	uint32						mpidr;
 	BKernel::Thread*			last_vfp_user;
 } arch_cpu_info;
+#endif
+
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 
 static inline void arch_cpu_pause(void)
 {
 	arm64_yield();
 }
 
+
 static inline void arch_cpu_idle(void)
 {
-	arm64_yield();
+	arm64_wfi();
 }
+
+
+extern addr_t arm64_get_fp(void);
+
 
 #ifdef __cplusplus
 }

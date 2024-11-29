@@ -6,13 +6,18 @@
 
 #include "UnpackingDirectory.h"
 
+#include "ClassCache.h"
 #include "DebugSupport.h"
+#include "EmptyAttributeDirectoryCookie.h"
 #include "UnpackingAttributeCookie.h"
 #include "UnpackingAttributeDirectoryCookie.h"
 #include "Utils.h"
 
 
 // #pragma mark - UnpackingDirectory
+
+
+CLASS_CACHE(UnpackingDirectory);
 
 
 UnpackingDirectory::UnpackingDirectory(ino_t id)
@@ -102,7 +107,7 @@ status_t
 UnpackingDirectory::AddPackageNode(PackageNode* packageNode, dev_t deviceID)
 {
 	if (!S_ISDIR(packageNode->Mode()))
-		return B_BAD_VALUE;
+		return B_NOT_A_DIRECTORY;
 
 	PackageDirectory* packageDirectory
 		= dynamic_cast<PackageDirectory*>(packageNode);
@@ -112,7 +117,7 @@ UnpackingDirectory::AddPackageNode(PackageNode* packageNode, dev_t deviceID)
 		|| packageDirectory->HasPrecedenceOver(other);
 
 	if (overridesHead) {
-		fPackageDirectories.Insert(other, packageDirectory);
+		fPackageDirectories.InsertBefore(other, packageDirectory);
 		NodeReinitVFS(deviceID, fID, packageDirectory, other, fFlags);
 	} else
 		fPackageDirectories.Add(packageDirectory);
@@ -140,7 +145,7 @@ UnpackingDirectory::RemovePackageNode(PackageNode* packageNode, dev_t deviceID)
 		}
 
 		fPackageDirectories.Remove(newestNode);
-		fPackageDirectories.Insert(fPackageDirectories.Head(), newestNode);
+		fPackageDirectories.InsertBefore(fPackageDirectories.Head(), newestNode);
 		NodeReinitVFS(deviceID, fID, newestNode, packageNode, fFlags);
 	}
 }
@@ -224,11 +229,38 @@ UnpackingDirectory::IndexCookieForAttribute(const StringKey& name) const
 // #pragma mark - RootDirectory
 
 
+void*
+RootDirectory::operator new(size_t size)
+{
+	return malloc(size);
+}
+
+
+void
+RootDirectory::operator delete(void* object)
+{
+	free(object);
+}
+
+
 RootDirectory::RootDirectory(ino_t id, const timespec& modifiedTime)
 	:
 	UnpackingDirectory(id),
 	fModifiedTime(modifiedTime)
 {
+}
+
+
+status_t
+RootDirectory::OpenAttributeDirectory(AttributeDirectoryCookie*& _cookie)
+{
+	if (HasVFSInitError())
+		return B_ERROR;
+
+	_cookie = new(std::nothrow) EmptyAttributeDirectoryCookie;
+	if (_cookie == nullptr)
+		return B_NO_MEMORY;
+	return B_OK;
 }
 
 

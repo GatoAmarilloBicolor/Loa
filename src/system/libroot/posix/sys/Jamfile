@@ -21,8 +21,9 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			mkfifo.c
 			mknod.c
 			mman.cpp
+			priority.c
 			rlimit.c
-			select.c
+			select.cpp
 			stat.c
 			statvfs.c
 			times.cpp

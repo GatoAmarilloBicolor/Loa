@@ -31,7 +31,7 @@ DirectWindowInfo::DirectWindowInfo()
 {
 	fBufferArea = create_area("direct area", (void**)&fBufferInfo,
 		B_ANY_ADDRESS, DIRECT_BUFFER_INFO_AREA_SIZE,
-		B_NO_LOCK, B_READ_AREA | B_WRITE_AREA);
+		B_NO_LOCK, B_READ_AREA | B_WRITE_AREA | B_CLONEABLE_AREA);
 
 	memset(fBufferInfo, 0, DIRECT_BUFFER_INFO_AREA_SIZE);
 	fBufferInfo->buffer_state = B_DIRECT_STOP;
@@ -89,7 +89,7 @@ DirectWindowInfo::SetState(direct_buffer_state bufferState,
 
 	fBufferInfo->buffer_state = bufferState;
 
-	if (driverState != -1)
+	if ((int)driverState != -1)
 		fBufferInfo->driver_state = driverState;
 
 	if ((bufferState & B_DIRECT_MODE_MASK) != B_DIRECT_STOP) {
@@ -98,6 +98,14 @@ DirectWindowInfo::SetState(direct_buffer_state bufferState,
 		fBufferInfo->bytes_per_row = buffer->BytesPerRow();
 
 		switch (buffer->ColorSpace()) {
+			case B_RGBA64:
+			case B_RGBA64_BIG:
+				fBufferInfo->bits_per_pixel = 64;
+				break;
+			case B_RGB48:
+			case B_RGB48_BIG:
+				fBufferInfo->bits_per_pixel = 48;
+				break;
 			case B_RGB32:
 			case B_RGBA32:
 			case B_RGB32_BIG:

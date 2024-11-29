@@ -6,10 +6,14 @@ SubDirHdrs [ FDirName $(SUBDIR) $(DOTDOT) support ] ;
 
 SubDirCcFlags -DCORTEX_NAMESPACE=cortex ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
-
 StaticLibrary cortex_parameter_view.a :
 	ParameterWindowManager.cpp
 	ParameterWindow.cpp
 	ParameterContainerView.cpp
+;
+
+DoCatalogs cortex_parameter_view.a :
+	x-vnd.Cortex.ParameterView
+	:
+	ParameterWindow.cpp
 ;

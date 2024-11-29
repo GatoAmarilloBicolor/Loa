@@ -25,10 +25,16 @@
 
 #include <features.h>
 
-/* Get general and ISO C99 specific information.  */
-#include <bits/mathdef.h>
-
 __BEGIN_DECLS
+
+#if __GNUC__ >= 7 || defined(__clang__)
+#define __isnan(value) __builtin_isnan(value)
+#define __isnanf(value) __builtin_isnan(value)
+#define __isnanl(value) __builtin_isnan(value)
+#define __isinf(value) __builtin_isinf(value)
+#define __isinff(value) __builtin_isinf(value)
+#define __isinfl(value) __builtin_isinf(value)
+#endif
 
 /* We might need to add support for more compilers here.  But since ISO
    C99 is out hopefully all maintained compilers will soon provide the data

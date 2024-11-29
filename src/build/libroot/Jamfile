@@ -10,10 +10,11 @@ UseHeaders [ FDirName $(HAIKU_TOP) headers build os storage ] : true ;
 UseHeaders [ FDirName $(HAIKU_TOP) headers build os support ] : true ;
 
 UsePrivateBuildHeaders kernel libroot system ;
+UsePrivateHeaders system ;
 
 {
 	local defines = [ FDefines
-		HAIKU_BUILD_ATTRIBUTES_DIR="\\\"$(HAIKU_BUILD_ATTRIBUTES_DIR)\\\""
+		'HAIKU_BUILD_ATTRIBUTES_DIR="\"$(HAIKU_BUILD_ATTRIBUTES_DIR)\""'
 		_HAIKU_BUILD_DONT_REMAP_FD_FUNCTIONS=1
 	] ;
 	SubDirCcFlags $(defines) ;
@@ -40,7 +41,7 @@ if $(HOST_PLATFORM) != darwin && $(HOST_PLATFORM) != haiku_host {
 	strlSources = strlcpy.c strlcat.c ;
 }
 
-if $(HOST_PLATFORM) = cygwin || $(HOST_PLATFORM) = sunos {
+if $(HOST_PLATFORM) = mingw {
 	strlSources += stpcpy.c strcasestr.c ;
 }
 
@@ -78,11 +79,19 @@ local librootSources =
 
 USES_BE_API on [ FGristFiles $(librootSources:S=$(SUFOBJ)) ] = true ;
 
-BuildPlatformSharedLibrary libroot_build.so :
+local librootTarget = libroot_build.so ;
+if $(HAIKU_HOST_USE_XATTR) = 0 {
+	# prevent library from being cleaned when emulated attributes are used
+	librootTarget = <temp>libroot_build.so ;
+	File libroot_build.so : <temp>libroot_build.so ;
+	MODE on libroot_build.so = $(EXEMODE) ;
+	Chmod libroot_build.so ;
+	RmTemps libroot_build.so : <temp>libroot_build.so ;
+}
+BuildPlatformSharedLibrary $(librootTarget) :
 	$(librootSources)
 	:
-	$(HOST_LIBSUPC++) $(HOST_LIBSTDC++)
-;
+	$(HOST_LIBSUPC++) $(HOST_LIBSTDC++) ;
 
 # TODO: This doesn't work with the function remapping.
 BuildPlatformStaticLibrary libroot_build.a :
@@ -92,6 +101,7 @@ BuildPlatformStaticLibrary libroot_build.a :
 
 USES_BE_API on [ FGristFiles function_remapper$(SUFOBJ) ] = true ;
 
+NO_HIDDEN_VISIBILITY on <build>libroot_build_function_remapper.a = 1 ;
 BuildPlatformStaticLibraryPIC libroot_build_function_remapper.a :
 	function_remapper.cpp
 ;

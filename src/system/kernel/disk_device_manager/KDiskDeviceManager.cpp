@@ -1,8 +1,7 @@
 /*
- * Copyright 2004-2017, Haiku, Inc. All rights reserved.
- * Copyright 2003-2004, Ingo Weinhold, bonefish@cs.tu-berlin.de. All rights reserved.
- *
- * Distributed under the terms of the MIT License.
+ * Copyright 2004-2018, Haiku, Inc.
+ * Copyright 2003-2004, Ingo Weinhold, bonefish@cs.tu-berlin.de.
+ * All rights reserved. Distributed under the terms of the MIT License.
  */
 
 
@@ -39,10 +38,15 @@
 #include <string.h>
 #include <sys/stat.h>
 
-// debugging
-//#define DBG(x)
-#define DBG(x) x
-#define OUT dprintf
+
+//#define TRACE_KDISK_DEVICE_MANAGER
+#ifdef TRACE_KDISK_DEVICE_MANAGER
+#	define TRACE		TRACE_ALWAYS
+#else
+#	define TRACE(x...)	do { } while (false)
+#endif
+#define TRACE_ALWAYS(x...)	dprintf("disk_device_manager: " x)
+#define TRACE_ERROR(x...)	dprintf("disk_device_manager: error: " x)
 
 
 // directories for partitioning and file system modules
@@ -198,7 +202,7 @@ public:
 
 		if (strcmp(event->name, "raw") == 0) {
 			// a new raw device was added/removed
-			KPath path(B_PATH_NAME_LENGTH + 1);
+			KPath path;
 			if (path.InitCheck() != B_OK
 				|| vfs_entry_ref_to_path(event->device, event->directory,
 					event->name, true, path.LockBuffer(),
@@ -263,7 +267,7 @@ KDiskDeviceManager::KDiskDeviceManager()
 	if (fMediaChecker >= 0)
 		resume_thread(fMediaChecker);
 
-	DBG(OUT("number of disk systems: %" B_PRId32 "\n", CountDiskSystems()));
+	TRACE("number of disk systems: %" B_PRId32 "\n", CountDiskSystems());
 	// TODO: Watch the disk systems and the relevant directories.
 }
 
@@ -287,27 +291,27 @@ KDiskDeviceManager::~KDiskDeviceManager()
 
 	// some sanity checks
 	if (fPartitions->Count() > 0) {
-		DBG(OUT("WARNING: There are still %" B_PRId32 " unremoved partitions!\n",
-			fPartitions->Count()));
+		TRACE_ALWAYS("WARNING: There are still %" B_PRId32 " unremoved partitions!\n",
+			fPartitions->Count());
 		for (PartitionMap::Iterator it = fPartitions->Begin();
 				it != fPartitions->End(); ++it) {
-			DBG(OUT("         partition: %" B_PRId32 "\n", it->Value()->ID()));
+			TRACE("         partition: %" B_PRId32 "\n", it->Value()->ID());
 		}
 	}
 	if (fObsoletePartitions->Count() > 0) {
-		DBG(OUT("WARNING: There are still %" B_PRId32 " obsolete partitions!\n",
-				fObsoletePartitions->Count()));
+		TRACE_ALWAYS("WARNING: There are still %" B_PRId32 " obsolete partitions!\n",
+				fObsoletePartitions->Count());
 		for (PartitionSet::Iterator it = fObsoletePartitions->Begin();
 				it != fObsoletePartitions->End(); ++it) {
-			DBG(OUT("         partition: %" B_PRId32 "\n", (*it)->ID()));
+			TRACE("         partition: %" B_PRId32 "\n", (*it)->ID());
 		}
 	}
 	// remove all disk systems
 	for (int32 cookie = 0; KDiskSystem* diskSystem = NextDiskSystem(&cookie);) {
 		fDiskSystems->Remove(diskSystem->ID());
 		if (diskSystem->IsLoaded()) {
-			DBG(OUT("WARNING: Disk system `%s' (%" B_PRId32 ") is still loaded!\n",
-				diskSystem->Name(), diskSystem->ID()));
+			TRACE_ALWAYS("WARNING: Disk system `%s' (%" B_PRId32 ") is still loaded!\n",
+				diskSystem->Name(), diskSystem->ID());
 		} else
 			delete diskSystem;
 	}
@@ -706,19 +710,17 @@ KDiskDeviceManager::CreateDevice(const char* path, bool* newlyCreated)
 			return error;
 		}
 
-		if (error == B_OK) {
-			// scan for partitions
-			_ScanPartition(device, false);
-			device->UnmarkBusy(true);
+		// scan for partitions
+		_ScanPartition(device, false);
+		device->UnmarkBusy(true);
 
-			_NotifyDeviceEvent(device, B_DEVICE_ADDED,
-				B_DEVICE_REQUEST_DEVICE_LIST);
+		_NotifyDeviceEvent(device, B_DEVICE_ADDED,
+			B_DEVICE_REQUEST_DEVICE_LIST);
 
-			if (newlyCreated)
-				*newlyCreated = true;
+		if (newlyCreated)
+			*newlyCreated = true;
 
-			return device->ID();
-		}
+		return device->ID();
 	}
 
 	return error;
@@ -989,31 +991,33 @@ KDiskDeviceManager::LoadNextDiskSystem(int32* cookie)
 status_t
 KDiskDeviceManager::InitialDeviceScan()
 {
-	status_t error = B_ERROR;
-
 	// scan for devices
 	if (ManagerLocker locker = this) {
-		error = _Scan("/dev/disk");
+		status_t error = _Scan("/dev/disk");
 		if (error != B_OK)
 			return error;
 	}
 
 	// scan the devices for partitions
 	int32 cookie = 0;
+	status_t status = B_OK;
 	while (KDiskDevice* device = RegisterNextDevice(&cookie)) {
 		PartitionRegistrar _(device, true);
 		if (DeviceWriteLocker deviceLocker = device) {
 			if (ManagerLocker locker = this) {
-				error = _ScanPartition(device, false);
+				status_t error = _ScanPartition(device, false);
 				device->UnmarkBusy(true);
 				if (error != B_OK)
-					break;
+					status = error;
+				// Even if we could not scan this partition, we want to try
+				// and scan the rest. Just because one partition is invalid
+				// or unscannable does not mean the ones after it are.
 			} else
 				return B_ERROR;
 		} else
 			return B_ERROR;
 	}
-	return error;
+	return status;
 }
 
 
@@ -1060,10 +1064,10 @@ KDiskDeviceManager::_RescanDiskSystems(DiskSystemMap& addedSystems,
 			continue;
 
 		if (fileSystems) {
-			DBG(OUT("file system: %s\n", name.Path()));
+			TRACE("file system: %s\n", name.Path());
 			_AddFileSystem(name.Path());
 		} else {
-			DBG(OUT("partitioning system: %s\n", name.Path()));
+			TRACE("partitioning system: %s\n", name.Path());
 			_AddPartitioningSystem(name.Path());
 		}
 
@@ -1094,21 +1098,23 @@ KDiskDeviceManager::RescanDiskSystems()
 
 	// rescan existing devices with the new disk systems
 	int32 cookie = 0;
+	status_t status = B_OK;
 	while (KDiskDevice* device = RegisterNextDevice(&cookie)) {
 		PartitionRegistrar _(device, true);
 		if (DeviceWriteLocker deviceLocker = device) {
 			if (ManagerLocker locker = this) {
-				status_t status = _ScanPartition(device, false, &addedSystems);
+				status_t error = _ScanPartition(device, false, &addedSystems);
 				device->UnmarkBusy(true);
-				if (status != B_OK)
-					break;
+				if (error != B_OK)
+					status = error;
+				// See comment in InitialDeviceScan().
 			} else
 				return B_ERROR;
 		} else
 			return B_ERROR;
 	}
 
-	return B_OK;
+	return status;
 }
 
 
@@ -1144,16 +1150,16 @@ KDiskDeviceManager::_AddDiskSystem(KDiskSystem* diskSystem)
 {
 	if (!diskSystem)
 		return B_BAD_VALUE;
-	DBG(OUT("KDiskDeviceManager::_AddDiskSystem(%s)\n", diskSystem->Name()));
+	TRACE("KDiskDeviceManager::_AddDiskSystem(%s)\n", diskSystem->Name());
 	status_t error = diskSystem->Init();
-	DBG(if (error != B_OK)
-		OUT("  initialization failed: %s\n", strerror(error)));
+	if (error != B_OK) {
+		TRACE("  initialization failed: %s\n", strerror(error));
+	}
 	if (error == B_OK)
 		error = fDiskSystems->Put(diskSystem->ID(), diskSystem);
 	if (error != B_OK)
 		delete diskSystem;
-	DBG(OUT("KDiskDeviceManager::_AddDiskSystem() done: %s\n",
-		strerror(error)));
+	TRACE("KDiskDeviceManager::_AddDiskSystem() done: %s\n", strerror(error));
 	return error;
 }
 
@@ -1251,7 +1257,7 @@ KDiskDeviceManager::_UpdateBusyPartitions(KDiskDevice *device)
 status_t
 KDiskDeviceManager::_Scan(const char* path)
 {
-	DBG(OUT("KDiskDeviceManager::_Scan(%s)\n", path));
+	TRACE("KDiskDeviceManager::_Scan(%s)\n", path);
 	status_t error = B_ENTRY_NOT_FOUND;
 	struct stat st;
 	if (lstat(path, &st) < 0) {
@@ -1287,7 +1293,7 @@ KDiskDeviceManager::_Scan(const char* path)
 			return B_OK;
 		}
 
-		DBG(OUT("  found device: %s\n", path));
+		TRACE("  found device: %s\n", path);
 		// create a KDiskDevice for it
 		KDiskDevice* device = new(nothrow) KDiskDevice;
 		if (!device)
@@ -1373,15 +1379,19 @@ KDiskDeviceManager::_ScanPartition(KPartition* partition,
 		return B_OK;
 	}
 
-	// This happens with some copy protected CDs. Just ignore the partition...
-	if (partition->Offset() < 0)
-		return B_BAD_DATA;
+	KPath partitionPath;
+	partition->GetPath(&partitionPath);
 
-	DBG(
-		KPath partitionPath;
-		partition->GetPath(&partitionPath);
-		OUT("KDiskDeviceManager::_ScanPartition(%s)\n", partitionPath.Path());
-	)
+	// This happens with some copy protected CDs or eventually other issues.
+	// Just ignore the partition...
+	if (partition->Offset() < 0 || partition->BlockSize() == 0
+		|| partition->Size() <= 0) {
+		TRACE_ALWAYS("Partition %s has invalid parameters, ignoring it.\n",
+			partitionPath.Path());
+		return B_BAD_DATA;
+	}
+
+	TRACE("KDiskDeviceManager::_ScanPartition(%s)\n", partitionPath.Path());
 
 	// publish the partition
 	status_t error = B_OK;
@@ -1405,16 +1415,16 @@ KDiskDeviceManager::_ScanPartition(KPartition* partition,
 		if (diskSystem->Load() != B_OK)
 			continue;
 
-		DBG(OUT("  trying: %s\n", diskSystem->Name()));
+		TRACE("  trying: %s\n", diskSystem->Name());
 
 		void* cookie = NULL;
 		float priority = diskSystem->Identify(partition, &cookie);
 
-		DBG(OUT("  returned: %g\n", priority));
+		TRACE("  returned: %g\n", priority);
 
 		if (priority >= 0 && priority > bestPriority) {
 			// new best disk system
-			if (bestDiskSystem) {
+			if (bestDiskSystem != NULL) {
 				bestDiskSystem->FreeIdentifyCookie(partition, bestCookie);
 				bestDiskSystem->Unload();
 			}
@@ -1431,8 +1441,8 @@ KDiskDeviceManager::_ScanPartition(KPartition* partition,
 	}
 
 	// now, if we have found a disk system, let it scan the partition
-	if (bestDiskSystem) {
-		DBG(OUT("  scanning with: %s\n", bestDiskSystem->Name()));
+	if (bestDiskSystem != NULL) {
+		TRACE("  scanning with: %s\n", bestDiskSystem->Name());
 		error = bestDiskSystem->Scan(partition, bestCookie);
 		bestDiskSystem->FreeIdentifyCookie(partition, bestCookie);
 		if (error == B_OK) {
@@ -1441,7 +1451,7 @@ KDiskDeviceManager::_ScanPartition(KPartition* partition,
 				_ScanPartition(child, restrictScan);
 		} else {
 			// TODO: Handle the error.
-			DBG(OUT("  scanning failed: %s\n", strerror(error)));
+			TRACE_ERROR("scanning failed: %s\n", strerror(error));
 		}
 
 		// now we can safely unload the disk system -- it has been loaded by

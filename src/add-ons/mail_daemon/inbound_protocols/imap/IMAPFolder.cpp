@@ -104,8 +104,10 @@ IMAPFolder::IMAPFolder(IMAPProtocol& protocol, const BString& mailboxName,
 
 IMAPFolder::~IMAPFolder()
 {
-	if (!fFolderStateInitialized) {
+	MutexLocker locker(fLock);
+	if (!fFolderStateInitialized && fListener != NULL) {
 		fQuitFolderState = true;
+		locker.Unlock();
 		wait_for_thread(fReadFolderStateThread, NULL);
 	}
 }
@@ -247,7 +249,8 @@ IMAPFolder::SyncMessageFlags(uint32 uid, uint32 mailboxFlags)
 			// The message does not exist anymore locally, delete it on the
 			// server
 			// TODO: copy it to the trash directory first!
-			fProtocol.UpdateMessageFlags(*this, uid, IMAP::kDeleted);
+			if (fProtocol.Settings()->DeleteRemoteWhenLocal())
+				fProtocol.UpdateMessageFlags(*this, uid, IMAP::kDeleted);
 			return;
 		}
 		if (status == B_OK)
@@ -405,10 +408,20 @@ IMAPFolder::RegisterPendingBodies(IMAP::MessageUIDList& uids,
 
 	IMAP::MessageUIDList::const_iterator iterator = uids.begin();
 	for (; iterator != uids.end(); iterator++) {
-		if (replyTo != NULL)
+		if (replyTo != NULL) {
 			fPendingBodies[*iterator].push_back(*replyTo);
-		else
+		} else {
+			// Note: GCC 13 or later warns about the unused result of the statement below.
+			//       This code should be reviewed as part of #18478.
+			#if __GNUC__ >= 13
+			#  pragma GCC diagnostic push
+			#  pragma GCC diagnostic warning "-Wunused-result"
+			#endif
 			fPendingBodies[*iterator].begin();
+			#if __GNUC__ >= 13
+			#  pragma GCC diagnostic pop
+			#endif
+		}
 	}
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2005-2010, Haiku, Inc. All rights reserved.
+ * Copyright 2005-2023, Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT license.
  *
  * Authors:
@@ -58,6 +58,7 @@ struct DefaultAttribute sDefaultAttributes[] = {
 	{ "META:zip", 50, B_TRANSLATE("Zip") },
 	{ "META:country", 120, B_TRANSLATE("Country") },
 	{ "META:hphone", 90, B_TRANSLATE("Home phone") },
+	{ "META:mphone", 90, B_TRANSLATE("Mobile phone") },
 	{ "META:wphone", 90, B_TRANSLATE("Work phone") },
 	{ "META:fax", 90, B_TRANSLATE("Fax") },
 	{ "META:email", 120, B_TRANSLATE("E-mail") },
@@ -222,7 +223,7 @@ TPeopleApp::MessageReceived(BMessage* message)
 	switch (message->what) {
 		case M_NEW:
 		case B_SILENT_RELAUNCH:
-			_NewWindow();
+			_NewWindow(NULL, message);
 			break;
 
 		case M_WINDOW_QUITS:
@@ -273,7 +274,7 @@ TPeopleApp::RefsReceived(BMessage* message)
 		else {
 			BFile file(&ref, B_READ_ONLY);
 			if (file.InitCheck() == B_OK)
-				_NewWindow(&ref);
+				_NewWindow(&ref, NULL);
 		}
 	}
 }
@@ -291,13 +292,15 @@ TPeopleApp::ReadyToRun()
 
 
 PersonWindow*
-TPeopleApp::_NewWindow(entry_ref* ref)
+TPeopleApp::_NewWindow(entry_ref* ref, BMessage* message)
 {
 	PersonWindow* window = new PersonWindow(fPosition,
 		B_TRANSLATE("New person"), kNameAttribute,
 		kCategoryAttribute, ref);
 
 	_AddAttributes(window);
+	if (message != NULL)
+		window->SetInitialValues(message);
 
 	window->Show();
 

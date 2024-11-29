@@ -9,6 +9,8 @@
 
 #include <stdio.h>
 
+#include <new>
+
 #include <Application.h>
 #include <AbstractLayoutItem.h>
 #include <Bitmap.h>
@@ -67,19 +69,20 @@ public:
 		uint32 flags = be_control_look->Flags(this);
 		uint32 borders = BControlLook::B_TOP_BORDER
 			| BControlLook::B_BOTTOM_BORDER;
-		be_control_look->DrawInactiveTab(this, bounds, updateRect, base,
-			0, borders);
+		be_control_look->DrawTabFrame(this, bounds, updateRect, base,
+			0, borders, B_NO_BORDER);
 		if (IsEnabled()) {
 			rgb_color button = tint_color(base, 1.07);
 			be_control_look->DrawButtonBackground(this, bounds, updateRect,
 				button, flags, 0);
 		}
 
-		bounds.left = (bounds.left + bounds.right) / 2 - 6;
-		bounds.top = (bounds.top + bounds.bottom) / 2 - 6;
-		bounds.right = bounds.left + 12;
-		bounds.bottom = bounds.top + 12;
-		DrawSymbol(bounds, updateRect, base);
+		BRect symbolRect(bounds);
+		symbolRect.left = (symbolRect.left + symbolRect.right) / 2 - 6;
+		symbolRect.top = (symbolRect.top + symbolRect.bottom) / 2 - 6;
+		symbolRect.right = symbolRect.left + 12;
+		symbolRect.bottom = symbolRect.top + 12;
+		DrawSymbol(symbolRect, updateRect, base);
 	}
 
 	virtual void DrawSymbol(BRect frame, const BRect& updateRect,
@@ -237,26 +240,34 @@ public:
 
 	virtual void MessageReceived(BMessage* message)
 	{
+		if (fTabContainerView == NULL)
+			return BGroupView::MessageReceived(message);
+
 		switch (message->what) {
 			case MSG_SCROLL_TABS_LEFT:
 				fTabContainerView->SetFirstVisibleTabIndex(
 					fTabContainerView->FirstVisibleTabIndex() - 1);
 				break;
+
 			case MSG_SCROLL_TABS_RIGHT:
 				fTabContainerView->SetFirstVisibleTabIndex(
 					fTabContainerView->FirstVisibleTabIndex() + 1);
 				break;
+
 			case MSG_OPEN_TAB_MENU:
 			{
 				BPopUpMenu* tabMenu = new BPopUpMenu("tab menu", true, false);
 				int tabCount = fTabContainerView->GetLayout()->CountItems();
 				for (int i = 0; i < tabCount; i++) {
 					TabView* tab = fTabContainerView->TabAt(i);
-					if (tab) {
-						BMenuItem* item = new BMenuItem(tab->Label(), NULL);
-						tabMenu->AddItem(item);
-						if (tab->IsFront())
-							item->SetMarked(true);
+					if (tab != NULL) {
+						BMenuItem* item = new(std::nothrow)
+							BMenuItem(tab->Label(), NULL);
+						if (item != NULL) {
+							tabMenu->AddItem(item);
+							if (i == fTabContainerView->SelectedTabIndex())
+								item->SetMarked(true);
+						}
 					}
 				}
 
@@ -284,6 +295,7 @@ public:
 
 				break;
 			}
+
 			default:
 				BGroupView::MessageReceived(message);
 				break;
@@ -341,10 +353,7 @@ public:
 
 	virtual void Draw(BRect updateRect)
 	{
-		BRect bounds(Bounds());
-		rgb_color base = LowColor();
-		be_control_look->DrawInactiveTab(this, bounds, updateRect,
-			base, 0, BControlLook::B_TOP_BORDER);
+		// draw nothing
 	}
 };
 
@@ -355,7 +364,7 @@ public:
 
 	virtual ~TabManagerController();
 
-	virtual void TabSelected(int32 index)
+	virtual void UpdateSelection(int32 index)
 	{
 		fManager->SelectTab(index);
 	}
@@ -379,6 +388,7 @@ public:
 	{
 		if (fCurrentToolTip == text)
 			return;
+
 		fCurrentToolTip = text;
 		fManager->GetTabContainerView()->HideToolTip();
 		fManager->GetTabContainerView()->SetToolTip(
@@ -426,8 +436,8 @@ public:
 
 	virtual BSize MaxSize();
 
-	virtual void DrawContents(BView* owner, BRect frame, const BRect& updateRect,
-		bool isFirst, bool isLast, bool isFront);
+	virtual void DrawContents(BView* owner, BRect frame,
+		const BRect& updateRect);
 
 	virtual void MouseDown(BPoint where, uint32 buttons);
 	virtual void MouseUp(BPoint where);
@@ -437,8 +447,7 @@ public:
 	void SetIcon(const BBitmap* icon);
 
 private:
-	void _DrawCloseButton(BView* owner, BRect& frame, const BRect& updateRect,
-		bool isFirst, bool isLast, bool isFront);
+	void _DrawCloseButton(BView* owner, BRect& frame, const BRect& updateRect);
 	BRect _CloseRectFrame(BRect frame) const;
 
 private:
@@ -485,13 +494,12 @@ WebTabView::MaxSize()
 
 
 void
-WebTabView::DrawContents(BView* owner, BRect frame, const BRect& updateRect,
-	bool isFirst, bool isLast, bool isFront)
+WebTabView::DrawContents(BView* owner, BRect frame, const BRect& updateRect)
 {
 	if (fController->CloseButtonsAvailable())
-		_DrawCloseButton(owner, frame, updateRect, isFirst, isLast, isFront);
+		_DrawCloseButton(owner, frame, updateRect);
 
-	if (fIcon) {
+	if (fIcon != NULL) {
 		BRect iconBounds(0, 0, kIconSize - 1, kIconSize - 1);
 		// clip to icon bounds, if they are smaller
 		if (iconBounds.Contains(fIcon->Bounds()))
@@ -523,7 +531,7 @@ WebTabView::DrawContents(BView* owner, BRect frame, const BRect& updateRect,
 		frame.left = frame.left + kIconSize + kIconInset * 2;
 	}
 
-	TabView::DrawContents(owner, frame, updateRect, isFirst, isLast, isFront);
+	TabView::DrawContents(owner, frame, updateRect);
 }
 
 
@@ -602,8 +610,9 @@ WebTabView::_CloseRectFrame(BRect frame) const
 }
 
 
-void WebTabView::_DrawCloseButton(BView* owner, BRect& frame,
-	const BRect& updateRect, bool isFirst, bool isLast, bool isFront)
+void
+WebTabView::_DrawCloseButton(BView* owner, BRect& frame,
+	const BRect& updateRect)
 {
 	BRect closeRect = _CloseRectFrame(frame);
 	frame.right = closeRect.left - be_control_look->DefaultLabelSpacing();
@@ -614,16 +623,36 @@ void WebTabView::_DrawCloseButton(BView* owner, BRect& frame,
 	closeRect.bottom = closeRect.top + 6;
 
 	rgb_color base = ui_color(B_PANEL_BACKGROUND_COLOR);
-	float tint = B_DARKEN_1_TINT;
-	if (!IsFront()) {
-		base = tint_color(base, tint);
-		tint *= 1.02;
-	}
-
-	if (fOverCloseRect)
-		tint *= 1.4;
+	
+	float tint;
+	if (base.IsLight())
+		tint = B_DARKEN_1_TINT;
 	else
-		tint *= 1.2;
+		tint = 0.50;
+
+	float isFront = ContainerView()->SelectedTab() == static_cast<TabView*>(this);
+	
+	if (base.IsLight()){
+		if (!isFront) {
+			base = tint_color(base, tint);
+			tint *= 1.02;
+		}
+
+		if (fOverCloseRect)
+			tint *= 1.4;
+		else
+			tint *= 1.2;
+	} else {
+		if (!isFront) {
+			base = tint_color(base, tint);
+			tint *= 0.80;
+		}
+
+		if (fOverCloseRect)
+			tint *= 0.6;
+		else
+			tint *= 0.9;
+	}
 
 	if (fClicked && fOverCloseRect) {
 		// Draw the button frame
@@ -701,9 +730,9 @@ TabManagerController::SetDoubleClickOutsideTabsMessage(const BMessage& message,
 
 
 TabManager::TabManager(const BMessenger& target, BMessage* newTabMessage)
-    :
-    fController(new TabManagerController(this)),
-    fTarget(target)
+	:
+	fController(new TabManagerController(this)),
+	fTarget(target)
 {
 	fController->SetDoubleClickOutsideTabsMessage(*newTabMessage,
 		be_app_messenger);
@@ -719,12 +748,9 @@ TabManager::TabManager(const BMessenger& target, BMessage* newTabMessage)
 	fController->SetTabContainerGroup(fTabContainerGroup);
 
 #if INTEGRATE_MENU_INTO_TAB_BAR
-	fMenu = new BMenu("Menu");
-	BMenuBar* menuBar = new BMenuBar("Menu bar");
-	menuBar->AddItem(fMenu);
-	TabButtonContainer* menuBarContainer = new TabButtonContainer();
-	menuBarContainer->GroupLayout()->AddView(menuBar);
-	fTabContainerGroup->GroupLayout()->AddView(menuBarContainer, 0.0f);
+	fMenuContainer = new BGroupView(B_HORIZONTAL, 0);
+	fMenuContainer->GroupLayout()->SetInsets(0, -3, 0, -3);
+	fTabContainerGroup->GroupLayout()->AddView(fMenuContainer, 0.0f);
 #endif
 
 	fTabContainerGroup->GroupLayout()->AddView(fTabContainerView);
@@ -749,22 +775,22 @@ TabManager::~TabManager()
 void
 TabManager::SetTarget(const BMessenger& target)
 {
-    fTarget = target;
+	fTarget = target;
 }
 
 
 const BMessenger&
 TabManager::Target() const
 {
-    return fTarget;
+	return fTarget;
 }
 
 
 #if INTEGRATE_MENU_INTO_TAB_BAR
-BMenu*
-TabManager::Menu() const
+BGroupLayout*
+TabManager::MenuContainerLayout() const
 {
-	return fMenu;
+	return fMenuContainer->GroupLayout();
 }
 #endif
 
@@ -826,9 +852,9 @@ TabManager::SelectTab(int32 tabIndex)
 	fCardLayout->SetVisibleItem(tabIndex);
 	fTabContainerView->SelectTab(tabIndex);
 
-    BMessage message(TAB_CHANGED);
-    message.AddInt32("tab index", tabIndex);
-    fTarget.SendMessage(&message);
+	BMessage message(TAB_CHANGED);
+	message.AddInt32("tab index", tabIndex);
+	fTarget.SendMessage(&message);
 }
 
 
@@ -851,9 +877,9 @@ TabManager::SelectedTabIndex() const
 void
 TabManager::CloseTab(int32 tabIndex)
 {
-    BMessage message(CLOSE_TAB);
-    message.AddInt32("tab index", tabIndex);
-    fTarget.SendMessage(&message);
+	BMessage message(CLOSE_TAB);
+	message.AddInt32("tab index", tabIndex);
+	fTarget.SendMessage(&message);
 }
 
 
@@ -926,5 +952,3 @@ TabManager::SetCloseButtonsAvailable(bool available)
 	fController->SetCloseButtonsAvailable(available);
 	fTabContainerView->Invalidate();
 }
-
-

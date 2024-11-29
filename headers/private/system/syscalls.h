@@ -23,6 +23,7 @@ extern "C" {
 
 struct attr_info;
 struct dirent;
+struct event_wait_info;
 struct fd_info;
 struct fd_set;
 struct fs_info;
@@ -74,15 +75,22 @@ extern status_t		_kern_get_safemode_option(const char *parameter,
 extern ssize_t		_kern_wait_for_objects(object_wait_info* infos, int numInfos,
 						uint32 flags, bigtime_t timeout);
 
+extern int			_kern_event_queue_create(int openFlags);
+extern status_t		_kern_event_queue_select(int queue,
+						struct event_wait_info* userInfos, int numInfos);
+extern ssize_t		_kern_event_queue_wait(int queue, struct event_wait_info* infos,
+						int numInfos, uint32 flags, bigtime_t timeout);
+
 /* user mutex functions */
 extern status_t		_kern_mutex_lock(int32* mutex, const char* name,
 						uint32 flags, bigtime_t timeout);
-extern status_t		_kern_mutex_unlock(int32* mutex, uint32 flags);
-extern status_t		_kern_mutex_switch_lock(int32* fromMutex, int32* toMutex,
-						const char* name, uint32 flags, bigtime_t timeout);
+extern status_t		_kern_mutex_unblock(int32* mutex, uint32 flags);
+extern status_t		_kern_mutex_switch_lock(int32* fromMutex, uint32 fromFlags,
+						int32* toMutex, const char* name, uint32 toFlags,
+						bigtime_t timeout);
 extern status_t		_kern_mutex_sem_acquire(int32* sem, const char* name,
 						uint32 flags, bigtime_t timeout);
-extern status_t		_kern_mutex_sem_release(int32* sem);
+extern status_t		_kern_mutex_sem_release(int32* sem, uint32 flags);
 
 /* sem functions */
 extern sem_id		_kern_create_sem(int count, const char *name);
@@ -112,7 +120,8 @@ extern status_t		_kern_realtime_sem_unlink(const char* name);
 
 extern status_t		_kern_realtime_sem_get_value(sem_id semID, int* value);
 extern status_t		_kern_realtime_sem_post(sem_id semID);
-extern status_t		_kern_realtime_sem_wait(sem_id semID, bigtime_t timeout);
+extern status_t		_kern_realtime_sem_wait(sem_id semID, uint32 flags,
+						bigtime_t timeout);
 
 /* POSIX XSI semaphore syscalls */
 extern int			_kern_xsi_semget(key_t key, int numSems, int flags);
@@ -166,6 +175,8 @@ extern status_t		_kern_cancel_thread(thread_id threadID,
 extern void			_kern_thread_yield(void);
 extern status_t		_kern_wait_for_thread(thread_id thread,
 						status_t *_returnCode);
+extern status_t		_kern_wait_for_thread_etc(thread_id thread, uint32 flags,
+						bigtime_t timeout, status_t *_returnCode);
 extern bool			_kern_has_data(thread_id thread);
 extern status_t		_kern_send_data(thread_id thread, int32 code,
 						const void *buffer, size_t bufferSize);
@@ -177,12 +188,17 @@ extern int64		_kern_restore_signal_frame(
 extern status_t		_kern_get_thread_info(thread_id id, thread_info *info);
 extern status_t		_kern_get_next_thread_info(team_id team, int32 *cookie,
 						thread_info *info);
-extern status_t		_kern_get_team_info(team_id id, team_info *info);
-extern status_t		_kern_get_next_team_info(int32 *cookie, team_info *info);
+extern status_t		_kern_get_team_info(team_id id, team_info *info,
+						size_t size);
+extern status_t		_kern_get_next_team_info(int32 *cookie, team_info *info,
+						size_t size);
 extern status_t		_kern_get_team_usage_info(team_id team, int32 who,
 						team_usage_info *info, size_t size);
 extern status_t		_kern_get_extended_team_info(team_id teamID, uint32 flags,
 						void* buffer, size_t size, size_t* _sizeNeeded);
+extern int			_kern_get_cpu();
+extern status_t		_kern_get_thread_affinity(thread_id id, void* userMask, size_t size);
+extern status_t		_kern_set_thread_affinity(thread_id id, const void* userMask, size_t size);
 
 extern status_t		_kern_start_watching_system(int32 object, uint32 flags,
 						port_id port, int32 token);
@@ -279,14 +295,14 @@ extern status_t		_kern_unlink(int fd, const char *path);
 extern status_t		_kern_rename(int oldDir, const char *oldpath, int newDir,
 						const char *newpath);
 extern status_t		_kern_create_fifo(int fd, const char *path, mode_t perms);
-extern status_t		_kern_create_pipe(int *fds);
+extern status_t		_kern_create_pipe(int *fds, int flags);
 extern status_t		_kern_access(int fd, const char *path, int mode,
 						bool effectiveUserGroup);
 extern ssize_t		_kern_select(int numfds, struct fd_set *readSet,
 						struct fd_set *writeSet, struct fd_set *errorSet,
 						bigtime_t timeout, const sigset_t *sigMask);
 extern ssize_t		_kern_poll(struct pollfd *fds, int numFDs,
-						bigtime_t timeout);
+						bigtime_t timeout, const sigset_t *sigMask);
 
 extern int			_kern_open_attr_dir(int fd, const char *path,
 						bool traverseLeafLink);
@@ -333,11 +349,12 @@ extern status_t		_kern_write_stat(int fd, const char *path,
 						size_t statSize, int statMask);
 extern status_t		_kern_close(int fd);
 extern int			_kern_dup(int fd);
-extern int			_kern_dup2(int ofd, int nfd);
+extern int			_kern_dup2(int ofd, int nfd, int flags);
 extern status_t		_kern_lock_node(int fd);
 extern status_t		_kern_unlock_node(int fd);
 extern status_t		_kern_get_next_fd_info(team_id team, uint32 *_cookie,
 						struct fd_info *info, size_t infoSize);
+extern status_t		_kern_preallocate(int fd, off_t offset, off_t length);
 
 // socket functions
 extern int			_kern_socket(int family, int type, int protocol);
@@ -348,7 +365,7 @@ extern status_t		_kern_connect(int socket, const struct sockaddr *address,
 						socklen_t addressLength);
 extern status_t		_kern_listen(int socket, int backlog);
 extern int			_kern_accept(int socket, struct sockaddr *address,
-						socklen_t *_addressLength);
+						socklen_t *_addressLength, int flags);
 extern ssize_t		_kern_recv(int socket, void *data, size_t length,
 						int flags);
 extern ssize_t		_kern_recvfrom(int socket, void *data, size_t length,
@@ -446,6 +463,9 @@ extern status_t		_kern_memory_advice(void *address, size_t size,
 
 extern status_t		_kern_get_memory_properties(team_id teamID,
 						const void *address, uint32* _protected, uint32* _lock);
+
+extern status_t		_kern_mlock(const void* address, size_t size);
+extern status_t		_kern_munlock(const void* address, size_t size);
 
 /* kernel port functions */
 extern port_id		_kern_create_port(int32 queue_length, const char *name);
@@ -549,7 +569,7 @@ extern void			_kern_clear_caches(void *address, size_t length,
 extern bool			_kern_cpu_enabled(int32 cpu);
 extern status_t		_kern_set_cpu_enabled(int32 cpu, bool enabled);
 
-#if defined(__INTEL__) || defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__)
 // our only x86 only syscall
 extern status_t		_kern_get_cpuid(cpuid_info *info, uint32 eax, uint32 cpu);
 #endif

@@ -54,7 +54,7 @@ static void *sPICCookie;
 
 
 void
-arch_int_enable_io_interrupt(int irq)
+arch_int_enable_io_interrupt(int32 irq)
 {
 	if (!sPIC)
 		return;
@@ -65,7 +65,7 @@ arch_int_enable_io_interrupt(int irq)
 
 
 void
-arch_int_disable_io_interrupt(int irq)
+arch_int_disable_io_interrupt(int32 irq)
 {
 	if (!sPIC)
 		return;
@@ -246,12 +246,7 @@ dprintf("handling I/O interrupts done\n");
 	}
 
 	cpu_status state = disable_interrupts();
-	if (thread->cpu->invoke_scheduler) {
-		SpinLocker schedulerLocker(thread->scheduler_lock);
-		scheduler_reschedule(B_THREAD_READY);
-		schedulerLocker.Unlock();
-		restore_interrupts(state);
-	} else if (thread->post_interrupt_callback != NULL) {
+	if (thread->post_interrupt_callback != NULL) {
 		void (*callback)(void*) = thread->post_interrupt_callback;
 		void* data = thread->post_interrupt_data;
 
@@ -261,6 +256,11 @@ dprintf("handling I/O interrupts done\n");
 		restore_interrupts(state);
 
 		callback(data);
+	} else if (thread->cpu->invoke_scheduler) {
+		SpinLocker schedulerLocker(thread->scheduler_lock);
+		scheduler_reschedule(B_THREAD_READY);
+		schedulerLocker.Unlock();
+		restore_interrupts(state);
 	}
 
 	// pop iframe
@@ -570,3 +570,10 @@ ppc_set_current_cpu_exception_context(struct ppc_cpu_exception_context *context)
 	asm volatile("mtsprg0 %0" : : "r"(physicalPage + inPageOffset));
 }
 
+
+int32
+arch_int_assign_to_cpu(int32 irq, int32 cpu)
+{
+	// Not yet supported.
+	return 0;
+}

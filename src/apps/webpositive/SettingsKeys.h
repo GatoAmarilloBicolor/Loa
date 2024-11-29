@@ -21,6 +21,7 @@ extern const char* kSettingsKeyAutoHideInterfaceInFullscreenMode;
 extern const char* kSettingsKeyAutoHidePointer;
 extern const char* kSettingsKeyShowHomeButton;
 
+extern const char* kSettingsKeyStartUpPolicy;
 extern const char* kSettingsKeyNewWindowPolicy;
 extern const char* kSettingsKeyNewTabPolicy;
 extern const char* kSettingsKeyStartPageURL;
@@ -38,5 +39,13 @@ extern const char* kSettingsKeyProxyUsername;
 extern const char* kSettingsKeyProxyPassword;
 
 extern const char* kSettingsShowBookmarkBar;
+
+struct SearchEngine {
+	const char* name;
+	const char* url;
+	const char* shortcut;
+};
+
+extern const struct SearchEngine kSearchEngines[];
 
 #endif	// SETTINGS_KEYS_H

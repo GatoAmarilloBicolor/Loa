@@ -7,12 +7,12 @@ UsePrivateHeaders interface shared system ;
 Application Mandelbrot :
 	Mandelbrot.cpp
 	FractalEngine.cpp
-	: be [ TargetLibsupc++ ] localestub
+	: be [ TargetLibsupc++ ] localestub tracker translation
 	: Mandelbrot.rdef
 	;
 
 DoCatalogs Mandelbrot :
-    x-vnd.Haiku-Mandelbrot
-    :
+	x-vnd.Haiku-Mandelbrot
+	:
 	Mandelbrot.cpp
 ;

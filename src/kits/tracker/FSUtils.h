@@ -207,6 +207,9 @@ _IMPEXP_TRACKER status_t FSRecursiveCalcSize(BInfoWindow*,
 	CopyLoopControl* loopControl, BDirectory*, off_t* runningSize,
 	int32* fileCount, int32* dirCount);
 
+bool FSInDeskDir(const entry_ref*);
+bool FSIsQueriesDir(const entry_ref*);
+bool FSInRootDir(const entry_ref*);
 bool FSInTrashDir(const entry_ref*);
 
 // doesn't need to be exported
@@ -235,7 +238,7 @@ ReadAttrResult ReadAttr(const BNode*, const char* hostAttrName,
 ReadAttrResult GetAttrInfo(const BNode*, const char* hostAttrName,
 	const char* foreignAttrName, type_code* = NULL, size_t* = NULL);
 
-status_t FSCreateNewFolder(const entry_ref*);
+status_t FSCreateNewFolder(entry_ref*);
 status_t FSRecursiveCreateFolder(const char* path);
 void FSMakeOriginalName(BString &name, const BDirectory* destDir,
 	const char* suffix = 0);
@@ -249,7 +252,6 @@ status_t TrackerLaunch(const BMessage* refs, bool async,
 	bool okToRunOpenWith = true);
 status_t TrackerLaunch(const entry_ref* appRef, const BMessage* refs,
 	bool async, bool okToRunOpenWith = true);
-status_t LaunchBrokenLink(const char*, const BMessage*);
 
 status_t FSFindTrackerSettingsDir(BPath*, bool autoCreate = true);
 
@@ -263,6 +265,11 @@ enum DestructiveAction {
 bool ConfirmChangeIfWellKnownDirectory(const BEntry* entry,
 	DestructiveAction action, bool dontAsk = false,
 	int32* confirmedAlready = NULL);
+
+status_t EditModelName(const Model* model, const char* name, size_t);
+	// return B_OK if name was edited
+status_t ShouldEditRefName(const entry_ref* ref, const char* name, size_t);
+	// return B_OK if name should be edited
 
 bool CheckDevicesEqual(const entry_ref* entry, const Model* targetModel);
 

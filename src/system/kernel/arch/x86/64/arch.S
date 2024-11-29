@@ -87,6 +87,8 @@ FUNCTION(arch_debug_call_with_fault_handler):
 
 	// Preserve the jump buffer address for the fault return.
 	push	%rsi
+	// Align the stack before calling the function.
+	subq	$8, %rsp
 
 	// Set fault handler address, and fault handler stack pointer address. We
 	// don't need to save the previous values, since that's done by the caller.
@@ -119,3 +121,16 @@ FUNCTION_END(_stac)
 FUNCTION(_clac):
 	clac
 FUNCTION_END(_clac)
+
+FUNCTION(_xsave):
+	xsave64		(%rdi)
+FUNCTION_END(_xsave)
+
+FUNCTION(_xsavec):
+	xsavec64	(%rdi)
+FUNCTION_END(_xsavec)
+
+FUNCTION(_xrstor):
+	xrstor64	(%rdi)
+FUNCTION_END(_xrstor)
+

@@ -163,7 +163,7 @@ struct socket_timeout {
 		UpdateSocket(socket);
 	}
 
-	time_t timeout; // in micro secs
+	bigtime_t timeout; // in micro secs
 	uint8 tries;
 
 	bool Shift(int socket, bigtime_t stateMaxTime, const char* device);
@@ -448,19 +448,24 @@ socket_timeout::UpdateSocket(int socket) const
 bool
 socket_timeout::Shift(int socket, bigtime_t stateMaxTime, const char* device)
 {
+	if (tries == UINT8_MAX)
+		return false;
+
 	tries++;
-	timeout += timeout;
+
+	if (tries > MAX_RETRIES) {
+		bigtime_t now = system_time();
+		if (stateMaxTime == -1 || stateMaxTime < now)
+			return false;
+		bigtime_t remaining = (stateMaxTime - now) / 2 + 1;
+		timeout = std::max(remaining, bigtime_t(AS_USECS(60)));
+	} else
+		timeout += timeout;
+
 	if (timeout > AS_USECS(MAX_TIMEOUT))
 		timeout = AS_USECS(MAX_TIMEOUT);
 
-	if (tries > MAX_RETRIES) {
-		if (stateMaxTime == -1)
-			return false;
-		bigtime_t remaining = (stateMaxTime - system_time()) / 2 + 1;
-		timeout = std::max(remaining, bigtime_t(60));
-	}
-
-	syslog(LOG_DEBUG, "%s: Timeout shift: %lu msecs (try %lu)\n",
+	syslog(LOG_DEBUG, "%s: Timeout shift: %" B_PRIdTIME " msecs (try %" B_PRIu8 ")\n",
 		device, timeout / 1000, tries);
 
 	UpdateSocket(socket);
@@ -479,6 +484,10 @@ DHCPClient::DHCPClient(BMessenger target, const char* device)
 	fRunner(NULL),
 	fAssignedAddress(0),
 	fServer(AF_INET, NULL, DHCP_SERVER_PORT, B_UNCONFIGURED_ADDRESS_FAMILIES),
+	fStartTime(0),
+	fRequestTime(0),
+	fRenewalTime(0),
+	fRebindingTime(0),
 	fLeaseTime(0)
 {
 	fTransactionID = (uint32)system_time() ^ rand();
@@ -868,7 +877,7 @@ DHCPClient::_ParseOptions(dhcp_message& message, BMessage& address,
 				break;
 
 			default:
-				syslog(LOG_DEBUG, "  UNKNOWN OPTION %lu (0x%x)\n",
+				syslog(LOG_DEBUG, "  UNKNOWN OPTION %" B_PRIu32 " (0x%" B_PRIx32 ")\n",
 					(uint32)option, (uint32)option);
 				break;
 		}
@@ -949,10 +958,24 @@ DHCPClient::_TimeoutShift(int socket, dhcp_state& state,
 	socket_timeout& timeout)
 {
 	bigtime_t stateMaxTime = -1;
+
+	// Compute the date at which we must consider the DHCP negociation failed.
+	// This varies depending on the current state. In renewing and rebinding
+	// states, it is based on the lease expiration.
+	// We can stay for up to 1 minute in the selecting and requesting states
+	// (these correspond to sending DHCP_DISCOVER and DHCP_REQUEST,
+	// respectively).
+	// All other states time out immediately after a single try.
+	// If this timeout expires, the DHCP negociation is aborted and starts
+	// over. As long as the timeout is not expired, we repeat the message with
+	// increasing delays (the delay is computed in timeout.shift below, and is
+	// at most equal to the timeout, but usually much shorter).
 	if (state == RENEWING)
 		stateMaxTime = fRebindingTime;
 	else if (state == REBINDING)
 		stateMaxTime = fLeaseTime;
+	else if (state == SELECTING || state == REQUESTING)
+		stateMaxTime = fRequestTime + AS_USECS(MAX_TIMEOUT);
 
 	if (system_time() > stateMaxTime) {
 		state = state == REBINDING ? INIT : REBINDING;

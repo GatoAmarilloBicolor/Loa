@@ -19,6 +19,7 @@
 #include <libroot_private.h>
 #include <runtime_loader.h>
 #include <syscalls.h>
+#include <syscall_load_image.h>
 #include <user_runtime.h>
 
 
@@ -42,17 +43,16 @@ struct EnvironmentFilter {
 
 	void Init(const char* path, const char* const* env, size_t envCount)
 	{
-		int fd = open(path, O_RDONLY);
-		if (fd < 0)
+		FileDescriptorCloser fd(open(path, O_RDONLY));
+		if (!fd.IsSet())
 			return;
-		FileDescriptorCloser fdCloser(fd);
 
 		static const char* const kEnvAttribute = "SYS:ENV";
 		attr_info info;
-		if (fs_stat_attr(fd, kEnvAttribute, &info) < 0)
+		if (fs_stat_attr(fd.Get(), kEnvAttribute, &info) < 0)
 			return;
 
-		_Init(fd, kEnvAttribute, info.size, env, envCount);
+		_Init(fd.Get(), kEnvAttribute, info.size, env, envCount);
 	}
 
 	size_t AdditionalSlotsNeeded() const
@@ -200,7 +200,8 @@ private:
 
 
 thread_id
-load_image(int32 argCount, const char **args, const char **environ)
+__load_image_at_path(const char* path, int32 argCount, const char **args,
+	const char **environ)
 {
 	char invoker[B_FILE_NAME_LENGTH];
 	char **newArgs = NULL;
@@ -212,13 +213,13 @@ load_image(int32 argCount, const char **args, const char **environ)
 
 	// test validity of executable + support for scripts
 	{
-		status_t status = __test_executable(args[0], invoker);
+		status_t status = __test_executable(path, invoker);
 		if (status < B_OK)
 			return status;
 
 		if (invoker[0]) {
 			status = __parse_invoke_line(invoker, &newArgs,
-				(char * const **)&args, &argCount, args[0]);
+				(char * const **)&args, &argCount, path);
 			if (status < B_OK)
 				return status;
 		}
@@ -231,7 +232,7 @@ load_image(int32 argCount, const char **args, const char **environ)
 	char** flatArgs = NULL;
 	size_t flatArgsSize;
 	status_t status = __flatten_process_args(args, argCount, environ,
-		&envCount, args[0], &flatArgs, &flatArgsSize);
+		&envCount, path, &flatArgs, &flatArgsSize);
 
 	if (status == B_OK) {
 		thread = _kern_load_image(flatArgs, flatArgsSize, argCount, envCount,
@@ -243,6 +244,13 @@ load_image(int32 argCount, const char **args, const char **environ)
 
 	free(newArgs);
 	return thread;
+}
+
+
+thread_id
+load_image(int32 argCount, const char **args, const char **environ)
+{
+	return __load_image_at_path(args[0], argCount, args, environ);
 }
 
 
@@ -311,6 +319,55 @@ clear_caches(void *address, size_t length, uint32 flags)
 
 
 //	#pragma mark -
+
+
+status_t
+__look_up_in_path(const char *file, char *buffer)
+{
+	// get the PATH
+	const char* paths = getenv("PATH");
+	if (paths == NULL)
+		return B_ENTRY_NOT_FOUND;
+
+	int fileNameLen = strlen(file);
+
+	// iterate through the paths
+	const char* pathEnd = paths - 1;
+	while (pathEnd != NULL) {
+		paths = pathEnd + 1;
+		pathEnd = strchr(paths, ':');
+		int pathLen = (pathEnd ? pathEnd - paths : strlen(paths));
+
+		// We skip empty paths and those that would become too long.
+		// The latter is not really correct, but practically irrelevant.
+		if (pathLen == 0
+			|| pathLen + 1 + fileNameLen >= B_PATH_NAME_LENGTH) {
+			continue;
+		}
+
+		// concatinate the program path
+		char path[B_PATH_NAME_LENGTH];
+		memcpy(path, paths, pathLen);
+		path[pathLen] = '\0';
+
+		if (path[pathLen - 1] != '/')
+			strcat(path, "/");
+		strcat(path, file);
+
+		// check whether it is a file
+		struct stat st;
+		if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
+			continue;
+
+		// if executable, we've found what we are looking for
+		if (access(path, X_OK) == 0) {
+			strlcpy(buffer, path, B_PATH_NAME_LENGTH);
+			return B_OK;
+		}
+	}
+
+	return B_ENTRY_NOT_FOUND;
+}
 
 
 static char *

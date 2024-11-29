@@ -14,7 +14,7 @@ struct X86PagingStructures64Bit;
 
 
 struct X86VMTranslationMap64Bit final : X86VMTranslationMap {
-								X86VMTranslationMap64Bit();
+								X86VMTranslationMap64Bit(bool la57);
 	virtual						~X86VMTranslationMap64Bit();
 
 			status_t			Init(bool kernel);
@@ -57,12 +57,17 @@ struct X86VMTranslationMap64Bit final : X86VMTranslationMap {
 									bool unmapIfUnaccessed,
 									bool& _modified);
 
+	virtual	bool				DebugGetReverseMappingInfo(
+									phys_addr_t physicalAddress,
+									ReverseMappingInfoCallback& callback);
+
 	virtual	X86PagingStructures* PagingStructures() const;
 	inline	X86PagingStructures64Bit* PagingStructures64Bit() const
 									{ return fPagingStructures; }
 
 private:
 			X86PagingStructures64Bit* fPagingStructures;
+			bool				fLA57;
 };
 
 

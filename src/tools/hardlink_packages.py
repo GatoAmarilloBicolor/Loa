@@ -4,23 +4,40 @@
 # Hardlink only packages used in the build from one directory to another,
 # and updates the RemotePackageRepository file at the same time.
 #
-# Copyright 2017 Augustin Cavalier <waddlesplash>
+# Copyright 2017-2020 Augustin Cavalier <waddlesplash>
 # Distributed under the terms of the MIT License.
 
-import sys, os, re, hashlib
+import sys, os, subprocess, re, hashlib
+from pkg_resources import parse_version
 
-if len(sys.argv) < 5:
-	print("usage: hardlink_packages.py [arch] [jam RemotePackageRepository file] "
+# Detect architecture from provided jam remote package repo file
+def probe_architecture(jamf):
+	text = ""
+	with open(jamf) as f:
+		for readline in f:
+			line_strip = readline.strip()
+			text += line_strip
+	return text.split(":")[1].strip()
+
+if len(sys.argv) != 4:
+	print("usage: hardlink_packages.py [jam RemotePackageRepository file] "
 		+ "[prebuilt packages directory] [destination root directory]")
-	print("note that the [jam RemotePackageRepository file] will be modified.")
-	print("note that [target directory] is assumed to have a 'packages' subdirectory, "
-		+ " and a repo.info.template file (using $ARCH$)")
+	print("  note that the [jam RemotePackageRepository file] will be modified.")
+	print("  note that [target directory] is assumed to have a 'packages' subdirectory, "
+		+ "and a repo.info.template file (using $ARCH$)")
 	sys.exit(1)
 
-args_arch = sys.argv[1]
-args_jamf = sys.argv[2]
-args_src = sys.argv[3]
-args_dst = sys.argv[4]
+if subprocess.run(['package_repo'], None, None, None,
+		subprocess.DEVNULL, subprocess.PIPE).returncode != 1:
+	print("package_repo command does not seem to exist.")
+	sys.exit(1)
+
+args_jamf = sys.argv[1]
+args_src = sys.argv[2]
+args_dst = sys.argv[3]
+arch = probe_architecture(args_jamf)
+
+print("Detected Architecture: " + arch)
 
 if not args_dst.endswith('/'):
 	args_dst = args_dst + '/'
@@ -31,7 +48,7 @@ args_dst_packages = args_dst + 'packages/'
 
 packageVersions = []
 for filename in os.listdir(args_src):
-	if (not (filename.endswith("-" + args_arch + ".hpkg")) and
+	if (not (filename.endswith("-" + arch + ".hpkg")) and
 			not (filename.endswith("-any.hpkg"))):
 		continue
 	packageVersions.append(filename)
@@ -62,9 +79,9 @@ with open(args_jamf) as f:
 
 		greatestVersion = None
 		for pkgVersion in packageVersions:
-			if (pkgVersion.startswith(pkgname + '-') and
-					((greatestVersion == None) or (pkgVersion > greatestVersion))):
-				greatestVersion = pkgVersion
+			if (pkgVersion.startswith(pkgname + '-')):
+				if ((greatestVersion == None) or parse_version(pkgVersion) > parse_version(greatestVersion)):
+					greatestVersion = pkgVersion
 		if (greatestVersion == None):
 			print("not found: " + pkg)
 			newFileForJam.append(line)
@@ -77,7 +94,7 @@ with open(args_jamf) as f:
 			if ('packages/' + greatestVersion) not in packageFiles:
 				packageFiles.append('packages/' + greatestVersion)
 			# also hardlink the source package, if one exists
-			srcpkg = greatestVersion.replace("-" + args_arch + ".hpkg",
+			srcpkg = greatestVersion.replace("-" + arch + ".hpkg",
 				"-source.hpkg").replace('-', '_source-', 1)
 			if os.path.exists(args_src + srcpkg):
 				if not os.path.exists(args_dst_packages + srcpkg):
@@ -106,7 +123,7 @@ os.symlink('../packages', repodir + 'packages')
 with open(args_dst + 'repo.info.template', 'r') as ritf:
 	repoInfoTemplate = ritf.read()
 
-repoInfoTemplate = repoInfoTemplate.replace("$ARCH$", args_arch)
+repoInfoTemplate = repoInfoTemplate.replace("$ARCH$", arch)
 with open(repodir + 'repo.info', 'w') as rinf:
 	rinf.write(repoInfoTemplate)
 

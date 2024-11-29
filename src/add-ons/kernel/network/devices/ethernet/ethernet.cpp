@@ -33,6 +33,7 @@
 struct ethernet_device : net_device, DoublyLinkedListLinkImpl<ethernet_device> {
 	int		fd;
 	uint32	frame_size;
+	bool	supports_net_buffer;
 };
 
 static const bigtime_t kLinkCheckInterval = 1000000;
@@ -57,9 +58,6 @@ update_link_state(ethernet_device *device, bool notify = true)
 		return B_NOT_SUPPORTED;
 	}
 
-	state.media |= IFM_ETHER;
-		// make sure the media type is returned correctly
-
 	if (device->media != state.media
 		|| device->link_quality != state.quality
 		|| device->link_speed != state.speed) {
@@ -67,15 +65,24 @@ update_link_state(ethernet_device *device, bool notify = true)
 		device->link_quality = state.quality;
 		device->link_speed = state.speed;
 
-		if (device->media & IFM_ACTIVE)
+		if (device->media & IFM_ACTIVE) {
+			if ((device->flags & IFF_LINK) == 0) {
+				dprintf("%s: link up, media 0x%0x quality %u speed %u\n",
+					device->name, (unsigned int)device->media,
+					(unsigned int)device->link_quality,
+					(unsigned int)device->link_speed);
+			}
 			device->flags |= IFF_LINK;
-		else
+		} else {
+			if ((device->flags & IFF_LINK) != 0) {
+				dprintf("%s: link down, media 0x%0x quality %u speed %u\n",
+					device->name, (unsigned int)device->media,
+					(unsigned int)device->link_quality,
+					(unsigned int)device->link_speed);
+			}
 			device->flags &= ~IFF_LINK;
+		}
 
-		dprintf("%s: media change, media 0x%0x quality %u speed %u\n",
-				device->name, (unsigned int)device->media,
-				(unsigned int)device->link_quality,
-				(unsigned int)device->link_speed);
 
 		if (notify)
 			sStackModule->device_link_changed(device);
@@ -145,7 +152,7 @@ ethernet_init(const char *name, net_device **_device)
 	strcpy(device->name, name);
 	device->flags = IFF_BROADCAST | IFF_LINK;
 	device->type = IFT_ETHER;
-	device->mtu = 1500;
+	device->mtu = ETHER_MAX_FRAME_SIZE - ETHER_HEADER_LENGTH;
 	device->media = IFM_ACTIVE | IFM_ETHER;
 	device->header_length = ETHER_HEADER_LENGTH;
 	device->fd = -1;
@@ -181,10 +188,24 @@ ethernet_up(net_device *_device)
 	if (ioctl(device->fd, ETHER_GETADDR, device->address.data, ETHER_ADDRESS_LENGTH) < 0)
 		goto err;
 
+	if (ioctl(device->fd, ETHER_SEND_NET_BUFFER, NULL, 0) != 0) {
+		// Check if the returned error code is B_BAD_DATA (not EINVAL or EOPNOTSUPP).
+		if (errno == B_BAD_DATA)
+			device->supports_net_buffer = true;
+	}
+
 	if (ioctl(device->fd, ETHER_GETFRAMESIZE, &device->frame_size, sizeof(uint32)) < 0) {
 		// this call is obviously optional
 		device->frame_size = ETHER_MAX_FRAME_SIZE;
 	}
+
+#if 1
+	// The network stack does not handle path MTU discovery correctly at present,
+	// so don't report frame sizes larger than the standard ethernet maximum.
+	// (We will still handle receiving frames larger than this.)
+	if (device->frame_size > ETHER_MAX_FRAME_SIZE)
+		device->frame_size = ETHER_MAX_FRAME_SIZE;
+#endif
 
 	if (update_link_state(device, false) == B_OK) {
 		// device supports retrieval of the link state
@@ -256,11 +277,17 @@ ethernet_send_data(net_device *_device, net_buffer *buffer)
 	if (buffer->size > device->frame_size || buffer->size < ETHER_HEADER_LENGTH)
 		return B_BAD_VALUE;
 
+	if (device->supports_net_buffer) {
+		if (ioctl(device->fd, ETHER_SEND_NET_BUFFER, buffer, sizeof(net_buffer)) != 0)
+			return errno;
+		return 0;
+	}
+
 	net_buffer *allocated = NULL;
 	net_buffer *original = buffer;
 
 	if (gBufferModule->count_iovecs(buffer) > 1) {
-		// TODO: for now, create a new buffer containing the data
+		// Create a new buffer containing the data.
 		buffer = gBufferModule->duplicate(original);
 		if (buffer == NULL)
 			return ENOBUFS;
@@ -268,7 +295,7 @@ ethernet_send_data(net_device *_device, net_buffer *buffer)
 		allocated = buffer;
 
 		if (gBufferModule->count_iovecs(buffer) > 1) {
-			dprintf("scattered I/O is not yet supported by ethernet device.\n");
+			dprintf("ethernet: net_buffer I/O is not supported by underlying device\n");
 			gBufferModule->free(buffer);
 			device->stats.send.errors++;
 			return B_NOT_SUPPORTED;
@@ -283,14 +310,10 @@ ethernet_send_data(net_device *_device, net_buffer *buffer)
 //dprintf("sent: %ld\n", bytesWritten);
 
 	if (bytesWritten < 0) {
-		device->stats.send.errors++;
 		if (allocated)
 			gBufferModule->free(allocated);
 		return errno;
 	}
-
-	device->stats.send.packets++;
-	device->stats.send.bytes += bytesWritten;
 
 	gBufferModule->free(original);
 	if (allocated)
@@ -307,22 +330,25 @@ ethernet_receive_data(net_device *_device, net_buffer **_buffer)
 	if (device->fd == -1)
 		return B_FILE_ERROR;
 
-	// TODO: better header space
+	if (device->supports_net_buffer) {
+		if (ioctl(device->fd, ETHER_RECEIVE_NET_BUFFER, _buffer, sizeof(net_buffer*)) != 0)
+			return errno;
+		return 0;
+	}
+
+	// read/write only works for standard ethernet frames. For larger frames,
+	// the driver should support send/receive of net_buffers directly, above.
+
 	net_buffer *buffer = gBufferModule->create(256);
 	if (buffer == NULL)
 		return ENOBUFS;
-
-	// TODO: this only works for standard ethernet frames - we need iovecs
-	//	for jumbo frame support (or a separate read buffer)!
-	//	It would be even nicer to get net_buffers from the ethernet driver
-	//	directly.
 
 	ssize_t bytesRead;
 	void *data;
 
 	status_t status = gBufferModule->append_size(buffer, device->frame_size, &data);
 	if (status == B_OK && data == NULL) {
-		dprintf("scattered I/O is not yet supported by ethernet device.\n");
+		dprintf("ethernet: net_buffer I/O is not supported by underlying device\n");
 		status = B_NOT_SUPPORTED;
 	}
 	if (status < B_OK)
@@ -330,7 +356,6 @@ ethernet_receive_data(net_device *_device, net_buffer **_buffer)
 
 	bytesRead = read(device->fd, data, device->frame_size);
 	if (bytesRead < 0) {
-		device->stats.receive.errors++;
 		status = errno;
 		goto err;
 	}
@@ -338,12 +363,9 @@ ethernet_receive_data(net_device *_device, net_buffer **_buffer)
 
 	status = gBufferModule->trim(buffer, bytesRead);
 	if (status < B_OK) {
-		device->stats.receive.dropped++;
+		atomic_add((int32*)&device->stats.receive.dropped, 1);
 		goto err;
 	}
-
-	device->stats.receive.bytes += bytesRead;
-	device->stats.receive.packets++;
 
 	*_buffer = buffer;
 	return B_OK;

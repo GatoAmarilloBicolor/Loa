@@ -59,6 +59,12 @@ FormatSettingsView::FormatSettingsView()
 		B_TRANSLATE("Use month/day-names from preferred language"),
 		new BMessage(kStringsLanguageChange));
 
+	fFilesystemTranslationCheckbox = new BCheckBox("filesystemTranslation",
+		B_TRANSLATE("Translate application and folder names"),
+		new BMessage(kMsgFilesystemTranslationChanged));
+	fFilesystemTranslationCheckbox->SetValue(
+		BLocaleRoster::Default()->IsFilesystemTranslationPreferred());
+
 	BStringView* fullDateLabel
 		= new BStringView("", B_TRANSLATE("Full format:"));
 	fullDateLabel->SetExplicitAlignment(BAlignment(B_ALIGN_LEFT,
@@ -230,6 +236,7 @@ FormatSettingsView::FormatSettingsView()
 	SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL)
+		.Add(fFilesystemTranslationCheckbox)
 		.Add(fUseLanguageStringsCheckBox)
 		.Add(fDateBox)
 		.Add(fTimeBox)
@@ -249,6 +256,7 @@ FormatSettingsView::~FormatSettingsView()
 void
 FormatSettingsView::AttachedToWindow()
 {
+	fFilesystemTranslationCheckbox->SetTarget(Window());
 	fUseLanguageStringsCheckBox->SetTarget(this);
 	f24HourRadioButton->SetTarget(this);
 	f12HourRadioButton->SetTarget(this);
@@ -315,6 +323,8 @@ FormatSettingsView::Revert()
 	MutableLocaleRoster::Default()->SetDefaultFormattingConventions(
 		fInitialConventions);
 
+	fFilesystemTranslationCheckbox->SetValue(fInitialTranslateNames);
+
 	_UpdateExamples();
 }
 
@@ -324,8 +334,11 @@ FormatSettingsView::Refresh(bool setInitial)
 {
 	BFormattingConventions conventions;
 	BLocale::Default()->GetFormattingConventions(&conventions);
-	if (setInitial)
+	if (setInitial) {
 		fInitialConventions = conventions;
+		fInitialTranslateNames
+			= BLocaleRoster::Default()->IsFilesystemTranslationPreferred();
+	}
 
 	if (!conventions.Use24HourClock()) {
 		f12HourRadioButton->SetValue(B_CONTROL_ON);
@@ -351,7 +364,8 @@ FormatSettingsView::IsReversible() const
 	BFormattingConventions conventions;
 	BLocale::Default()->GetFormattingConventions(&conventions);
 
-	return conventions != fInitialConventions;
+	return (conventions != fInitialConventions)
+		|| (fFilesystemTranslationCheckbox->Value() != fInitialTranslateNames);
 }
 
 
@@ -364,8 +378,9 @@ FormatSettingsView::_UpdateExamples()
 	// Do NOT make these class members. We do want to recreate it everytime, as
 	// to get the updated settings from the locale roster.
 	BDateFormat dateFormat;
-	BTimeFormat timeFormat;
 	BNumberFormat numberFormat;
+	BString errorString = B_TRANSLATE("ERROR");
+	BTimeFormat timeFormat;
 
 	dateFormat.Format(result, timeValue, B_FULL_DATE_FORMAT);
 	fFullDateExampleView->SetText(result);
@@ -391,27 +406,27 @@ FormatSettingsView::_UpdateExamples()
 	timeFormat.Format(result, timeValue, B_SHORT_TIME_FORMAT);
 	fShortTimeExampleView->SetText(result);
 
-	status_t status = numberFormat.Format(result, 1234.5678);
+	status_t status = numberFormat.Format(result, 1234.56);
 	if (status == B_OK)
 		fPositiveNumberExampleView->SetText(result);
 	else
-		fPositiveNumberExampleView->SetText("ERROR");
+		fPositiveNumberExampleView->SetText(errorString);
 
-	status = numberFormat.Format(result, -1234.5678);
+	status = numberFormat.Format(result, -1234.56);
 	if (status == B_OK)
 		fNegativeNumberExampleView->SetText(result);
 	else
-		fNegativeNumberExampleView->SetText("ERROR");
+		fNegativeNumberExampleView->SetText(errorString);
 
 	status = numberFormat.FormatMonetary(result, 1234.56);
 	if (status == B_OK)
 		fPositiveMonetaryExampleView->SetText(result);
 	else
-		fPositiveMonetaryExampleView->SetText("ERROR");
+		fPositiveMonetaryExampleView->SetText(errorString);
 
 	status = numberFormat.FormatMonetary(result, -1234.56);
 	if (status == B_OK)
 		fNegativeMonetaryExampleView->SetText(result);
 	else
-		fNegativeMonetaryExampleView->SetText("ERROR");
+		fNegativeMonetaryExampleView->SetText(errorString);
 }

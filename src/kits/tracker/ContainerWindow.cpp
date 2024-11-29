@@ -36,8 +36,8 @@ All rights reserved.
 #include "ContainerWindow.h"
 
 #include <Alert.h>
-#include <Application.h>
 #include <AppFileInfo.h>
+#include <Application.h>
 #include <Catalog.h>
 #include <ControlLook.h>
 #include <Debug.h>
@@ -48,8 +48,8 @@ All rights reserved.
 #include <GroupLayout.h>
 #include <Keymap.h>
 #include <Locale.h>
-#include <MenuItem.h>
 #include <MenuBar.h>
+#include <MenuItem.h>
 #include <NodeMonitor.h>
 #include <Path.h>
 #include <PopUpMenu.h>
@@ -65,35 +65,34 @@ All rights reserved.
 #include <strings.h>
 #include <stdlib.h>
 
-#include <algorithm>
-#include <memory>
-
 #include "Attributes.h"
-#include "AttributeStream.h"
+#include "AutoDeleter.h"
 #include "AutoLock.h"
 #include "BackgroundImage.h"
 #include "Commands.h"
 #include "CountView.h"
 #include "DeskWindow.h"
-#include "FavoritesMenu.h"
-#include "FindPanel.h"
+#include "DraggableContainerIcon.h"
 #include "FSClipboard.h"
 #include "FSUndoRedo.h"
 #include "FSUtils.h"
+#include "FavoritesMenu.h"
+#include "FindPanel.h"
 #include "IconMenuItem.h"
-#include "OpenWithWindow.h"
 #include "MimeTypes.h"
+#include "Model.h"
 #include "MountMenu.h"
-#include "Navigator.h"
 #include "NavMenu.h"
+#include "Navigator.h"
+#include "OpenWithWindow.h"
 #include "PoseView.h"
 #include "QueryContainerWindow.h"
 #include "SelectionWindow.h"
+#include "TemplatesMenu.h"
+#include "Thread.h"
 #include "TitleView.h"
 #include "Tracker.h"
 #include "TrackerSettings.h"
-#include "Thread.h"
-#include "TemplatesMenu.h"
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -106,31 +105,7 @@ _IMPEXP_BE
 void do_minimize_team(BRect zoomRect, team_id team, bool zoom);
 
 
-// Amount you have to move the mouse before a drag starts
-const float kDragSlop = 3.0f;
-
-
-namespace BPrivate {
-
-class DraggableContainerIcon : public BView {
-	public:
-		DraggableContainerIcon();
-
-		virtual void MouseDown(BPoint where);
-		virtual void MouseUp(BPoint);
-		virtual void MouseMoved(BPoint point, uint32, const BMessage*);
-		virtual void Draw(BRect updateRect);
-
-	private:
-		uint32	fDragButton;
-		BPoint	fClickPoint;
-		bool	fDragStarted;
-};
-
-}	// namespace BPrivate
-
-
-struct AddOneAddonParams {
+struct AddOneAddOnParams {
 	BObjectList<BMenuItem>* primaryList;
 	BObjectList<BMenuItem>* secondaryList;
 };
@@ -140,16 +115,29 @@ struct StaggerOneParams {
 };
 
 
-const int32 kWindowStaggerBy = 17;
+BRect BContainerWindow::sNewWindRect;
+static int32 sWindowStaggerBy;
 
-
-BRect BContainerWindow::sNewWindRect(85, 50, 548, 280);
-
-LockingList<AddonShortcut>* BContainerWindow::fAddonsList
-	= new LockingList<struct AddonShortcut>(10, true);
+LockingList<AddOnShortcut>* BContainerWindow::fAddOnsList
+	= new LockingList<struct AddOnShortcut>(10, true);
 
 
 namespace BPrivate {
+
+
+int
+CompareContainerWindowNodeRef(const BContainerWindow* item1, const BContainerWindow* item2)
+{
+	const node_ref* ref1 = item1->TargetModel()->NodeRef();
+	const node_ref* ref2 = item2->TargetModel()->NodeRef();
+	if (*ref1 < *ref2)
+		return -1;
+	else if (*ref1 == *ref2)
+		return 0;
+	else
+		return 1;
+}
+
 
 filter_result
 ActivateWindowFilter(BMessage*, BHandler** target, BMessageFilter*)
@@ -169,20 +157,13 @@ ActivateWindowFilter(BMessage*, BHandler** target, BMessageFilter*)
 }
 
 
-int
-CompareLabels(const BMenuItem* item1, const BMenuItem* item2)
-{
-	return strcasecmp(item1->Label(), item2->Label());
-}
-
 }	// namespace BPrivate
 
 
 static int32
-AddOnMenuGenerate(const entry_ref* addonRef, BMenu* menu,
-		BContainerWindow* window)
+AddOnMenuGenerate(const entry_ref* addOnRef, BMenu* menu, BContainerWindow* window)
 {
-	BEntry entry(addonRef);
+	BEntry entry(addOnRef);
 	BPath path;
 	status_t result = entry.InitCheck();
 	if (result != B_OK)
@@ -192,26 +173,26 @@ AddOnMenuGenerate(const entry_ref* addonRef, BMenu* menu,
 	if (result != B_OK)
 		return result;
 
-	image_id addonImage = load_add_on(path.Path());
-	if (addonImage < 0)
-		return addonImage;
+	image_id addOnImage = load_add_on(path.Path());
+	if (addOnImage < 0)
+		return addOnImage;
 
 	void (*populateMenu)(BMessage*, BMenu*, BHandler*);
-	result = get_image_symbol(addonImage, "populate_menu", 2,
+	result = get_image_symbol(addOnImage, "populate_menu", 2,
 		(void**)&populateMenu);
 	if (result < 0) {
 		PRINT(("Couldn't find populate_menu\n"));
-		unload_add_on(addonImage);
+		unload_add_on(addOnImage);
 		return result;
 	}
 
 	BMessage* message = window->AddOnMessage(B_TRACKER_ADDON_MESSAGE);
-	message->AddRef("addon_ref", addonRef);
+	message->AddRef("addon_ref", addOnRef);
 
 	// call add-on code
 	(*populateMenu)(message, menu, window->PoseView());
 
-	unload_add_on(addonImage);
+	unload_add_on(addOnImage);
 	return B_OK;
 }
 
@@ -219,16 +200,16 @@ AddOnMenuGenerate(const entry_ref* addonRef, BMenu* menu,
 static status_t
 RunAddOnMessageThread(BMessage *message, void *)
 {
-	entry_ref addonRef;
+	entry_ref addOnRef;
 	BEntry entry;
 	BPath path;
-	status_t result = message->FindRef("addon_ref", &addonRef);
-	image_id addonImage;
+	status_t result = message->FindRef("addon_ref", &addOnRef);
+	image_id addOnImage;
 
 	if (result != B_OK)
 		goto end;
 
-	entry = BEntry(&addonRef);
+	entry = BEntry(&addOnRef);
 	result = entry.InitCheck();
 	if (result != B_OK)
 		goto end;
@@ -237,29 +218,29 @@ RunAddOnMessageThread(BMessage *message, void *)
 	if (result != B_OK)
 		goto end;
 
-	addonImage = load_add_on(path.Path());
-	if (addonImage < 0) {
-		result = addonImage;
+	addOnImage = load_add_on(path.Path());
+	if (addOnImage < 0) {
+		result = addOnImage;
 		goto end;
 	}
 	void (*messageReceived)(BMessage*);
-	result = get_image_symbol(addonImage, "message_received", 2,
+	result = get_image_symbol(addOnImage, "message_received", 2,
 		(void**)&messageReceived);
 
 	if (result < 0) {
 		PRINT(("Couldn't find message_received\n"));
-		unload_add_on(addonImage);
+		unload_add_on(addOnImage);
 		goto end;
 	}
 	// call add-on code
 	(*messageReceived)(message);
-	unload_add_on(addonImage);
+	unload_add_on(addOnImage);
 	return B_OK;
 
 end:
 	BString buffer(B_TRANSLATE("Error %error loading add-On %name."));
 	buffer.ReplaceFirst("%error", strerror(result));
-	buffer.ReplaceFirst("%name", addonRef.name);
+	buffer.ReplaceFirst("%name", addOnRef.name);
 
 	BAlert* alert = new BAlert("", buffer.String(), B_TRANSLATE("Cancel"),
 		0, 0, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
@@ -270,66 +251,70 @@ end:
 }
 
 
-static bool
-AddOneAddon(const Model* model, const char* name, uint32 shortcut,
+static void
+AddOneAddOn(const Model* model, const char* name, uint32 shortcut,
 	uint32 modifiers, bool primary, void* context,
 	BContainerWindow* window, BMenu* menu)
 {
-	AddOneAddonParams* params = (AddOneAddonParams*)context;
+	AddOneAddOnParams* params = (AddOneAddOnParams*)context;
 
 	BMessage* message = new BMessage(kLoadAddOn);
 	message->AddRef("refs", model->EntryRef());
 
-	ModelMenuItem* item = new ModelMenuItem(model, name, message,
-		(char)shortcut, modifiers);
+	ModelMenuItem* item;
+	try {
+		item = new ModelMenuItem(model, name, message,
+			(char)shortcut, modifiers);
+	} catch (...) {
+		delete message;
+		return;
+	}
 
-	const entry_ref* addonRef = model->EntryRef();
-	AddOnMenuGenerate(addonRef, menu, window);
+	const entry_ref* addOnRef = model->EntryRef();
+	AddOnMenuGenerate(addOnRef, menu, window);
 
 	if (primary)
 		params->primaryList->AddItem(item);
 	else
 		params->secondaryList->AddItem(item);
-
-	return false;
 }
 
 
 static int32
-AddOnThread(BMessage* refsMessage, entry_ref addonRef, entry_ref directoryRef)
+AddOnThread(BMessage* refsMessage, entry_ref addOnRef, entry_ref directoryRef)
 {
-	std::auto_ptr<BMessage> refsMessagePtr(refsMessage);
+	ObjectDeleter<BMessage> _(refsMessage);
 
-	BEntry entry(&addonRef);
+	BEntry entry(&addOnRef);
 	BPath path;
 	status_t result = entry.InitCheck();
 	if (result == B_OK)
 		result = entry.GetPath(&path);
 
 	if (result == B_OK) {
-		image_id addonImage = load_add_on(path.Path());
-		if (addonImage >= 0) {
+		image_id addOnImage = load_add_on(path.Path());
+		if (addOnImage >= 0) {
 			void (*processRefs)(entry_ref, BMessage*, void*);
-			result = get_image_symbol(addonImage, "process_refs", 2,
+			result = get_image_symbol(addOnImage, "process_refs", 2,
 				(void**)&processRefs);
 
 			if (result >= 0) {
 				// call add-on code
-				(*processRefs)(directoryRef, refsMessagePtr.get(), NULL);
+				(*processRefs)(directoryRef, refsMessage, NULL);
 
-				unload_add_on(addonImage);
+				unload_add_on(addOnImage);
 				return B_OK;
 			} else
 				PRINT(("couldn't find process_refs\n"));
 
-			unload_add_on(addonImage);
+			unload_add_on(addOnImage);
 		} else
-			result = addonImage;
+			result = addOnImage;
 	}
 
 	BString buffer(B_TRANSLATE("Error %error loading Add-On %name."));
 	buffer.ReplaceFirst("%error", strerror(result));
-	buffer.ReplaceFirst("%name", addonRef.name);
+	buffer.ReplaceFirst("%name", addOnRef.name);
 
 	BAlert* alert = new BAlert("", buffer.String(), B_TRANSLATE("Cancel"),
 		0, 0, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
@@ -361,7 +346,7 @@ OffsetFrameOne(const char* DEBUG_ONLY(name), uint32, off_t, void* castToRect,
 	if (!castToRect)
 		return false;
 
-	((BRect*)castToRect)->OffsetBy(kWindowStaggerBy, kWindowStaggerBy);
+	((BRect*)castToRect)->OffsetBy(sWindowStaggerBy, sWindowStaggerBy);
 
 	return true;
 }
@@ -385,185 +370,22 @@ AddMimeTypeString(BStringList& list, Model* model)
 }
 
 
-//	#pragma mark - DraggableContainerIcon
-
-
-DraggableContainerIcon::DraggableContainerIcon()
-	:
-	BView("DraggableContainerIcon", B_WILL_DRAW),
-	fDragButton(0),
-	fDragStarted(false)
-{
-}
-
-
-void
-DraggableContainerIcon::MouseDown(BPoint where)
-{
-	// we only like container windows
-	BContainerWindow* window = dynamic_cast<BContainerWindow*>(Window());
-	ThrowOnAssert(window != NULL);
-
-	// we don't like the Trash icon (because it cannot be moved)
-	if (window->IsTrash() || window->IsPrintersDir())
-		return;
-
-	uint32 buttons;
-	window->CurrentMessage()->FindInt32("buttons", (int32*)&buttons);
-
-	if (IconCache::sIconCache->IconHitTest(where, window->TargetModel(),
-			kNormalIcon, B_MINI_ICON)) {
-		// The click hit the icon, initiate a drag
-		fDragButton = buttons
-			& (B_PRIMARY_MOUSE_BUTTON | B_SECONDARY_MOUSE_BUTTON);
-		fDragStarted = false;
-		fClickPoint = where;
-	} else
-		fDragButton = 0;
-
-	if (!fDragButton)
-		Window()->Activate(true);
-}
-
-
-void
-DraggableContainerIcon::MouseUp(BPoint)
-{
-	if (!fDragStarted)
-		Window()->Activate(true);
-
-	fDragButton = 0;
-	fDragStarted = false;
-}
-
-
-void
-DraggableContainerIcon::MouseMoved(BPoint where, uint32, const BMessage*)
-{
-	if (fDragButton == 0 || fDragStarted
-		|| (abs((int32)(where.x - fClickPoint.x)) <= kDragSlop
-			&& abs((int32)(where.y - fClickPoint.y)) <= kDragSlop))
-		return;
-
-	BContainerWindow* window = static_cast<BContainerWindow*>(Window());
-		// we can only get here in a BContainerWindow
-	Model* model = window->TargetModel();
-
-	// Find the required height
-	BFont font;
-	GetFont(&font);
-
-	font_height fontHeight;
-	font.GetHeight(&fontHeight);
-	float height = ceilf(fontHeight.ascent + fontHeight.descent
-		+ fontHeight.leading + 2 + Bounds().Height() + 8);
-
-	BRect rect(0, 0, std::max(Bounds().Width(),
-		font.StringWidth(model->Name()) + 4), height);
-	BBitmap* dragBitmap = new BBitmap(rect, B_RGBA32, true);
-
-	dragBitmap->Lock();
-	BView* view = new BView(dragBitmap->Bounds(), "", B_FOLLOW_NONE, 0);
-	dragBitmap->AddChild(view);
-	view->SetOrigin(0, 0);
-	BRect clipRect(view->Bounds());
-	BRegion newClip;
-	newClip.Set(clipRect);
-	view->ConstrainClippingRegion(&newClip);
-
-	// Transparent draw magic
-	view->SetHighColor(0, 0, 0, 0);
-	view->FillRect(view->Bounds());
-	view->SetDrawingMode(B_OP_ALPHA);
-
-	rgb_color textColor = ui_color(B_PANEL_TEXT_COLOR);
-	textColor.alpha = 128;
-		// set the level of transparency by value
-	view->SetHighColor(textColor);
-	view->SetBlendingMode(B_CONSTANT_ALPHA, B_ALPHA_COMPOSITE);
-
-	// Draw the icon
-	float hIconOffset = (rect.Width() - Bounds().Width()) / 2;
-	IconCache::sIconCache->Draw(model, view, BPoint(hIconOffset, 0),
-		kNormalIcon, B_MINI_ICON, true);
-
-	// See if we need to truncate the string
-	BString nameString = model->Name();
-	if (view->StringWidth(model->Name()) > rect.Width())
-		view->TruncateString(&nameString, B_TRUNCATE_END, rect.Width() - 5);
-
-	// Draw the label
-	float leftText = (view->StringWidth(nameString.String())
-		- Bounds().Width()) / 2;
-	view->MovePenTo(BPoint(hIconOffset - leftText + 2, Bounds().Height()
-		+ (fontHeight.ascent + 2)));
-	view->DrawString(nameString.String());
-
-	view->Sync();
-	dragBitmap->Unlock();
-
-	BMessage message(B_SIMPLE_DATA);
-	message.AddRef("refs", model->EntryRef());
-	message.AddPoint("click_pt", fClickPoint);
-
-	BPoint tmpLoc;
-	uint32 button;
-	GetMouse(&tmpLoc, &button);
-	if (button)
-		message.AddInt32("buttons", (int32)button);
-
-	if ((button & B_PRIMARY_MOUSE_BUTTON) != 0) {
-		// add an action specifier to the message, so that it is not copied
-		message.AddInt32("be:actions", (modifiers() & B_OPTION_KEY) != 0
-			? B_COPY_TARGET : B_MOVE_TARGET);
-	}
-
-	fDragStarted = true;
-	fDragButton = 0;
-
-	DragMessage(&message, dragBitmap, B_OP_ALPHA,
-		BPoint(fClickPoint.x + hIconOffset, fClickPoint.y), this);
-}
-
-
-void
-DraggableContainerIcon::Draw(BRect updateRect)
-{
-	BContainerWindow* window = dynamic_cast<BContainerWindow*>(Window());
-	ThrowOnAssert(window != NULL);
-
-	BRect rect(Bounds());
-	rgb_color base = ui_color(B_MENU_BACKGROUND_COLOR);
-	be_control_look->DrawBorder(this, rect, updateRect, base, B_PLAIN_BORDER,
-		0, BControlLook::B_BOTTOM_BORDER);
-	be_control_look->DrawMenuBarBackground(this, rect, updateRect, base, 0,
-		BControlLook::B_ALL_BORDERS & ~BControlLook::B_LEFT_BORDER);
-
-	// Draw the icon, straddling the border
-	SetDrawingMode(B_OP_ALPHA);
-	SetBlendingMode(B_PIXEL_ALPHA, B_ALPHA_OVERLAY);
-	float iconOffsetX = (Bounds().Width() - B_MINI_ICON) / 2;
-	float iconOffsetY = (Bounds().Height() - B_MINI_ICON) / 2;
-	IconCache::sIconCache->Draw(window->TargetModel(), this,
-		BPoint(iconOffsetX, iconOffsetY), kNormalIcon, B_MINI_ICON, true);
-}
-
-
 //	#pragma mark - BContainerWindow
 
 
-BContainerWindow::BContainerWindow(LockingList<BWindow>* list,
-	uint32 containerWindowFlags, window_look look, window_feel feel,
-	uint32 flags, uint32 workspace, bool useLayouts, bool isDeskWindow)
+BContainerWindow::BContainerWindow(LockingList<BWindow>* list, uint32 openFlags, window_look look,
+	window_feel feel, uint32 windowFlags, uint32 workspace, bool useLayout)
 	:
-	BWindow(InitialWindowRect(feel), "TrackerWindow", look, feel, flags,
-		workspace),
-	fUseLayouts(useLayouts),
+	BWindow(InitialWindowRect(feel), "TrackerWindow", look, feel, windowFlags, workspace),
+	fWindowList(list),
+	fOpenFlags(openFlags),
+	fUsesLayout(useLayout),
 	fMenuContainer(NULL),
 	fPoseContainer(NULL),
 	fBorderedView(NULL),
 	fVScrollBarContainer(NULL),
 	fCountContainer(NULL),
+	fContextMenu(NULL),
 	fFileContextMenu(NULL),
 	fWindowContextMenu(NULL),
 	fDropContextMenu(NULL),
@@ -579,24 +401,17 @@ BContainerWindow::BContainerWindow(LockingList<BWindow>* list,
 	fDraggableIcon(NULL),
 	fNavigator(NULL),
 	fPoseView(NULL),
-	fWindowList(list),
 	fAttrMenu(NULL),
 	fWindowMenu(NULL),
 	fFileMenu(NULL),
 	fArrangeByMenu(NULL),
 	fSelectionWindow(NULL),
 	fTaskLoop(NULL),
-	fIsTrash(false),
-	fInTrash(false),
-	fIsPrinters(false),
-	fIsDesktop(isDeskWindow),
-	fContainerWindowFlags(containerWindowFlags),
+	fStateNeedsSaving(false),
 	fBackgroundImage(NULL),
 	fSavedZoomRect(0, 0, -1, -1),
-	fContextMenu(NULL),
 	fDragMessage(NULL),
 	fCachedTypesList(NULL),
-	fStateNeedsSaving(false),
 	fSaveStateIsEnabled(true),
 	fIsWatchingPath(false)
 {
@@ -607,7 +422,7 @@ BContainerWindow::BContainerWindow(LockingList<BWindow>* list,
 		list->AddItem(this);
 	}
 
-	if (useLayouts) {
+	if (fUsesLayout) {
 		SetFlags(Flags() | B_AUTO_UPDATE_SIZE_LIMITS);
 
 		fRootLayout = new BGroupLayout(B_VERTICAL, 0);
@@ -615,19 +430,17 @@ BContainerWindow::BContainerWindow(LockingList<BWindow>* list,
 		SetLayout(fRootLayout);
 		fRootLayout->Owner()->AdoptSystemColors();
 
-		if (!fIsDesktop) {
-			fMenuContainer = new BGroupView(B_HORIZONTAL, 0);
-			fRootLayout->AddView(fMenuContainer);
+		fMenuContainer = new BGroupView(B_HORIZONTAL, 0);
+		fRootLayout->AddView(fMenuContainer);
 
-			fPoseContainer = new BGridView(0.0, 0.0);
-			fRootLayout->AddView(fPoseContainer);
+		fPoseContainer = new BGridView(0.0, 0.0);
+		fRootLayout->AddView(fPoseContainer);
 
-			fBorderedView = new BorderedView;
-			fPoseContainer->GridLayout()->AddView(fBorderedView, 0, 1);
+		fBorderedView = new BorderedView;
+		fPoseContainer->GridLayout()->AddView(fBorderedView, 0, 1);
 
-			fCountContainer = new BGroupView(B_HORIZONTAL, 0);
-			fPoseContainer->GridLayout()->AddView(fCountContainer, 0, 2);
-		}
+		fCountContainer = new BGroupView(B_HORIZONTAL, 0);
+		fPoseContainer->GridLayout()->AddView(fCountContainer, 0, 2);
 	}
 
 	AddCommonFilter(new BMessageFilter(B_MOUSE_DOWN, ActivateWindowFilter));
@@ -640,7 +453,6 @@ BContainerWindow::BContainerWindow(LockingList<BWindow>* list,
 		tracker->StartWatching(this, kWindowsShowFullPathChanged);
 		tracker->StartWatching(this, kSingleWindowBrowseChanged);
 		tracker->StartWatching(this, kShowNavigatorChanged);
-		tracker->StartWatching(this, kDontMoveFilesToTrashChanged);
 		tracker->Unlock();
 	}
 
@@ -661,7 +473,6 @@ BContainerWindow::~BContainerWindow()
 		tracker->StopWatching(this, kWindowsShowFullPathChanged);
 		tracker->StopWatching(this, kSingleWindowBrowseChanged);
 		tracker->StopWatching(this, kShowNavigatorChanged);
-		tracker->StopWatching(this, kDontMoveFilesToTrashChanged);
 		tracker->Unlock();
 	}
 
@@ -678,6 +489,14 @@ BContainerWindow::~BContainerWindow()
 BRect
 BContainerWindow::InitialWindowRect(window_feel feel)
 {
+	if (!sNewWindRect.IsValid()) {
+		const float labelSpacing = be_control_look->DefaultLabelSpacing();
+		// approximately (85, 50, 548, 280) with default spacing
+		sNewWindRect = BRect(labelSpacing * 14, labelSpacing * 8,
+			labelSpacing * 91, labelSpacing * 46);
+		sWindowStaggerBy = (int32)(labelSpacing * 3.0f);
+	}
+
 	if (feel != kDesktopWindowFeel)
 		return sNewWindRect;
 
@@ -770,6 +589,9 @@ BContainerWindow::Quit()
 	delete fDragContextMenu;
 	fDragContextMenu = NULL;
 
+	delete fTrashContextMenu;
+	fTrashContextMenu = NULL;
+
 	int32 windowCount = 0;
 
 	// This is a deadlock code sequence - need to change this
@@ -800,31 +622,15 @@ BContainerWindow::NewPoseView(Model* model, uint32 viewMode)
 
 
 void
-BContainerWindow::UpdateIfTrash(Model* model)
-{
-	BEntry entry(model->EntryRef());
-
-	if (entry.InitCheck() == B_OK) {
-		fIsTrash = model->IsTrash();
-		fInTrash = FSInTrashDir(model->EntryRef());
-		fIsPrinters = FSIsPrintersDir(&entry);
-	}
-}
-
-
-void
 BContainerWindow::CreatePoseView(Model* model)
 {
-	UpdateIfTrash(model);
-
 	fPoseView = NewPoseView(model, kListMode);
 	fBorderedView->GroupLayout()->AddView(fPoseView);
 	fBorderedView->GroupLayout()->SetInsets(1, 0, 1, 1);
 	fBorderedView->EnableBorderHighlight(false);
 
 	TrackerSettings settings;
-	if (settings.SingleWindowBrowse() && model->IsDirectory()
-		&& !fPoseView->IsFilePanel()) {
+	if (settings.SingleWindowBrowse() && model->IsDirectory() && !PoseView()->IsFilePanel()) {
 		fNavigator = new BNavigator(model);
 		fPoseContainer->GridLayout()->AddView(fNavigator, 0, 0, 2);
 		if (!settings.ShowNavigator())
@@ -841,26 +647,21 @@ BContainerWindow::AddContextMenus()
 {
 	// create context sensitive menus
 	fFileContextMenu = new BPopUpMenu("FileContext", false, false);
-	fFileContextMenu->SetFont(be_plain_font);
 	AddFileContextMenus(fFileContextMenu);
 
 	fVolumeContextMenu = new BPopUpMenu("VolumeContext", false, false);
-	fVolumeContextMenu->SetFont(be_plain_font);
 	AddVolumeContextMenus(fVolumeContextMenu);
 
 	fWindowContextMenu = new BPopUpMenu("WindowContext", false, false);
-	fWindowContextMenu->SetFont(be_plain_font);
 	AddWindowContextMenus(fWindowContextMenu);
 
 	fDropContextMenu = new BPopUpMenu("DropContext", false, false);
-	fDropContextMenu->SetFont(be_plain_font);
 	AddDropContextMenus(fDropContextMenu);
 
-	fDragContextMenu = new BSlowContextMenu("DragContext");
+	fDragContextMenu = new BPopUpNavMenu("DragContext");
 		// will get added and built dynamically in ShowContextMenu
 
 	fTrashContextMenu = new BPopUpMenu("TrashContext", false, false);
-	fTrashContextMenu->SetFont(be_plain_font);
 	AddTrashContextMenus(fTrashContextMenu);
 }
 
@@ -869,24 +670,24 @@ void
 BContainerWindow::RepopulateMenus()
 {
 	// Avoid these menus to be destroyed:
-	if (fMoveToItem && fMoveToItem->Menu())
+	if (fMoveToItem != NULL && fMoveToItem->Menu() != NULL)
 		fMoveToItem->Menu()->RemoveItem(fMoveToItem);
 
-	if (fCopyToItem && fCopyToItem->Menu())
+	if (fCopyToItem != NULL && fCopyToItem->Menu() != NULL)
 		fCopyToItem->Menu()->RemoveItem(fCopyToItem);
 
-	if (fCreateLinkItem && fCreateLinkItem->Menu())
+	if (fCreateLinkItem != NULL && fCreateLinkItem->Menu() != NULL)
 		fCreateLinkItem->Menu()->RemoveItem(fCreateLinkItem);
 
-	if (fOpenWithItem && fOpenWithItem->Menu()) {
+	if (fOpenWithItem != NULL && fOpenWithItem->Menu() != NULL) {
 		fOpenWithItem->Menu()->RemoveItem(fOpenWithItem);
 		delete fOpenWithItem;
 		fOpenWithItem = NULL;
 	}
 
-	if (fNavigationItem) {
+	if (fNavigationItem != NULL) {
 		BMenu* menu = fNavigationItem->Menu();
-		if (menu) {
+		if (menu != NULL) {
 			menu->RemoveItem(fNavigationItem);
 			BMenuItem* item = menu->RemoveItem((int32)0);
 			ASSERT(item != fNavigationItem);
@@ -896,12 +697,10 @@ BContainerWindow::RepopulateMenus()
 
 	delete fFileContextMenu;
 	fFileContextMenu = new BPopUpMenu("FileContext", false, false);
-	fFileContextMenu->SetFont(be_plain_font);
 	AddFileContextMenus(fFileContextMenu);
 
 	delete fWindowContextMenu;
 	fWindowContextMenu = new BPopUpMenu("WindowContext", false, false);
-	fWindowContextMenu->SetFont(be_plain_font);
 	AddWindowContextMenus(fWindowContextMenu);
 
 	if (fMenuBar != NULL) {
@@ -921,13 +720,13 @@ BContainerWindow::RepopulateMenus()
 		fMenuBar->RemoveItem(fAttrMenu);
 		delete fAttrMenu;
 		fAttrMenu = new BMenu(B_TRANSLATE("Attributes"));
-		NewAttributeMenu(fAttrMenu);
+		NewAttributesMenu(fAttrMenu);
 		if (PoseView()->ViewMode() == kListMode)
-			ShowAttributeMenu();
+			ShowAttributesMenu();
 
 		PopulateArrangeByMenu(fArrangeByMenu);
 
-		int32 selectCount = PoseView()->SelectionList()->CountItems();
+		int32 selectCount = PoseView()->CountSelected();
 
 		SetupOpenWithMenu(fFileMenu);
 		SetupMoveCopyMenus(selectCount ? PoseView()->SelectionList()
@@ -940,18 +739,16 @@ BContainerWindow::RepopulateMenus()
 void
 BContainerWindow::Init(const BMessage* message)
 {
-	BEntry entry;
-
-	ASSERT(fPoseView != NULL);
-	if (fPoseView == NULL)
+	// pose view is expected to be setup at this point
+	if (PoseView() == NULL)
 		return;
 
 	// deal with new unconfigured folders
 	if (NeedsDefaultStateSetup())
-		SetUpDefaultState();
+		SetupDefaultState();
 
 	if (ShouldAddScrollBars())
-		fPoseView->AddScrollBars();
+		PoseView()->AddScrollBars();
 
 	fMoveToItem = new BMenuItem(new BNavMenu(B_TRANSLATE("Move to"),
 		kMoveSelectionTo, this));
@@ -967,7 +764,7 @@ BContainerWindow::Init(const BMessage* message)
 		fMenuContainer->GroupLayout()->AddView(fMenuBar);
 		AddMenus();
 
-		if (!TargetModel()->IsRoot() && !IsTrash())
+		if (!TargetModel()->IsRoot() && !TargetModel()->IsTrash())
 			_AddFolderIcon();
 	} else {
 		// add equivalents of the menu shortcuts to the menuless
@@ -976,15 +773,12 @@ BContainerWindow::Init(const BMessage* message)
 	}
 
 	AddContextMenus();
-	AddShortcut('T', B_COMMAND_KEY | B_SHIFT_KEY, new BMessage(kDelete),
-		PoseView());
-	AddShortcut('K', B_COMMAND_KEY | B_SHIFT_KEY, new BMessage(kCleanupAll),
-		PoseView());
-	AddShortcut('Q', B_COMMAND_KEY | B_OPTION_KEY | B_SHIFT_KEY
-		| B_CONTROL_KEY, new BMessage(kQuitTracker));
+	AddShortcut('T', B_COMMAND_KEY | B_SHIFT_KEY, new BMessage(kDeleteSelection), PoseView());
+	AddShortcut('K', B_COMMAND_KEY | B_SHIFT_KEY, new BMessage(kCleanupAll), PoseView());
+	AddShortcut('Q', B_COMMAND_KEY | B_OPTION_KEY | B_SHIFT_KEY | B_CONTROL_KEY,
+		new BMessage(kQuitTracker));
 
-	AddShortcut(B_DOWN_ARROW, B_COMMAND_KEY, new BMessage(kOpenSelection),
-		PoseView());
+	AddShortcut(B_DOWN_ARROW, B_COMMAND_KEY, new BMessage(kOpenSelection), PoseView());
 
 	SetSingleWindowBrowseShortcuts(settings.SingleWindowBrowse());
 
@@ -1001,22 +795,23 @@ BContainerWindow::Init(const BMessage* message)
 #endif
 
 	BKeymap keymap;
-	keymap.SetToCurrent();
-	BObjectList<const char> unmodified(3, true);
-	if (keymap.GetModifiedCharacters("+", B_SHIFT_KEY, 0, &unmodified)
-			== B_OK) {
-		int32 count = unmodified.CountItems();
-		for (int32 i = 0; i < count; i++) {
-			uint32 key = BUnicodeChar::FromUTF8(unmodified.ItemAt(i));
-			if (!HasShortcut(key, 0)) {
-				// Add semantic zoom in shortcut, bug #6692
-				BMessage* increaseSize = new BMessage(kIconMode);
+	if (keymap.SetToCurrent() == B_OK) {
+		BObjectList<const char> unmodified(3, true);
+		if (keymap.GetModifiedCharacters("+", B_SHIFT_KEY, 0, &unmodified)
+				== B_OK) {
+			int32 count = unmodified.CountItems();
+			for (int32 i = 0; i < count; i++) {
+				uint32 key = BUnicodeChar::FromUTF8(unmodified.ItemAt(i));
+				if (!HasShortcut(key, 0)) {
+					// Add semantic zoom in shortcut, bug #6692
+					BMessage* increaseSize = new BMessage(kIconMode);
 					increaseSize->AddInt32("scale", 1);
-				AddShortcut(key, B_COMMAND_KEY, increaseSize, PoseView());
+					AddShortcut(key, B_COMMAND_KEY, increaseSize, PoseView());
+				}
 			}
 		}
+		unmodified.MakeEmpty();
 	}
-	unmodified.MakeEmpty();
 
 	if (message != NULL)
 		RestoreState(*message);
@@ -1027,15 +822,13 @@ BContainerWindow::Init(const BMessage* message)
 		// for now only show attributes in list view
 		// eventually enable attribute menu to allow users to select
 		// using different attributes as titles in icon view modes
-		ShowAttributeMenu();
+		ShowAttributesMenu();
 	}
-	MarkAttributeMenu(fAttrMenu);
 	CheckScreenIntersect();
 
-	if (fBackgroundImage != NULL && !fIsDesktop
-		&& PoseView()->ViewMode() != kListMode) {
+	bool isListMode = PoseView()->ViewMode() == kListMode;
+	if (fBackgroundImage != NULL && !PoseView()->IsDesktop() && !isListMode)
 		fBackgroundImage->Show(PoseView(), current_workspace());
-	}
 
 	Show();
 
@@ -1044,34 +837,45 @@ BContainerWindow::Init(const BMessage* message)
 	SetFlags(Flags() & ~B_NO_WORKSPACE_ACTIVATION);
 }
 
+
 void
 BContainerWindow::InitLayout()
 {
-	fBorderedView->GroupLayout()->AddView(0, fPoseView->TitleView());
+	fBorderedView->GroupLayout()->AddView(0, PoseView()->TitleView());
 
-	BLayoutItem* item = fCountContainer->GroupLayout()->AddView(
-		fPoseView->CountView());
-	item->SetExplicitMinSize(BSize(kCountViewWidth, B_H_SCROLL_BAR_HEIGHT));
-	item->SetExplicitMaxSize(BSize(kCountViewWidth, B_SIZE_UNSET));
+	fCountContainer->GroupLayout()->AddView(PoseView()->CountView(), 0.25f);
 
-	// Eliminate the extra borders
-	fMenuContainer->GroupLayout()->SetInsets(0, 0, -1, 0);
-	fPoseContainer->GridLayout()->SetInsets(-1, 0, -1, -1);
-	fCountContainer->GroupLayout()->SetInsets(0, -1, 0, 0);
+	bool forFilePanel = PoseView()->IsFilePanel();
+	if (!forFilePanel) {
+		// Eliminate the extra borders
+		fPoseContainer->GridLayout()->SetInsets(-1, 0, -1, -1);
+		fCountContainer->GroupLayout()->SetInsets(0, -1, 0, 0);
+	}
 
-	if (fPoseView->VScrollBar() != NULL) {
+	if (PoseView()->VScrollBar() != NULL) {
 		fVScrollBarContainer = new BGroupView(B_VERTICAL, 0);
-		fVScrollBarContainer->GroupLayout()->AddView(fPoseView->VScrollBar());
-		fVScrollBarContainer->GroupLayout()->SetInsets(-1, -1, 0, 0);
+		fVScrollBarContainer->GroupLayout()->AddView(PoseView()->VScrollBar());
+		fVScrollBarContainer->GroupLayout()->SetInsets(-1, forFilePanel ? 0 : -1,
+			0, 0);
 		fPoseContainer->GridLayout()->AddView(fVScrollBarContainer, 1, 1);
 	}
-	if (fPoseView->HScrollBar() != NULL) {
+	if (PoseView()->HScrollBar() != NULL) {
 		BGroupView* hScrollBarContainer = new BGroupView(B_VERTICAL, 0);
-		hScrollBarContainer->GroupLayout()->AddView(fPoseView->HScrollBar());
-		hScrollBarContainer->GroupLayout()->SetInsets(0, -1, 0, -1);
+		hScrollBarContainer->GroupLayout()->AddView(PoseView()->HScrollBar());
+		hScrollBarContainer->GroupLayout()->SetInsets(0, -1, 0,
+			forFilePanel ? 0 : -1);
 		fCountContainer->GroupLayout()->AddView(hScrollBarContainer);
+
+		BSize size = PoseView()->HScrollBar()->MinSize();
+		if (forFilePanel) {
+			// Count view height is 1px smaller than scroll bar because it has
+			// no upper border.
+			size.height -= 1;
+		}
+		PoseView()->CountView()->SetExplicitMinSize(size);
 	}
 }
+
 
 void
 BContainerWindow::RestoreState()
@@ -1080,7 +884,7 @@ BContainerWindow::RestoreState()
 
 	WindowStateNodeOpener opener(this, false);
 	RestoreWindowState(opener.StreamNode());
-	fPoseView->Init(opener.StreamNode());
+	PoseView()->Init(opener.StreamNode());
 
 	RestoreStateCommon();
 }
@@ -1092,7 +896,7 @@ BContainerWindow::RestoreState(const BMessage &message)
 	UpdateTitle();
 
 	RestoreWindowState(message);
-	fPoseView->Init(message);
+	PoseView()->Init(message);
 
 	RestoreStateCommon();
 }
@@ -1101,32 +905,31 @@ BContainerWindow::RestoreState(const BMessage &message)
 void
 BContainerWindow::RestoreStateCommon()
 {
-	if (!fIsDesktop && fUseLayouts)
+	if (fUsesLayout)
 		InitLayout();
 
 	if (BootedInSafeMode())
 		// don't pick up backgrounds in safe mode
 		return;
 
-	WindowStateNodeOpener opener(this, false);
+	bool isDesktop = PoseView()->IsDesktop();
 
+	WindowStateNodeOpener opener(this, false);
 	if (!TargetModel()->IsRoot() && opener.Node() != NULL) {
 		// don't pick up background image for root disks
 		// to do this, would have to have a unique attribute for the
 		// disks window that doesn't collide with the desktop
 		// for R4 this was not done to make things simpler
 		// the default image will still work though
-		fBackgroundImage = BackgroundImage::GetBackgroundImage(
-			opener.Node(), fIsDesktop);
+		fBackgroundImage = BackgroundImage::GetBackgroundImage(opener.Node(), isDesktop);
 			// look for background image info in the window's node
 	}
 
 	BNode defaultingNode;
-	if (fBackgroundImage == NULL && !fIsDesktop
+	if (fBackgroundImage == NULL && !isDesktop
 		&& DefaultStateSourceNode(kDefaultFolderTemplate, &defaultingNode)) {
 		// look for background image info in the source for defaults
-		fBackgroundImage = BackgroundImage::GetBackgroundImage(&defaultingNode,
-			fIsDesktop);
+		fBackgroundImage = BackgroundImage::GetBackgroundImage(&defaultingNode, isDesktop);
 	}
 }
 
@@ -1145,10 +948,8 @@ BContainerWindow::UpdateTitle()
 		SetTitle(TargetModel()->Name());
 	}
 
-	if (Navigator() != NULL) {
-		Navigator()->UpdateLocation(PoseView()->TargetModel(),
-			kActionUpdatePath);
-	}
+	if (Navigator() != NULL)
+		Navigator()->UpdateLocation(TargetModel(), kActionUpdatePath);
 }
 
 
@@ -1161,17 +962,17 @@ BContainerWindow::UpdateBackgroundImage()
 	WindowStateNodeOpener opener(this, false);
 
 	if (!TargetModel()->IsRoot() && opener.Node() != NULL) {
-		fBackgroundImage = BackgroundImage::Refresh(fBackgroundImage,
-			opener.Node(), fIsDesktop, PoseView());
+		fBackgroundImage = BackgroundImage::Refresh(fBackgroundImage, opener.Node(),
+			PoseView()->IsDesktop(), PoseView());
 	}
 
 		// look for background image info in the window's node
 	BNode defaultingNode;
-	if (!fBackgroundImage && !fIsDesktop
+	if (!fBackgroundImage && !PoseView()->IsDesktop()
 		&& DefaultStateSourceNode(kDefaultFolderTemplate, &defaultingNode)) {
 		// look for background image info in the source for defaults
-		fBackgroundImage = BackgroundImage::Refresh(fBackgroundImage,
-			&defaultingNode, fIsDesktop, PoseView());
+		fBackgroundImage = BackgroundImage::Refresh(fBackgroundImage, &defaultingNode,
+			PoseView()->IsDesktop(), PoseView());
 	}
 }
 
@@ -1179,7 +980,7 @@ BContainerWindow::UpdateBackgroundImage()
 void
 BContainerWindow::FrameResized(float, float)
 {
-	if (PoseView() != NULL && !fIsDesktop) {
+	if (PoseView() != NULL && !PoseView()->IsDesktop()) {
 		BRect extent = PoseView()->Extent();
 		float offsetX = extent.left - PoseView()->Bounds().left;
 		float offsetY = extent.top - PoseView()->Bounds().top;
@@ -1207,21 +1008,24 @@ BContainerWindow::FrameResized(float, float)
 	}
 
 	fPreviousBounds = Bounds();
-	fStateNeedsSaving = true;
+	if (IsActive())
+		fStateNeedsSaving = true;
 }
 
 
 void
 BContainerWindow::FrameMoved(BPoint)
 {
-	fStateNeedsSaving = true;
+	if (IsActive())
+		fStateNeedsSaving = true;
 }
 
 
 void
 BContainerWindow::WorkspacesChanged(uint32, uint32)
 {
-	fStateNeedsSaving = true;
+	if (IsActive())
+		fStateNeedsSaving = true;
 }
 
 
@@ -1268,7 +1072,7 @@ BContainerWindow::SaveState(bool hide)
 			Hide();
 
 		if (opener.StreamNode())
-			fPoseView->SaveState(opener.StreamNode());
+			PoseView()->SaveState(opener.StreamNode());
 
 		fStateNeedsSaving = false;
 	}
@@ -1280,7 +1084,7 @@ BContainerWindow::SaveState(BMessage& message) const
 {
 	if (SaveStateIsEnabled()) {
 		SaveWindowState(message);
-		fPoseView->SaveState(message);
+		PoseView()->SaveState(message);
 	}
 }
 
@@ -1288,7 +1092,7 @@ BContainerWindow::SaveState(BMessage& message) const
 bool
 BContainerWindow::StateNeedsSaving() const
 {
-	return fPoseView != NULL && (fStateNeedsSaving || fPoseView->StateNeedsSaving());
+	return PoseView() != NULL && (fStateNeedsSaving || PoseView()->StateNeedsSaving());
 }
 
 
@@ -1342,7 +1146,7 @@ BContainerWindow::SetLayoutState(BNode* node, const BMessage* message)
 
 	for (int32 globalIndex = 0; ;) {
 #if B_BEOS_VERSION_DANO
- 		const char* name;
+		const char* name;
 #else
 		char* name;
 #endif
@@ -1392,7 +1196,7 @@ BContainerWindow::ShouldAddScrollBars() const
 Model*
 BContainerWindow::TargetModel() const
 {
-	return fPoseView->TargetModel();
+	return PoseView()->TargetModel();
 }
 
 
@@ -1469,16 +1273,14 @@ BContainerWindow::MessageReceived(BMessage* message)
 		case B_CUT:
 		case B_COPY:
 		case B_PASTE:
-		case kCutMoreSelectionToClipboard:
-		case kCopyMoreSelectionToClipboard:
-		case kPasteLinksFromClipboard:
+		case B_SELECT_ALL:
 		{
 			BView* view = CurrentFocus();
 			if (dynamic_cast<BTextView*>(view) == NULL) {
 				// The selected item is not a BTextView, so forward the
 				// message to the PoseView.
-				if (fPoseView != NULL)
-					fPoseView->MessageReceived(message);
+				if (PoseView() != NULL)
+					PostMessage(message, PoseView());
 			} else {
 				// Since we catch the generic clipboard shortcuts in a way that
 				// means the BTextView will never get them, we must
@@ -1487,13 +1289,17 @@ BContainerWindow::MessageReceived(BMessage* message)
 				// However, we have to take care to not forward the custom
 				// clipboard messages, else we would wind up in infinite
 				// recursion.
-				if (message->what == B_CUT || message->what == B_COPY
-						|| message->what == B_PASTE) {
-					view->MessageReceived(message);
-				}
+				PostMessage(message, view);
 			}
 			break;
 		}
+
+		case kCutMoreSelectionToClipboard:
+		case kCopyMoreSelectionToClipboard:
+		case kPasteLinksFromClipboard:
+			if (PoseView() != NULL)
+				PostMessage(message, PoseView());
+			break;
 
 		case B_UNDO: {
 			BView* view = CurrentFocus();
@@ -1515,9 +1321,21 @@ BContainerWindow::MessageReceived(BMessage* message)
 			break;
 		}
 
+		case kOpenParentDir:
+			PostMessage(message, PoseView());
+			break;
+
 		case kNewFolder:
 			PostMessage(message, PoseView());
 			break;
+
+		case kNewTemplateSubmenu:
+		{
+			entry_ref ref;
+			if (message->FindRef("refs", &ref) == B_OK)
+				_NewTemplateSubmenu(ref);
+			break;
+		}
 
 		case kRestoreState:
 			if (message->HasMessage("state")) {
@@ -1585,8 +1403,7 @@ BContainerWindow::MessageReceived(BMessage* message)
 				PoseView()->MoveSelectionInto(&model, this, false, false,
 					message->what == kCreateLink,
 					message->what == kCreateRelativeLink);
-			} else if (!TargetModel()->IsQuery()
-				&& !TargetModel()->IsVirtualDirectory()) {
+			} else if (!TargetModel()->IsQuery() && !TargetModel()->IsVirtualDirectory()) {
 				// no destination specified, create link in same dir as item
 				PoseView()->MoveSelectionInto(TargetModel(), this, false, false,
 					message->what == kCreateLink,
@@ -1618,68 +1435,70 @@ BContainerWindow::MessageReceived(BMessage* message)
 		case kSwitchDirectory:
 		{
 			entry_ref ref;
-			if (message->FindRef("refs", &ref) == B_OK) {
-				BEntry entry;
-				if (entry.SetTo(&ref) == B_OK) {
-					if (StateNeedsSaving())
-						SaveState(false);
+			if (message->FindRef("refs", &ref) != B_OK)
+				break;
 
-					bool wasInTrash = IsTrash() || InTrash();
-					bool isRoot = PoseView()->TargetModel()->IsRoot();
+			BEntry entry;
+			if (entry.SetTo(&ref) != B_OK)
+				break;
 
-					// Switch dir and apply new state
-					WindowStateNodeOpener opener(this, false);
-					opener.SetTo(&entry, false);
+			if (StateNeedsSaving())
+				SaveState(false);
 
-					// Update PoseView
-					PoseView()->SwitchDir(&ref, opener.StreamNode());
+			bool wasInTrash = TargetModel()->IsTrash() || TargetModel()->InTrash();
+			bool wasRoot = TargetModel()->IsRoot();
+			bool wasVolume = TargetModel()->IsVolume();
 
-					fIsTrash = FSIsTrashDir(&entry);
-					fInTrash = FSInTrashDir(&ref);
+			// Switch dir and apply new state
+			WindowStateNodeOpener opener(this, false);
+			opener.SetTo(&entry, false);
 
-					if (wasInTrash ^ (IsTrash() || InTrash())
-						|| isRoot != PoseView()->TargetModel()->IsRoot())
-						RepopulateMenus();
+			// Update pose view and set directory type
+			PoseView()->SwitchDir(&ref, opener.StreamNode());
 
-					if (Navigator() != NULL) {
-						// update Navigation bar
-						int32 action = kActionSet;
-						if (message->FindInt32("action", &action) != B_OK) {
-							// Design problem? Why does FindInt32 touch
-							// 'action' at all if he can't find it??
-							action = kActionSet;
-						}
-						Navigator()->UpdateLocation(PoseView()->TargetModel(),
-							action);
+			if (wasInTrash ^ (TargetModel()->IsTrash() || TargetModel()->InTrash())
+				|| wasRoot != TargetModel()->IsRoot() || wasVolume != TargetModel()->IsVolume()) {
+				RepopulateMenus();
+			}
+
+			// skip the rest for file panel
+			if (PoseView()->IsFilePanel())
+				break;
+
+			if (Navigator() != NULL) {
+				// update Navigation bar
+				int32 action = message->GetInt32("action", kActionSet);
+				Navigator()->UpdateLocation(TargetModel(), action);
+			}
+
+			TrackerSettings settings;
+			if (settings.ShowNavigator() || settings.ShowFullPathInTitleBar())
+				SetPathWatchingEnabled(true);
+
+			SetSingleWindowBrowseShortcuts(settings.SingleWindowBrowse());
+
+			// Update draggable folder icon
+			if (fMenuBar != NULL) {
+				if (!TargetModel()->IsRoot() && !TargetModel()->IsTrash()) {
+					// Folder icon should be visible, but in single
+					// window navigation, it might not be.
+					if (fDraggableIcon != NULL) {
+						IconCache::sIconCache->IconChanged(TargetModel());
+						if (fDraggableIcon->IsHidden())
+							fDraggableIcon->Show();
+						fDraggableIcon->Invalidate();
+					} else {
+						// draggable icon visible
+						_AddFolderIcon();
 					}
-
-					TrackerSettings settings;
-					if (settings.ShowNavigator()
-						|| settings.ShowFullPathInTitleBar()) {
-						SetPathWatchingEnabled(true);
-					}
-					SetSingleWindowBrowseShortcuts(
-						settings.SingleWindowBrowse());
-
-					// Update draggable folder icon
-					if (fMenuBar != NULL) {
-						if (!TargetModel()->IsRoot() && !IsTrash()) {
-							// Folder icon should be visible, but in single
-							// window navigation, it might not be.
-							if (fDraggableIcon != NULL) {
-								IconCache::sIconCache->IconChanged(
-									TargetModel());
-								fDraggableIcon->Invalidate();
-							} else
-								_AddFolderIcon();
-						} else if (fDraggableIcon != NULL)
-							fDraggableIcon->RemoveSelf();
-					}
-
-					// Update window title
-					UpdateTitle();
+				} else if (fDraggableIcon != NULL) {
+					// hide for Root or Trash
+					fDraggableIcon->Hide();
 				}
 			}
+
+			// Update window title
+			UpdateTitle();
 			break;
 		}
 
@@ -1729,76 +1548,81 @@ BContainerWindow::MessageReceived(BMessage* message)
 							SetPathWatchingEnabled(true);
 						}
 						if (IsPathWatchingEnabled()
-							&& !(settings.ShowNavigator()
-								|| settings.ShowFullPathInTitleBar())) {
+							&& !(settings.ShowNavigator() || settings.ShowFullPathInTitleBar())) {
 							SetPathWatchingEnabled(false);
 						}
 						break;
 
 					case kSingleWindowBrowseChanged:
-						if (settings.SingleWindowBrowse()
-							&& !Navigator()
-							&& TargetModel()->IsDirectory()
-							&& !PoseView()->IsFilePanel()
-							&& !PoseView()->IsDesktopWindow()) {
+						if (PoseView()->IsFilePanel() || PoseView()->IsDesktop()) {
+							SetSingleWindowBrowseShortcuts(settings.SingleWindowBrowse());
+							break;
+						}
+
+						if (settings.SingleWindowBrowse() && Navigator() == NULL
+							&& TargetModel()->IsDirectory()) {
 							fNavigator = new BNavigator(TargetModel());
-							fPoseContainer->GridLayout()->AddView(fNavigator,
-								0, 0, 2);
+							fPoseContainer->GridLayout()->AddView(fNavigator, 0, 0, 2);
 							fNavigator->Hide();
 							SetPathWatchingEnabled(settings.ShowNavigator()
 								|| settings.ShowFullPathInTitleBar());
 						}
 
-						if (!settings.SingleWindowBrowse()
-							&& !fIsDesktop && TargetModel()->IsDesktop()) {
-							// Close the "Desktop" window, but not the Desktop
+						if (!settings.SingleWindowBrowse() && fWindowList != NULL) {
+							// close duplicate windows
+							int32 windowCount = fWindowList->CountItems();
+							BObjectList<BContainerWindow> containerList(windowCount);
+							for (int32 index = 0; index < windowCount; index++) {
+								BContainerWindow* window
+									= dynamic_cast<BContainerWindow*>(fWindowList->ItemAt(index));
+								if (window != NULL && window->TargetModel() != NULL
+									&& window->TargetModel()->NodeRef() != NULL) {
+									containerList.AddItem(window);
+								}
+							}
+
+							windowCount = containerList.CountItems();
+								// get the window count again as it may have changed
+							if (windowCount > 1) {
+								// sort containerList by node ref
+								containerList.SortItems(CompareContainerWindowNodeRef);
+
+								// go backwards from second to last item to first
+								for (int32 index = windowCount - 2; index >= 0; --index) {
+									BContainerWindow* window = containerList.ItemAt(index);
+									BContainerWindow* second = containerList.ItemAt(index + 1);
+									if (window == NULL || second == NULL)
+										continue;
+
+									const node_ref* windowRef = window->TargetModel()->NodeRef();
+									const node_ref* secondRef = second->TargetModel()->NodeRef();
+									if (*windowRef == *secondRef) {
+										// duplicate windows found, close second window
+										// use BMessenger::SendMessage(), safer than PostMessage()
+										BMessenger(second).SendMessage(B_QUIT_REQUESTED);
+									}
+								}
+							}
+						}
+
+						if (!settings.SingleWindowBrowse() && TargetModel()->IsDesktop()) {
+							// close the "Desktop" window, but not the Desktop
 							this->Quit();
 						}
 
-						SetSingleWindowBrowseShortcuts(
-							settings.SingleWindowBrowse());
+						SetSingleWindowBrowseShortcuts(settings.SingleWindowBrowse());
 						break;
 
 					case kShowNavigatorChanged:
 						ShowNavigator(settings.ShowNavigator());
-						if (!IsPathWatchingEnabled()
-							&& settings.ShowNavigator()) {
+						if (!IsPathWatchingEnabled() && settings.ShowNavigator())
 							SetPathWatchingEnabled(true);
-						}
 						if (IsPathWatchingEnabled()
-							&& !(settings.ShowNavigator()
-								|| settings.ShowFullPathInTitleBar())) {
+							&& !(settings.ShowNavigator() || settings.ShowFullPathInTitleBar())) {
 							SetPathWatchingEnabled(false);
 						}
-						SetSingleWindowBrowseShortcuts(
-							settings.SingleWindowBrowse());
+						SetSingleWindowBrowseShortcuts(settings.SingleWindowBrowse());
 						break;
-
-					case kDontMoveFilesToTrashChanged:
-					{
-						bool dontMoveToTrash
-							= settings.DontMoveFilesToTrash();
-
-						BMenuItem* item
-							= fFileContextMenu->FindItem(kMoveToTrash);
-						if (item != NULL) {
-							item->SetLabel(dontMoveToTrash
-								? B_TRANSLATE("Delete")
-								: B_TRANSLATE("Move to Trash"));
-						}
-						// Deskbar doesn't have a menu bar, so check if
-						// there is fMenuBar
-						if (fMenuBar && fFileMenu) {
-							item = fFileMenu->FindItem(kMoveToTrash);
-							if (item != NULL) {
-								item->SetLabel(dontMoveToTrash
-									? B_TRANSLATE("Delete")
-									: B_TRANSLATE("Move to Trash"));
-							}
-						}
-						UpdateIfNeeded();
-						break;
-					}
 
 					default:
 						_inherited::MessageReceived(message);
@@ -1824,13 +1648,24 @@ BContainerWindow::SetCutItem(BMenu* menu)
 {
 	BMenuItem* item;
 	if ((item = menu->FindItem(B_CUT)) == NULL
-		&& (item = menu->FindItem(kCutMoreSelectionToClipboard)) == NULL)
+		&& (item = menu->FindItem(kCutMoreSelectionToClipboard)) == NULL) {
 		return;
+	}
 
-	item->SetEnabled(PoseView()->SelectionList()->CountItems() > 0
-		|| PoseView() != CurrentFocus());
+	if (PoseView() != CurrentFocus())
+		item->SetEnabled(dynamic_cast<BTextView*>(CurrentFocus()) != NULL);
+	else {
+		if (TargetModel()->IsRoot() || TargetModel()->IsTrash()
+			|| TargetModel()->IsVirtualDirectory()) {
+			// cannot cut files in root, trash or in a virtual directory
+			item->SetEnabled(false);
+		} else {
+			item->SetEnabled(PoseView()->CountSelected() > 0
+				&& !PoseView()->SelectedVolumeIsReadOnly());
+		}
+	}
 
-	if (modifiers() & B_SHIFT_KEY) {
+	if ((modifiers() & B_SHIFT_KEY) != 0) {
 		item->SetLabel(B_TRANSLATE("Cut more"));
 		item->SetShortcut('X', B_COMMAND_KEY | B_SHIFT_KEY);
 		item->SetMessage(new BMessage(kCutMoreSelectionToClipboard));
@@ -1851,10 +1686,12 @@ BContainerWindow::SetCopyItem(BMenu* menu)
 		return;
 	}
 
-	item->SetEnabled(PoseView()->SelectionList()->CountItems() > 0
-		|| PoseView() != CurrentFocus());
+	if (PoseView() != CurrentFocus())
+		item->SetEnabled(dynamic_cast<BTextView*>(CurrentFocus()) != NULL);
+	else
+		item->SetEnabled(PoseView()->CountSelected() > 0);
 
-	if (modifiers() & B_SHIFT_KEY) {
+	if ((modifiers() & B_SHIFT_KEY) != 0) {
 		item->SetLabel(B_TRANSLATE("Copy more"));
 		item->SetShortcut('C', B_COMMAND_KEY | B_SHIFT_KEY);
 		item->SetMessage(new BMessage(kCopyMoreSelectionToClipboard));
@@ -1875,9 +1712,14 @@ BContainerWindow::SetPasteItem(BMenu* menu)
 		return;
 	}
 
-	item->SetEnabled(FSClipboardHasRefs() || PoseView() != CurrentFocus());
+	if (PoseView() != CurrentFocus())
+		item->SetEnabled(dynamic_cast<BTextView*>(CurrentFocus()) != NULL);
+	else {
+		item->SetEnabled(FSClipboardHasRefs()
+			&& !PoseView()->TargetVolumeIsReadOnly());
+	}
 
-	if (modifiers() & B_SHIFT_KEY) {
+	if ((modifiers() & B_SHIFT_KEY) != 0) {
 		item->SetLabel(B_TRANSLATE("Paste links"));
 		item->SetShortcut('V', B_COMMAND_KEY | B_SHIFT_KEY);
 		item->SetMessage(new BMessage(kPasteLinksFromClipboard));
@@ -1903,7 +1745,7 @@ BContainerWindow::SetArrangeMenu(BMenu* menu)
 
 	BMenu* arrangeMenu;
 
-	if (modifiers() & B_SHIFT_KEY) {
+	if ((modifiers() & B_SHIFT_KEY) != 0) {
 		item->SetLabel(B_TRANSLATE("Clean up all"));
 		item->SetShortcut('K', B_COMMAND_KEY | B_SHIFT_KEY);
 		item->SetMessage(new BMessage(kCleanupAll));
@@ -1928,7 +1770,7 @@ BContainerWindow::SetCloseItem(BMenu* menu)
 		return;
 	}
 
-	if (modifiers() & B_SHIFT_KEY) {
+	if ((modifiers() & B_SHIFT_KEY) != 0) {
 		item->SetLabel(B_TRANSLATE("Close all"));
 		item->SetShortcut('W', B_COMMAND_KEY | B_SHIFT_KEY);
 		item->SetTarget(be_app);
@@ -1967,7 +1809,7 @@ BContainerWindow::AddMenus()
 	AddWindowMenu(fWindowMenu);
 	// just create the attribute, decide to add it later
 	fAttrMenu = new BMenu(B_TRANSLATE("Attributes"));
-	NewAttributeMenu(fAttrMenu);
+	NewAttributesMenu(fAttrMenu);
 	PopulateArrangeByMenu(fArrangeByMenu);
 }
 
@@ -1975,21 +1817,25 @@ BContainerWindow::AddMenus()
 void
 BContainerWindow::AddFileMenu(BMenu* menu)
 {
+	BMenuItem* item;
+
 	if (!PoseView()->IsFilePanel()) {
 		menu->AddItem(new BMenuItem(B_TRANSLATE("Find" B_UTF8_ELLIPSIS),
 			new BMessage(kFindButton), 'F'));
 	}
 
 	if (!TargetModel()->IsQuery() && !TargetModel()->IsVirtualDirectory()
-		&& !IsTrash() && !IsPrintersDir() && !TargetModel()->IsRoot()) {
+		&& !TargetModel()->IsTrash() && !TargetModel()->IsPrintersDir()
+		&& !TargetModel()->IsRoot()) {
 		if (!PoseView()->IsFilePanel()) {
 			TemplatesMenu* templatesMenu = new TemplatesMenu(PoseView(),
 				B_TRANSLATE("New"));
 			menu->AddItem(templatesMenu);
 			templatesMenu->SetTargetForItems(PoseView());
 		} else {
-			menu->AddItem(new BMenuItem(B_TRANSLATE("New folder"),
-				new BMessage(kNewFolder), 'N'));
+			item = new BMenuItem(B_TRANSLATE("New folder"),
+				new BMessage(kNewFolder), 'N');
+			menu->AddItem(item);
 		}
 	}
 	menu->AddSeparatorItem();
@@ -2001,23 +1847,23 @@ BContainerWindow::AddFileMenu(BMenu* menu)
 	menu->AddItem(new BMenuItem(B_TRANSLATE("Edit name"),
 		new BMessage(kEditItem), 'E'));
 
-	if (IsTrash() || InTrash()) {
+	if (TargetModel()->IsTrash() || TargetModel()->InTrash()) {
 		menu->AddItem(new BMenuItem(B_TRANSLATE("Restore"),
 			new BMessage(kRestoreFromTrash)));
-		if (IsTrash()) {
+		if (TargetModel()->IsTrash()) {
 			// add as first item in menu
 			menu->AddItem(new BMenuItem(B_TRANSLATE("Empty Trash"),
 				new BMessage(kEmptyTrash)), 0);
 			menu->AddItem(new BSeparatorItem(), 1);
 		}
-	} else if (IsPrintersDir()) {
+	} else if (TargetModel()->IsPrintersDir()) {
 		menu->AddItem(new BMenuItem(B_TRANSLATE("Add printer" B_UTF8_ELLIPSIS),
 			new BMessage(kAddPrinter), 'N'), 0);
 		menu->AddItem(new BSeparatorItem(), 1);
 		menu->AddItem(new BMenuItem(B_TRANSLATE("Make active printer"),
 			new BMessage(kMakeActivePrinter)));
 	} else if (TargetModel()->IsRoot()) {
-		BMenuItem* item = new BMenuItem(B_TRANSLATE("Unmount"),
+		item = new BMenuItem(B_TRANSLATE("Unmount"),
 			new BMessage(kUnmountVolume), 'U');
 		item->SetEnabled(false);
 		menu->AddItem(item);
@@ -2025,11 +1871,16 @@ BContainerWindow::AddFileMenu(BMenu* menu)
 			B_TRANSLATE("Mount settings" B_UTF8_ELLIPSIS),
 			new BMessage(kRunAutomounterSettings)));
 	} else {
-		menu->AddItem(new BMenuItem(B_TRANSLATE("Duplicate"),
-			new BMessage(kDuplicateSelection), 'D'));
-		menu->AddItem(new BMenuItem(TrackerSettings().DontMoveFilesToTrash()
-			? B_TRANSLATE("Delete") : B_TRANSLATE("Move to Trash"),
-			new BMessage(kMoveToTrash), 'T'));
+		item = new BMenuItem(B_TRANSLATE("Duplicate"),
+			new BMessage(kDuplicateSelection), 'D');
+		item->SetEnabled(PoseView()->CanMoveToTrashOrDuplicate());
+		menu->AddItem(item);
+
+		item = new BMenuItem(B_TRANSLATE("Move to Trash"),
+			new BMessage(kMoveSelectionToTrash), 'T');
+		item->SetEnabled(PoseView()->CanMoveToTrashOrDuplicate());
+		menu->AddItem(item);
+
 		menu->AddSeparatorItem();
 
 		// The "Move To", "Copy To", "Create Link" menus are inserted
@@ -2040,7 +1891,7 @@ BContainerWindow::AddFileMenu(BMenu* menu)
 	BMenuItem* cutItem = NULL;
 	BMenuItem* copyItem = NULL;
 	BMenuItem* pasteItem = NULL;
-	if (!IsPrintersDir()) {
+	if (!TargetModel()->IsPrintersDir()) {
 		menu->AddSeparatorItem();
 
 		if (!TargetModel()->IsRoot()) {
@@ -2054,11 +1905,11 @@ BContainerWindow::AddFileMenu(BMenu* menu)
 				new BMessage(B_PASTE), 'V');
 			menu->AddItem(pasteItem);
 			menu->AddSeparatorItem();
+
 			menu->AddItem(new BMenuItem(B_TRANSLATE("Identify"),
 				new BMessage(kIdentifyEntry)));
 		}
 		BMenu* addOnMenuItem = new BMenu(B_TRANSLATE("Add-ons"));
-		addOnMenuItem->SetFont(be_plain_font);
 		menu->AddItem(addOnMenuItem);
 	}
 
@@ -2081,41 +1932,21 @@ BContainerWindow::AddWindowMenu(BMenu* menu)
 
 	BMenu* iconSizeMenu = new BMenu(B_TRANSLATE("Icon view"));
 
-	BMessage* message = new BMessage(kIconMode);
-	message->AddInt32("size", 32);
-	item = new BMenuItem(B_TRANSLATE("32 x 32"), message);
-	item->SetTarget(PoseView());
-	iconSizeMenu->AddItem(item);
+	static const uint32 kIconSizes[] = { 32, 40, 48, 64, 96, 128 };
+	BMessage* message;
 
-	message = new BMessage(kIconMode);
-	message->AddInt32("size", 40);
-	item = new BMenuItem(B_TRANSLATE("40 x 40"), message);
-	item->SetTarget(PoseView());
-	iconSizeMenu->AddItem(item);
-
-	message = new BMessage(kIconMode);
-	message->AddInt32("size", 48);
-	item = new BMenuItem(B_TRANSLATE("48 x 48"), message);
-	item->SetTarget(PoseView());
-	iconSizeMenu->AddItem(item);
-
-	message = new BMessage(kIconMode);
-	message->AddInt32("size", 64);
-	item = new BMenuItem(B_TRANSLATE("64 x 64"), message);
-	item->SetTarget(PoseView());
-	iconSizeMenu->AddItem(item);
-
-	message = new BMessage(kIconMode);
-	message->AddInt32("size", 96);
-	item = new BMenuItem(B_TRANSLATE("96 x 96"), message);
-	item->SetTarget(PoseView());
-	iconSizeMenu->AddItem(item);
-
-	message = new BMessage(kIconMode);
-	message->AddInt32("size", 128);
-	item = new BMenuItem(B_TRANSLATE("128 x 128"), message);
-	item->SetTarget(PoseView());
-	iconSizeMenu->AddItem(item);
+	for (uint32 i = 0; i < sizeof(kIconSizes) / sizeof(uint32); ++i) {
+		uint32 iconSize = kIconSizes[i];
+		message = new BMessage(kIconMode);
+		message->AddInt32("size", iconSize);
+		BString label;
+		label.SetToFormat(B_TRANSLATE_COMMENT("%" B_PRId32" × %" B_PRId32,
+			"The '×' is the Unicode multiplication sign U+00D7"),
+			iconSize, iconSize);
+		item = new BMenuItem(label, message);
+		item->SetTarget(PoseView());
+		iconSizeMenu->AddItem(item);
+	}
 
 	iconSizeMenu->AddSeparatorItem();
 
@@ -2142,28 +1973,10 @@ BContainerWindow::AddWindowMenu(BMenu* menu)
 	item->SetTarget(PoseView());
 	menu->AddItem(item);
 
-	BMenu* listViewMenu = new BMenu(B_TRANSLATE("List view"));
-
-	message = new BMessage(kListMode);
-	message->AddInt32("icon_size", B_MINI_ICON);
-	item = new BMenuItem(listViewMenu, message);
-	item->SetShortcut('3', B_COMMAND_KEY);
+	item = new BMenuItem(B_TRANSLATE("List view"),
+		new BMessage(kListMode), '3');
 	item->SetTarget(PoseView());
 	menu->AddItem(item);
-
-	message = new BMessage(kListMode);
-	message->AddInt32("icon_size", B_MINI_ICON);
-	item = new BMenuItem(B_TRANSLATE("Mini"), message);
-	item->SetTarget(PoseView());
-	listViewMenu->AddItem(item);
-
-	message = new BMessage(kListMode);
-	message->AddInt32("icon_size", B_LARGE_ICON);
-	item = new BMenuItem(B_TRANSLATE("Large"), message);
-	item->SetTarget(PoseView());
-	listViewMenu->AddItem(item);
-
-	listViewMenu->SetTargetForItems(PoseView());
 
 	menu->AddSeparatorItem();
 
@@ -2182,7 +1995,7 @@ BContainerWindow::AddWindowMenu(BMenu* menu)
 
 	item = new BMenuItem(B_TRANSLATE("Select all"),
 		new BMessage(B_SELECT_ALL), 'A');
-	item->SetTarget(PoseView());
+	item->SetTarget(this);
 	menu->AddItem(item);
 
 	item = new BMenuItem(B_TRANSLATE("Invert selection"),
@@ -2190,7 +2003,7 @@ BContainerWindow::AddWindowMenu(BMenu* menu)
 	item->SetTarget(PoseView());
 	menu->AddItem(item);
 
-	if (!IsTrash()) {
+	if (!TargetModel()->IsTrash()) {
 		item = new BMenuItem(B_TRANSLATE("Open parent"),
 			new BMessage(kOpenParentDir), B_UP_ARROW);
 		item->SetTarget(PoseView());
@@ -2210,7 +2023,7 @@ BContainerWindow::AddWindowMenu(BMenu* menu)
 	menu->AddSeparatorItem();
 
 	item = new BMenuItem(B_TRANSLATE("Preferences" B_UTF8_ELLIPSIS),
-		new BMessage(kShowSettingsWindow));
+		new BMessage(kShowSettingsWindow), ',');
 	item->SetTarget(be_app);
 	menu->AddItem(item);
 }
@@ -2220,7 +2033,7 @@ void
 BContainerWindow::AddShortcuts()
 {
 	// add equivalents of the menu shortcuts to the menuless desktop window
-	ASSERT(!IsTrash());
+	ASSERT(!TargetModel()->IsTrash());
 	ASSERT(!PoseView()->IsFilePanel());
 	ASSERT(!TargetModel()->IsQuery());
 	ASSERT(!TargetModel()->IsVirtualDirectory());
@@ -2242,7 +2055,7 @@ BContainerWindow::AddShortcuts()
 	AddShortcut('D', B_COMMAND_KEY,
 		new BMessage(kDuplicateSelection), PoseView());
 	AddShortcut('T', B_COMMAND_KEY,
-		new BMessage(kMoveToTrash), PoseView());
+		new BMessage(kMoveSelectionToTrash), PoseView());
 	AddShortcut('K', B_COMMAND_KEY,
 		new BMessage(kCleanup), PoseView());
 	AddShortcut('A', B_COMMAND_KEY,
@@ -2281,7 +2094,7 @@ BContainerWindow::MenusBeginning()
 	if (CurrentMessage() != NULL && CurrentMessage()->what == B_MOUSE_DOWN) {
 		// don't commit active pose if only a keyboard shortcut is
 		// invoked - this would prevent Cut/Copy/Paste from working
-		fPoseView->CommitActivePose();
+		PoseView()->CommitActivePose();
 	}
 
 	// File menu
@@ -2297,9 +2110,7 @@ BContainerWindow::MenusBeginning()
 		BVolumeRoster().GetBootVolume(&boot);
 
 		bool ejectableVolumeSelected = false;
-
-		int32 count = PoseView()->SelectionList()->CountItems();
-		for (int32 index = 0; index < count; index++) {
+		for (int32 index = 0; index < selectCount; index++) {
 			Model* model
 				= PoseView()->SelectionList()->ItemAt(index)->TargetModel();
 			if (model->IsVolume()) {
@@ -2320,10 +2131,8 @@ BContainerWindow::MenusBeginning()
 
 	AddMimeTypesToMenu(fAttrMenu);
 
-	if (IsPrintersDir()) {
-		EnableNamedMenuItem(fFileMenu, B_TRANSLATE("Make active printer"),
-			selectCount == 1);
-	}
+	if (TargetModel()->IsPrintersDir())
+		EnableNamedMenuItem(fFileMenu, kMakeActivePrinter, selectCount == 1);
 }
 
 
@@ -2365,10 +2174,10 @@ BContainerWindow::SetupNavigationMenu(const entry_ref* ref, BMenu* parent)
 	Model model(&entry);
 	entry_ref resolvedRef;
 
-	if (model.InitCheck() != B_OK
-		|| (!model.IsContainer() && !model.IsSymLink())) {
+	if (model.InitCheck() != B_OK)
 		return;
-	}
+	else if (!model.IsContainer() && !model.IsSymLink())
+		return;
 
 	if (model.IsSymLink()) {
 		if (entry.SetTo(model.EntryRef(), true) != B_OK)
@@ -2408,11 +2217,11 @@ BContainerWindow::SetupNavigationMenu(const entry_ref* ref, BMenu* parent)
 
 
 void
-BContainerWindow::SetUpEditQueryItem(BMenu* menu)
+BContainerWindow::SetupEditQueryItem(BMenu* menu)
 {
 	ASSERT(menu);
 	// File menu
-	int32 selectCount = PoseView()->SelectionList()->CountItems();
+	int32 selectCount = PoseView()->CountSelected();
 
 	// add Edit query if appropriate
 	bool queryInSelection = false;
@@ -2466,7 +2275,8 @@ BContainerWindow::SetupOpenWithMenu(BMenu* parent)
 		fOpenWithItem = 0;
 	}
 
-	if (PoseView()->SelectionList()->CountItems() == 0) {
+	int32 selectCount = PoseView()->CountSelected();
+	if (selectCount <= 0) {
 		// no selection, nothing to open
 		return;
 	}
@@ -2483,13 +2293,9 @@ BContainerWindow::SetupOpenWithMenu(BMenu* parent)
 	// add after "Open"
 	BMenuItem* item = parent->FindItem(kOpenSelection);
 
-	int32 count = PoseView()->SelectionList()->CountItems();
-	if (count == 0)
-		return;
-
 	// build a list of all refs to open
 	BMessage message(B_REFS_RECEIVED);
-	for (int32 index = 0; index < count; index++) {
+	for (int32 index = 0; index < selectCount; index++) {
 		BPose* pose = PoseView()->SelectionList()->ItemAt(index);
 		message.AddRef("refs", pose->TargetModel()->EntryRef());
 	}
@@ -2526,9 +2332,10 @@ BContainerWindow::PopulateMoveCopyNavMenu(BNavMenu* navMenu, uint32 what,
 
 	// count persistent writable volumes
 	volumeRoster.Rewind();
-	while (volumeRoster.GetNextVolume(&volume) == B_OK)
+	while (volumeRoster.GetNextVolume(&volume) == B_OK) {
 		if (!volume.IsReadOnly() && volume.IsPersistent())
 			volumeCount++;
+	}
 
 	// add the current folder
 	if (entry.SetTo(ref) == B_OK
@@ -2539,7 +2346,7 @@ BContainerWindow::PopulateMoveCopyNavMenu(BNavMenu* navMenu, uint32 what,
 		menu->SetNavDir(model.EntryRef());
 		menu->SetShowParent(true);
 
-		BMenuItem* item = new SpecialModelMenuItem(&model,menu);
+		BMenuItem* item = new SpecialModelMenuItem(&model, menu);
 		item->SetMessage(new BMessage((uint32)what));
 
 		navMenu->AddItem(item);
@@ -2554,7 +2361,7 @@ BContainerWindow::PopulateMoveCopyNavMenu(BNavMenu* navMenu, uint32 what,
 			BMenu* menu = new RecentsMenu(B_TRANSLATE("Recent folders"),
 				kRecentFolders, what, this);
 
-			BMenuItem* item = new SpecialModelMenuItem(&model,menu);
+			BMenuItem* item = new SpecialModelMenuItem(&model, menu);
 			item->SetMessage(new BMessage((uint32)what));
 
 			navMenu->AddItem(item);
@@ -2563,17 +2370,17 @@ BContainerWindow::PopulateMoveCopyNavMenu(BNavMenu* navMenu, uint32 what,
 
 	// add Desktop
 	FSGetBootDeskDir(&directory);
-	if (directory.InitCheck() == B_OK
-		&& directory.GetEntry(&entry) == B_OK
-		&& model.SetTo(&entry) == B_OK)
+	if (directory.InitCheck() == B_OK && directory.GetEntry(&entry) == B_OK
+		&& model.SetTo(&entry) == B_OK) {
 		navMenu->AddNavDir(&model, what, this, true);
 			// ask NavMenu to populate submenu for us
+	}
 
 	// add the home dir
 	if (find_directory(B_USER_DIRECTORY, &path) == B_OK
-		&& entry.SetTo(path.Path()) == B_OK
-		&& model.SetTo(&entry) == B_OK)
+		&& entry.SetTo(path.Path()) == B_OK && model.SetTo(&entry) == B_OK) {
 		navMenu->AddNavDir(&model, what, this, true);
+	}
 
 	navMenu->AddSeparatorItem();
 
@@ -2614,38 +2421,32 @@ BContainerWindow::PopulateMoveCopyNavMenu(BNavMenu* navMenu, uint32 what,
 void
 BContainerWindow::SetupMoveCopyMenus(const entry_ref* item_ref, BMenu* parent)
 {
-	if (IsTrash() || InTrash() || IsPrintersDir() || !fMoveToItem
-		|| !fCopyToItem || !fCreateLinkItem || TargetModel()->IsRoot()) {
+	if (TargetModel()->IsTrash() || TargetModel()->InTrash() || TargetModel()->IsPrintersDir()
+		|| fMoveToItem == NULL || fCopyToItem == NULL || fCreateLinkItem == NULL
+		|| TargetModel()->IsRoot()) {
 		return;
 	}
 
-	// Grab the modifiers state since we use it twice
-	uint32 modifierKeys = modifiers();
-
 	// re-parent items to this menu since they're shared
-	int32 index;
-	BMenuItem* trash = parent->FindItem(kMoveToTrash);
-	if (trash)
-		index = parent->IndexOf(trash) + 2;
-	else
-		index = 0;
+	BMenuItem* trash = parent->FindItem(kMoveSelectionToTrash);
+	int32 index = trash != NULL ? parent->IndexOf(trash) + 2 : 0;
 
 	if (fMoveToItem->Menu() != parent) {
-		if (fMoveToItem->Menu())
+		if (fMoveToItem->Menu() != NULL)
 			fMoveToItem->Menu()->RemoveItem(fMoveToItem);
 
 		parent->AddItem(fMoveToItem, index++);
 	}
 
 	if (fCopyToItem->Menu() != parent) {
-		if (fCopyToItem->Menu())
+		if (fCopyToItem->Menu() != NULL)
 			fCopyToItem->Menu()->RemoveItem(fCopyToItem);
 
 		parent->AddItem(fCopyToItem, index++);
 	}
 
 	if (fCreateLinkItem->Menu() != parent) {
-		if (fCreateLinkItem->Menu())
+		if (fCreateLinkItem->Menu() != NULL)
 			fCreateLinkItem->Menu()->RemoveItem(fCreateLinkItem);
 
 		parent->AddItem(fCreateLinkItem, index);
@@ -2653,7 +2454,7 @@ BContainerWindow::SetupMoveCopyMenus(const entry_ref* item_ref, BMenu* parent)
 
 	// Set the "Create Link" item label here so it
 	// appears correctly when menus are disabled, too.
-	if (modifierKeys & B_SHIFT_KEY)
+	if ((modifiers() & B_SHIFT_KEY) != 0)
 		fCreateLinkItem->SetLabel(B_TRANSLATE("Create relative link"));
 	else
 		fCreateLinkItem->SetLabel(B_TRANSLATE("Create link"));
@@ -2686,7 +2487,7 @@ BContainerWindow::SetupMoveCopyMenus(const entry_ref* item_ref, BMenu* parent)
 
 	// Set "Create Link" menu item message and
 	// add all mounted volumes (except the one this item lives on)
-	if (modifierKeys & B_SHIFT_KEY) {
+	if ((modifiers() & B_SHIFT_KEY) != 0) {
 		fCreateLinkItem->SetMessage(new BMessage(kCreateRelativeLink));
 		PopulateMoveCopyNavMenu(dynamic_cast<BNavMenu*>
 				(fCreateLinkItem->Submenu()),
@@ -2694,18 +2495,19 @@ BContainerWindow::SetupMoveCopyMenus(const entry_ref* item_ref, BMenu* parent)
 	} else {
 		fCreateLinkItem->SetMessage(new BMessage(kCreateLink));
 		PopulateMoveCopyNavMenu(dynamic_cast<BNavMenu*>
-			(fCreateLinkItem->Submenu()),
-		kCreateLink, item_ref, false);
+				(fCreateLinkItem->Submenu()),
+			kCreateLink, item_ref, false);
 	}
 
-	fMoveToItem->SetEnabled(true);
-	fCopyToItem->SetEnabled(true);
-	fCreateLinkItem->SetEnabled(true);
+	fMoveToItem->SetEnabled(PoseView()->CountSelected() > 0
+		&& !PoseView()->SelectedVolumeIsReadOnly());
+	fCopyToItem->SetEnabled(PoseView()->CountSelected() > 0);
+	fCreateLinkItem->SetEnabled(PoseView()->CountSelected() > 0);
 
 	// Set the "Identify" item label
 	BMenuItem* identifyItem = parent->FindItem(kIdentifyEntry);
 	if (identifyItem != NULL) {
-		if (modifierKeys & B_SHIFT_KEY) {
+		if ((modifiers() & B_SHIFT_KEY) != 0) {
 			identifyItem->SetLabel(B_TRANSLATE("Force identify"));
 			identifyItem->Message()->ReplaceBool("force", true);
 		} else {
@@ -2717,9 +2519,9 @@ BContainerWindow::SetupMoveCopyMenus(const entry_ref* item_ref, BMenu* parent)
 
 
 uint32
-BContainerWindow::ShowDropContextMenu(BPoint loc)
+BContainerWindow::ShowDropContextMenu(BPoint where, BPoseView* source)
 {
-	BPoint global(loc);
+	BPoint global(where);
 
 	PoseView()->ConvertToScreen(&global);
 	PoseView()->CommitActivePose();
@@ -2729,16 +2531,31 @@ BContainerWindow::ShowDropContextMenu(BPoint loc)
 	BMenuItem* item = fDropContextMenu->FindItem(kCreateLink);
 	if (item == NULL)
 		item = fDropContextMenu->FindItem(kCreateRelativeLink);
-	if (item && (modifiers() & B_SHIFT_KEY)) {
+
+	if (item != NULL && (modifiers() & B_SHIFT_KEY) != 0) {
 		item->SetLabel(B_TRANSLATE("Create relative link here"));
 		item->SetMessage(new BMessage(kCreateRelativeLink));
-	} else if (item) {
+	} else if (item != NULL) {
 		item->SetLabel(B_TRANSLATE("Create link here"));
 		item->SetMessage(new BMessage(kCreateLink));
 	}
 
+	int32 itemCount = fDropContextMenu->CountItems();
+	for(int32 i = 0; i < itemCount - 2; i++) {
+		// separator item and Cancel item are skipped
+		item = fDropContextMenu->ItemAt(i);
+		if (item == NULL)
+			break;
+
+		if (item->Command() == kMoveSelectionTo && source != NULL) {
+			item->SetEnabled(!source->SelectedVolumeIsReadOnly()
+				&& !PoseView()->TargetVolumeIsReadOnly());
+		} else
+			item->SetEnabled(!PoseView()->TargetVolumeIsReadOnly());
+	}
+
 	item = fDropContextMenu->Go(global, true, true);
-	if (item)
+	if (item != NULL)
 		return item->Command();
 
 	return 0;
@@ -2746,10 +2563,10 @@ BContainerWindow::ShowDropContextMenu(BPoint loc)
 
 
 void
-BContainerWindow::ShowContextMenu(BPoint loc, const entry_ref* ref, BView*)
+BContainerWindow::ShowContextMenu(BPoint where, const entry_ref* ref)
 {
 	ASSERT(IsLocked());
-	BPoint global(loc);
+	BPoint global(where);
 	PoseView()->ConvertToScreen(&global);
 	PoseView()->CommitActivePose();
 
@@ -2769,10 +2586,11 @@ BContainerWindow::ShowContextMenu(BPoint loc, const entry_ref* ref, BView*)
 				static_cast<TTracker*>(be_app)->TrashFull());
 
 			SetupNavigationMenu(ref, fTrashContextMenu);
-			fTrashContextMenu->Go(global, true, true, true);
+
+			fContextMenu = fTrashContextMenu;
 		} else {
 			bool showAsVolume = false;
-			bool filePanel = PoseView()->IsFilePanel();
+			bool isFilePanel = PoseView()->IsFilePanel();
 
 			if (Dragging()) {
 				fContextMenu = NULL;
@@ -2821,77 +2639,84 @@ BContainerWindow::ShowContextMenu(BPoint loc, const entry_ref* ref, BView*)
 
 					// this is now asynchronous so that we don't
 					// deadlock in Window::Quit,
-					fDragContextMenu->Go(global, true, false, true);
+					fDragContextMenu->Go(global);
 				}
 
 				return;
-			} else if (TargetModel()->IsRoot() || model.IsVolume()) {
+			} else if (model.IsRoot() || model.IsVolume()) {
 				fContextMenu = fVolumeContextMenu;
 				showAsVolume = true;
-			} else
+			} else {
 				fContextMenu = fFileContextMenu;
+			}
+
+			if (fContextMenu == NULL)
+				return;
+
+			// bail out before cleanup if popup window is already open
+			if (fContextMenu->Window() != NULL)
+				return;
 
 			// clean up items from last context menu
+			MenusEnded();
 
-			if (fContextMenu != NULL) {
-				if (fContextMenu->Window())
-					return;
-				else
-					MenusEnded();
+			if (fContextMenu == fFileContextMenu) {
+				// Add all mounted volumes (except the one this item lives on.)
+				BNavMenu* navMenu = dynamic_cast<BNavMenu*>(
+					fCreateLinkItem->Submenu());
+				PopulateMoveCopyNavMenu(navMenu,
+				fCreateLinkItem->Message()->what, ref, false);
+			} else if (showAsVolume) {
+				// non-volume enable/disable copy, move, identify
+				EnableNamedMenuItem(fContextMenu, kDuplicateSelection, false);
+				EnableNamedMenuItem(fContextMenu, kMoveSelectionToTrash, false);
+				EnableNamedMenuItem(fContextMenu, kIdentifyEntry, false);
 
-				if (model.InitCheck() == B_OK) { // ??? Do I need this ???
-					if (showAsVolume) {
-						// non-volume enable/disable copy, move, identify
-						EnableNamedMenuItem(fContextMenu, kDuplicateSelection,
-							false);
-						EnableNamedMenuItem(fContextMenu, kMoveToTrash, false);
-						EnableNamedMenuItem(fContextMenu, kIdentifyEntry,
-							false);
+				// volume model, enable/disable the Unmount item
+				bool ejectableVolumeSelected = false;
 
-						// volume model, enable/disable the Unmount item
-						bool ejectableVolumeSelected = false;
+				BVolume boot;
+				BVolumeRoster().GetBootVolume(&boot);
+				BVolume volume;
+				volume.SetTo(model.NodeRef()->device);
+				if (volume != boot)
+					ejectableVolumeSelected = true;
 
-						BVolume boot;
-						BVolumeRoster().GetBootVolume(&boot);
-						BVolume volume;
-						volume.SetTo(model.NodeRef()->device);
-						if (volume != boot)
-							ejectableVolumeSelected = true;
-
-						EnableNamedMenuItem(fContextMenu,
-							B_TRANSLATE("Unmount"),	ejectableVolumeSelected);
-					}
-				}
-
-				SetupNavigationMenu(ref, fContextMenu);
-				if (!showAsVolume && !filePanel) {
-					SetupMoveCopyMenus(ref, fContextMenu);
-					SetupOpenWithMenu(fContextMenu);
-				}
-
-				UpdateMenu(fContextMenu, kPosePopUpContext);
-
-				fContextMenu->Go(global, true, true, true);
+				EnableNamedMenuItem(fContextMenu,
+					B_TRANSLATE("Unmount"), ejectableVolumeSelected);
 			}
+
+			SetupNavigationMenu(ref, fContextMenu);
+			if (!showAsVolume && !isFilePanel) {
+				SetupMoveCopyMenus(ref, fContextMenu);
+				SetupOpenWithMenu(fContextMenu);
+			}
+
+			UpdateMenu(fContextMenu, kPosePopUpContext);
 		}
 	} else if (fWindowContextMenu != NULL) {
-		if (fWindowContextMenu->Window())
+		// clicked on a window, show window context menu
+		fContextMenu = fWindowContextMenu;
+
+		// bail out before cleanup if popup window is already open
+		if (fContextMenu->Window() != NULL)
 			return;
 
-		// Repopulate desktop menu if IsDesktop
-		if (fIsDesktop)
-			RepopulateMenus();
-
+		// clean up items from last context menu
 		MenusEnded();
 
-		// clicked on a window, show window context menu
+		// setup nav menu
+		SetupNavigationMenu(TargetModel()->EntryRef(), fContextMenu);
 
-		SetupNavigationMenu(ref, fWindowContextMenu);
-		UpdateMenu(fWindowContextMenu, kWindowPopUpContext);
-
-		fWindowContextMenu->Go(global, true, true, true);
+		// update the rest
+		UpdateMenu(fContextMenu, kWindowPopUpContext);
 	}
 
+	// context menu invalid or popup window is already open
+	if (fContextMenu == NULL || fContextMenu->Window() != NULL)
+		return;
+
+	fContextMenu->Go(global, true, true, true);
 	fContextMenu = NULL;
 }
 
@@ -2906,24 +2731,22 @@ BContainerWindow::AddFileContextMenus(BMenu* menu)
 	menu->AddItem(new BMenuItem(B_TRANSLATE("Edit name"),
 		new BMessage(kEditItem), 'E'));
 
-	if (!IsTrash() && !InTrash() && !IsPrintersDir()) {
-		menu->AddItem(new BMenuItem(B_TRANSLATE("Duplicate"),
-			new BMessage(kDuplicateSelection), 'D'));
-	}
+	BMessage* message = new BMessage(kDuplicateSelection);
+	if (!(TargetModel()->IsTrash() || TargetModel()->InTrash() || TargetModel()->IsPrintersDir()))
+		menu->AddItem(new BMenuItem(B_TRANSLATE("Duplicate"), message, 'D'));
 
-	if (!IsTrash() && !InTrash()) {
-		menu->AddItem(new BMenuItem(TrackerSettings().DontMoveFilesToTrash()
-			? B_TRANSLATE("Delete")	: B_TRANSLATE("Move to Trash"),
-			new BMessage(kMoveToTrash), 'T'));
-		if (!IsPrintersDir()) {
+	if (!(TargetModel()->IsTrash() || TargetModel()->InTrash())) {
+		message = new BMessage(kMoveSelectionToTrash);
+		menu->AddItem( new BMenuItem(B_TRANSLATE("Move to Trash"), message, 'T'));
+		if (!TargetModel()->IsPrintersDir()) {
 			// add separator for copy to/move to items (navigation items)
 			menu->AddSeparatorItem();
 		}
 	} else {
-		menu->AddItem(new BMenuItem(B_TRANSLATE("Delete"),
-			new BMessage(kDelete), 0));
-		menu->AddItem(new BMenuItem(B_TRANSLATE("Restore"),
-			new BMessage(kRestoreFromTrash), 0));
+		message = new BMessage(kDeleteSelection);
+		menu->AddItem(new BMenuItem(B_TRANSLATE("Delete"), message, 0));
+		message = new BMessage(kRestoreSelectionFromTrash);
+		menu->AddItem(new BMenuItem(B_TRANSLATE("Restore"), message, 0));
 	}
 
 #ifdef CUT_COPY_PASTE_IN_CONTEXT_MENU
@@ -2934,14 +2757,17 @@ BContainerWindow::AddFileContextMenus(BMenu* menu)
 	BMenuItem* copyItem = new BMenuItem(B_TRANSLATE("Copy"),
 		new BMessage(B_COPY), 'C');
 	menu->AddItem(copyItem);
+	BMenuItem* pasteItem = new BMenuItem(B_TRANSLATE("Paste"),
+		new BMessage(B_PASTE), 'V');
+	menu->AddItem(pasteItem);
 #endif
-
 	menu->AddSeparatorItem();
-	BMessage* message = new BMessage(kIdentifyEntry);
+
+	message = new BMessage(kIdentifyEntry);
 	message->AddBool("force", false);
 	menu->AddItem(new BMenuItem(B_TRANSLATE("Identify"), message));
+
 	BMenu* addOnMenuItem = new BMenu(B_TRANSLATE("Add-ons"));
-	addOnMenuItem->SetFont(be_plain_font);
 	menu->AddItem(addOnMenuItem);
 
 	// set targets as needed
@@ -2949,6 +2775,7 @@ BContainerWindow::AddFileContextMenus(BMenu* menu)
 #ifdef CUT_COPY_PASTE_IN_CONTEXT_MENU
 	cutItem->SetTarget(this);
 	copyItem->SetTarget(this);
+	pasteItem->SetTarget(this);
 #endif
 }
 
@@ -2970,8 +2797,14 @@ BContainerWindow::AddVolumeContextMenus(BMenu* menu)
 		new BMessage(kUnmountVolume), 'U');
 	item->SetEnabled(false);
 	menu->AddItem(item);
-
 	menu->AddSeparatorItem();
+
+#ifdef CUT_COPY_PASTE_IN_CONTEXT_MENU
+	menu->AddItem(new BMenuItem(B_TRANSLATE("Paste"),
+		new BMessage(B_PASTE), 'V'));
+	menu->AddSeparatorItem();
+#endif
+
 	menu->AddItem(new BMenu(B_TRANSLATE("Add-ons")));
 
 	menu->SetTargetForItems(PoseView());
@@ -2989,27 +2822,30 @@ BContainerWindow::AddWindowContextMenus(BMenu* menu)
 	ASSERT(targetModel != NULL);
 
 	bool needSeparator = true;
-	if (IsTrash()) {
+	if (TargetModel()->IsTrash()) {
 		menu->AddItem(new BMenuItem(B_TRANSLATE("Empty Trash"),
 			new BMessage(kEmptyTrash)));
-	} else if (IsPrintersDir()) {
+	} else if (TargetModel()->IsPrintersDir()) {
 		menu->AddItem(new BMenuItem(B_TRANSLATE("Add printer" B_UTF8_ELLIPSIS),
 			new BMessage(kAddPrinter), 'N'));
-	} else if (InTrash() || targetModel->IsRoot()) {
+	} else if (targetModel->InTrash() || targetModel->IsRoot()) {
 		needSeparator = false;
-	} else {
-		TemplatesMenu* templatesMenu = new TemplatesMenu(PoseView(),
-			B_TRANSLATE("New"));
+	} else if (!PoseView()->IsFilePanel()) {
+		TemplatesMenu* templatesMenu = new TemplatesMenu(PoseView(), B_TRANSLATE("New"));
 		menu->AddItem(templatesMenu);
 		templatesMenu->SetTargetForItems(PoseView());
-		templatesMenu->SetFont(be_plain_font);
+	} else {
+		menu->AddItem(new BMenuItem(B_TRANSLATE("New folder"), new BMessage(kNewFolder), 'N'));
 	}
 
 	if (needSeparator)
 		menu->AddSeparatorItem();
 
 #ifdef CUT_COPY_PASTE_IN_CONTEXT_MENU
-	BMenuItem* pasteItem = new BMenuItem("Paste", new BMessage(B_PASTE), 'V');
+	BMenuItem* pasteItem = new BMenuItem(B_TRANSLATE("Paste"),
+		new BMessage(B_PASTE), 'V');
+	pasteItem->SetEnabled(FSClipboardHasRefs()
+		&& !PoseView()->TargetVolumeIsReadOnly());
 	menu->AddItem(pasteItem);
 	menu->AddSeparatorItem();
 #endif
@@ -3022,7 +2858,7 @@ BContainerWindow::AddWindowContextMenus(BMenu* menu)
 		new BMessage(kShowSelectionWindow), 'A', B_SHIFT_KEY));
 	menu->AddItem(new BMenuItem(B_TRANSLATE("Select all"),
 		new BMessage(B_SELECT_ALL), 'A'));
-	if (!IsTrash()) {
+	if (!TargetModel()->IsTrash()) {
 		menu->AddItem(new BMenuItem(B_TRANSLATE("Open parent"),
 			new BMessage(kOpenParentDir), B_UP_ARROW));
 	}
@@ -3034,7 +2870,6 @@ BContainerWindow::AddWindowContextMenus(BMenu* menu)
 
 	menu->AddSeparatorItem();
 	BMenu* addOnMenuItem = new BMenu(B_TRANSLATE("Add-ons"));
-	addOnMenuItem->SetFont(be_plain_font);
 	menu->AddItem(addOnMenuItem);
 
 #if DEBUG
@@ -3055,12 +2890,12 @@ BContainerWindow::AddWindowContextMenus(BMenu* menu)
 void
 BContainerWindow::AddDropContextMenus(BMenu* menu)
 {
-	menu->AddItem(new BMenuItem(B_TRANSLATE("Create link here"),
-		new BMessage(kCreateLink)));
 	menu->AddItem(new BMenuItem(B_TRANSLATE("Move here"),
 		new BMessage(kMoveSelectionTo)));
 	menu->AddItem(new BMenuItem(B_TRANSLATE("Copy here"),
 		new BMessage(kCopySelectionTo)));
+	menu->AddItem(new BMenuItem(B_TRANSLATE("Create link here"),
+		new BMessage(kCreateLink)));
 	menu->AddSeparatorItem();
 	menu->AddItem(new BMenuItem(B_TRANSLATE("Cancel"),
 		new BMessage(kCancelButton)));
@@ -3082,58 +2917,59 @@ BContainerWindow::AddTrashContextMenus(BMenu* menu)
 
 
 void
-BContainerWindow::EachAddon(bool (*eachAddon)(const Model*, const char*,
+BContainerWindow::EachAddOn(void (*eachAddOn)(const Model*, const char*,
 		uint32 shortcut, uint32 modifiers, bool primary, void* context,
 		BContainerWindow* window, BMenu* menu),
 	void* passThru, BStringList& mimeTypes, BMenu* menu)
 {
-	AutoLock<LockingList<AddonShortcut> > lock(fAddonsList);
-	if (lock.IsLocked()) {
-		for (int i = fAddonsList->CountItems() - 1; i >= 0; i--) {
-			struct AddonShortcut* item = fAddonsList->ItemAt(i);
-			bool primary = false;
+	AutoLock<LockingList<AddOnShortcut> > lock(fAddOnsList);
+	if (!lock.IsLocked())
+		return;
 
-			if (mimeTypes.CountStrings() > 0) {
-				BFile file(item->model->EntryRef(), B_READ_ONLY);
-				if (file.InitCheck() == B_OK) {
-					BAppFileInfo info(&file);
-					if (info.InitCheck() == B_OK) {
-						bool secondary = true;
+	for (int i = fAddOnsList->CountItems() - 1; i >= 0; i--) {
+		struct AddOnShortcut* item = fAddOnsList->ItemAt(i);
+		bool primary = false;
 
-						// does this add-on has types set at all?
-						BMessage message;
-						if (info.GetSupportedTypes(&message) == B_OK) {
-							type_code typeCode;
-							int32 count;
-							if (message.GetInfo("types", &typeCode,
-									&count) == B_OK) {
-								secondary = false;
-							}
+		if (mimeTypes.CountStrings() > 0) {
+			BFile file(item->model->EntryRef(), B_READ_ONLY);
+			if (file.InitCheck() == B_OK) {
+				BAppFileInfo info(&file);
+				if (info.InitCheck() == B_OK) {
+					bool secondary = true;
+
+					// does this add-on has types set at all?
+					BMessage message;
+					if (info.GetSupportedTypes(&message) == B_OK) {
+						type_code typeCode;
+						int32 count;
+						if (message.GetInfo("types", &typeCode,
+								&count) == B_OK) {
+							secondary = false;
 						}
-
-						// check all supported types if it has some set
-						if (!secondary) {
-							for (int32 i = mimeTypes.CountStrings();
-									!primary && i-- > 0;) {
-								BString type = mimeTypes.StringAt(i);
-								if (info.IsSupportedType(type.String())) {
-									BMimeType mimeType(type.String());
-									if (info.Supports(&mimeType))
-										primary = true;
-									else
-										secondary = true;
-								}
-							}
-						}
-
-						if (!secondary && !primary)
-							continue;
 					}
+
+					// check all supported types if it has some set
+					if (!secondary) {
+						for (int32 i = mimeTypes.CountStrings();
+								!primary && i-- > 0;) {
+							BString type = mimeTypes.StringAt(i);
+							if (info.IsSupportedType(type.String())) {
+								BMimeType mimeType(type.String());
+								if (info.Supports(&mimeType))
+									primary = true;
+								else
+									secondary = true;
+							}
+						}
+					}
+
+					if (!secondary && !primary)
+						continue;
 				}
 			}
-			((eachAddon)(item->model, item->model->Name(), item->key,
-				item->modifiers, primary, passThru, this, menu));
 		}
+		((eachAddOn)(item->model, item->model->Name(), item->key,
+			item->modifiers, primary, passThru, this, menu));
 	}
 }
 
@@ -3141,13 +2977,13 @@ BContainerWindow::EachAddon(bool (*eachAddon)(const Model*, const char*,
 void
 BContainerWindow::BuildMimeTypeList(BStringList& mimeTypes)
 {
-	int32 count = PoseView()->SelectionList()->CountItems();
-	if (count <= 0) {
+	int32 selectCount = PoseView()->CountSelected();
+	if (selectCount <= 0) {
 		// just add the type of the current directory
 		AddMimeTypeString(mimeTypes, TargetModel());
 	} else {
 		_UpdateSelectionMIMEInfo();
-		for (int32 index = 0; index < count; index++) {
+		for (int32 index = 0; index < selectCount; index++) {
 			BPose* pose = PoseView()->SelectionList()->ItemAt(index);
 			AddMimeTypeString(mimeTypes, pose->TargetModel());
 			// If it's a symlink, resolves it and add the Target's MimeType
@@ -3165,7 +3001,7 @@ BContainerWindow::BuildMimeTypeList(BStringList& mimeTypes)
 
 
 void
-BContainerWindow::BuildAddOnMenu(BMenu* parentMenu)
+BContainerWindow::BuildAddOnsMenu(BMenu* parentMenu)
 {
 	BMenuItem* item = parentMenu->FindItem(B_TRANSLATE("Add-ons"));
 	if (parentMenu->IndexOf(item) == 0) {
@@ -3177,8 +3013,10 @@ BContainerWindow::BuildAddOnMenu(BMenu* parentMenu)
 	if (item == NULL)
 		return;
 
-	BFont font;
-	parentMenu->GetFont(&font);
+	BFont font; {
+		AutoLock<BLooper> _(parentMenu->Looper());
+		parentMenu->GetFont(&font);
+	}
 
 	BMenu* menu = item->Submenu();
 	if (menu == NULL)
@@ -3186,7 +3024,7 @@ BContainerWindow::BuildAddOnMenu(BMenu* parentMenu)
 
 	menu->SetFont(&font);
 
-	// found the addons menu, empty it first
+	// found add-ons menu, empty it first
 	for (;;) {
 		item = menu->RemoveItem((int32)0);
 		if (!item)
@@ -3199,13 +3037,13 @@ BContainerWindow::BuildAddOnMenu(BMenu* parentMenu)
 	BStringList mimeTypes(10);
 	BuildMimeTypeList(mimeTypes);
 
-	AddOneAddonParams params;
+	AddOneAddOnParams params;
 	params.primaryList = &primaryList;
 	params.secondaryList = &secondaryList;
 
 	// build a list of the MIME types of the selected items
 
-	EachAddon(AddOneAddon, &params, mimeTypes, parentMenu);
+	EachAddOn(AddOneAddOn, &params, mimeTypes, parentMenu);
 
 	primaryList.SortItems(CompareLabels);
 	secondaryList.SortItems(CompareLabels);
@@ -3228,40 +3066,34 @@ BContainerWindow::BuildAddOnMenu(BMenu* parentMenu)
 void
 BContainerWindow::UpdateMenu(BMenu* menu, UpdateMenuContext context)
 {
-	const int32 selectCount = PoseView()->SelectionList()->CountItems();
-	const int32 count = PoseView()->CountItems();
+	const int32 selectCount = PoseView()->CountSelected();
+	const int32 poseCount = PoseView()->CountItems();
 
 	if (context == kMenuBarContext) {
 		EnableNamedMenuItem(menu, kOpenSelection, selectCount > 0);
-		EnableNamedMenuItem(menu, kGetInfo, selectCount > 0);
 		EnableNamedMenuItem(menu, kIdentifyEntry, selectCount > 0);
-		EnableNamedMenuItem(menu, kMoveToTrash, selectCount > 0);
 		EnableNamedMenuItem(menu, kRestoreFromTrash, selectCount > 0);
-		EnableNamedMenuItem(menu, kDelete, selectCount > 0);
-		EnableNamedMenuItem(menu, kDuplicateSelection, selectCount > 0);
-	}
-
-	Model* selectedModel = NULL;
-	if (selectCount == 1) {
-		selectedModel = PoseView()->SelectionList()->FirstItem()->
-			TargetModel();
+		EnableNamedMenuItem(menu, kDeleteSelection, PoseView()->CanMoveToTrashOrDuplicate());
 	}
 
 	if (context == kMenuBarContext || context == kPosePopUpContext) {
-		SetUpEditQueryItem(menu);
-		EnableNamedMenuItem(menu, kEditItem, selectCount == 1
-			&& (context == kPosePopUpContext || !PoseView()->ActivePose())
-			&& selectedModel != NULL
-			&& !selectedModel->IsDesktop()
-			&& !selectedModel->IsRoot()
-			&& !selectedModel->IsTrash()
-			&& !selectedModel->HasLocalizedName());
+		SetupEditQueryItem(menu);
+
+		EnableNamedMenuItem(menu, kEditItem, PoseView()->CanEditName());
+		EnableNamedMenuItem(menu, kMoveSelectionToTrash, PoseView()->CanMoveToTrashOrDuplicate());
+		EnableNamedMenuItem(menu, kDuplicateSelection, PoseView()->CanMoveToTrashOrDuplicate());
+
 		SetCutItem(menu);
 		SetCopyItem(menu);
 		SetPasteItem(menu);
 	}
 
 	if (context == kMenuBarContext || context == kWindowPopUpContext) {
+		if (!PoseView()->IsFilePanel())
+			EnableNamedMenuItem(menu, B_TRANSLATE("New"), !PoseView()->TargetVolumeIsReadOnly());
+		else
+			EnableNamedMenuItem(menu, kNewFolder, !PoseView()->TargetVolumeIsReadOnly());
+
 		uint32 viewMode = PoseView()->ViewMode();
 
 		BMenu* iconSizeMenu = NULL;
@@ -3270,7 +3102,7 @@ BContainerWindow::UpdateMenu(BMenu* menu, UpdateMenuContext context)
 
 		if (iconSizeMenu != NULL) {
 			if (viewMode == kIconMode) {
-				int32 iconSize = PoseView()->IconSizeInt();
+				int32 iconSize = PoseView()->UnscaledIconSizeInt();
 				BMenuItem* item = iconSizeMenu->ItemAt(0);
 				for (int32 i = 0; (item = iconSizeMenu->ItemAt(i)) != NULL;
 						i++) {
@@ -3291,33 +3123,6 @@ BContainerWindow::UpdateMenu(BMenu* menu, UpdateMenuContext context)
 			}
 		}
 
-		BMenu* listSizeMenu = NULL;
-		if (BMenuItem* item = menu->FindItem(kListMode))
-			listSizeMenu = item->Submenu();
-
-		if (listSizeMenu != NULL) {
-			if (viewMode == kListMode) {
-				int32 iconSize = PoseView()->IconSizeInt();
-				BMenuItem* item = listSizeMenu->ItemAt(0);
-				for (int32 i = 0; (item = listSizeMenu->ItemAt(i)) != NULL;
-						i++) {
-					BMessage* message = item->Message();
-					if (message == NULL) {
-						item->SetMarked(false);
-						continue;
-					}
-					int32 size;
-					if (message->FindInt32("icon_size", &size) != B_OK)
-						size = -1;
-					item->SetMarked(iconSize == size);
-				}
-			} else {
-				BMenuItem* item;
-				for (int32 i = 0; (item = listSizeMenu->ItemAt(i)) != NULL; i++)
-					item->SetMarked(false);
-			}
-		}
-
 		MarkNamedMenuItem(menu, kIconMode, viewMode == kIconMode);
 		MarkNamedMenuItem(menu, kListMode, viewMode == kListMode);
 		MarkNamedMenuItem(menu, kMiniIconMode, viewMode == kMiniIconMode);
@@ -3326,25 +3131,9 @@ BContainerWindow::UpdateMenu(BMenu* menu, UpdateMenuContext context)
 		SetArrangeMenu(menu);
 		SetPasteItem(menu);
 
-		BEntry entry(TargetModel()->EntryRef());
-		BDirectory parent;
-		entry_ref ref;
-		BEntry root("/");
-
-		bool parentIsRoot = (entry.GetParent(&parent) == B_OK
-			&& parent.GetEntry(&entry) == B_OK
-			&& entry.GetRef(&ref) == B_OK
-			&& entry == root);
-
-		EnableNamedMenuItem(menu, kOpenParentDir, !TargetModel()->IsDesktop()
-			&& !TargetModel()->IsRoot()
-			&& (!parentIsRoot
-				|| TrackerSettings().SingleWindowBrowse()
-				|| TrackerSettings().ShowDisksIcon()
-				|| (modifiers() & B_CONTROL_KEY) != 0));
-
-		EnableNamedMenuItem(menu, kEmptyTrash, count > 0);
-		EnableNamedMenuItem(menu, B_SELECT_ALL, count > 0);
+		EnableNamedMenuItem(menu, kOpenParentDir, !PoseView()->ParentIsRoot());
+		EnableNamedMenuItem(menu, kEmptyTrash, poseCount > 0);
+		EnableNamedMenuItem(menu, B_SELECT_ALL, poseCount > 0);
 
 		BMenuItem* item = menu->FindItem(B_TRANSLATE("New"));
 		if (item != NULL) {
@@ -3355,7 +3144,7 @@ BContainerWindow::UpdateMenu(BMenu* menu, UpdateMenuContext context)
 		}
 	}
 
-	BuildAddOnMenu(menu);
+	BuildAddOnsMenu(menu);
 }
 
 
@@ -3384,14 +3173,14 @@ BContainerWindow::LoadAddOn(BMessage* message)
 {
 	UpdateIfNeeded();
 
-	entry_ref addonRef;
-	status_t result = message->FindRef("refs", &addonRef);
+	entry_ref addOnRef;
+	status_t result = message->FindRef("refs", &addOnRef);
 	if (result != B_OK) {
 		BString buffer(B_TRANSLATE("Error %error loading add-On %name."));
 		buffer.ReplaceFirst("%error", strerror(result));
-		buffer.ReplaceFirst("%name", addonRef.name);
+		buffer.ReplaceFirst("%name", addOnRef.name);
 
-		BAlert* alert = new BAlert("", buffer.String(),	B_TRANSLATE("Cancel"),
+		BAlert* alert = new BAlert("", buffer.String(), B_TRANSLATE("Cancel"),
 			0, 0, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
 		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 		alert->Go();
@@ -3402,8 +3191,11 @@ BContainerWindow::LoadAddOn(BMessage* message)
 	BMessage* refs = AddOnMessage(B_REFS_RECEIVED);
 
 	LaunchInNewThread("Add-on", B_NORMAL_PRIORITY, &AddOnThread, refs,
-		addonRef, *TargetModel()->EntryRef());
+		addOnRef, *TargetModel()->EntryRef());
 }
+
+
+//	#pragma mark - BContainerWindow private methods
 
 
 void
@@ -3440,17 +3232,15 @@ BContainerWindow::_AddFolderIcon()
 		return;
 	}
 
-	float iconSize = fMenuBar->Bounds().Height() - 2;
-	if (iconSize < 16)
-		iconSize = 16;
+	float baseIconSize = be_control_look->ComposeIconSize(16).Height() + 1,
+		iconSize = fMenuBar->Bounds().Height() - 2;
+	if (iconSize < baseIconSize)
+		iconSize = baseIconSize;
 
-	fDraggableIcon = new(std::nothrow) DraggableContainerIcon();
+	fDraggableIcon = new(std::nothrow)
+		DraggableContainerIcon(BSize(iconSize - 1, iconSize - 1));
 	if (fDraggableIcon != NULL) {
-		BLayoutItem* item = fMenuContainer->GroupLayout()->AddView(
-			fDraggableIcon);
-		item->SetExplicitMinSize(BSize(iconSize + 5, iconSize));
-		item->SetExplicitMaxSize(BSize(iconSize + 5, item->MaxSize().Height()));
-
+		fMenuContainer->GroupLayout()->AddView(fDraggableIcon);
 		fMenuBar->SetBorders(
 			BControlLook::B_ALL_BORDERS & ~BControlLook::B_RIGHT_BORDER);
 	}
@@ -3462,6 +3252,37 @@ BContainerWindow::_PassMessageToAddOn(BMessage* message)
 {
 	LaunchInNewThread("Add-on-Pass-Message", B_NORMAL_PRIORITY,
 		&RunAddOnMessageThread, new BMessage(*message), (void*)NULL);
+}
+
+
+void
+BContainerWindow::_NewTemplateSubmenu(entry_ref dirRef)
+{
+	entry_ref submenuRef;
+	BPath path(&dirRef);
+	path.Append(B_TRANSLATE_COMMENT("New submenu", "Folder name of New-template submenu"));
+	get_ref_for_path(path.Path(), &submenuRef);
+
+	if (FSCreateNewFolder(&submenuRef) != B_OK)
+		return;
+
+	// kAttrTemplateSubMenu shows the folder to be a submenu
+	BNode node(&submenuRef);
+	if (node.InitCheck() != B_OK)
+		return;
+	bool flag = true;
+	node.WriteAttr(kAttrTemplateSubMenu, B_BOOL_TYPE, 0, &flag, sizeof(bool));
+
+	// show and select new submenu in Tracker
+	BEntry entry(&submenuRef);
+	node_ref nref;
+	if (entry.GetNodeRef(&nref) != B_OK)
+		return;
+
+	BMessage message(B_REFS_RECEIVED);
+	message.AddRef("refs", &dirRef);
+	message.AddData("nodeRefToSelect", B_RAW_TYPE, (void*)&nref, sizeof(node_ref));
+	be_app->PostMessage(&message);
 }
 
 
@@ -3498,7 +3319,7 @@ BContainerWindow::NewAttributeMenuItem(const char* label, const char* name,
 
 
 void
-BContainerWindow::NewAttributeMenu(BMenu* menu)
+BContainerWindow::NewAttributesMenu(BMenu* menu)
 {
 	ASSERT(PoseView());
 
@@ -3531,7 +3352,7 @@ BContainerWindow::NewAttributeMenu(BMenu* menu)
 	menu->AddItem(NewAttributeMenuItem(B_TRANSLATE("Kind"),
 		kAttrMIMEType, B_MIME_STRING_TYPE, 145, B_ALIGN_LEFT, false, false));
 
-	if (IsTrash() || InTrash()) {
+	if (TargetModel()->IsTrash() || TargetModel()->InTrash()) {
 		menu->AddItem(NewAttributeMenuItem(B_TRANSLATE("Original name"),
 			kAttrOriginalPath, B_STRING_TYPE, 225, B_ALIGN_LEFT, false,
 			false));
@@ -3554,7 +3375,7 @@ BContainerWindow::NewAttributeMenu(BMenu* menu)
 
 
 void
-BContainerWindow::ShowAttributeMenu()
+BContainerWindow::ShowAttributesMenu()
 {
 	ASSERT(fAttrMenu);
 	fMenuBar->AddItem(fAttrMenu);
@@ -3562,7 +3383,7 @@ BContainerWindow::ShowAttributeMenu()
 
 
 void
-BContainerWindow::HideAttributeMenu()
+BContainerWindow::HideAttributesMenu()
 {
 	ASSERT(fAttrMenu);
 	fMenuBar->RemoveItem(fAttrMenu);
@@ -3570,23 +3391,23 @@ BContainerWindow::HideAttributeMenu()
 
 
 void
-BContainerWindow::MarkAttributeMenu()
+BContainerWindow::MarkAttributesMenu()
 {
-	MarkAttributeMenu(fAttrMenu);
+	MarkAttributesMenu(fAttrMenu);
 }
 
 
 void
-BContainerWindow::MarkAttributeMenu(BMenu* menu)
+BContainerWindow::MarkAttributesMenu(BMenu* menu)
 {
-	if (!menu)
+	if (menu == NULL)
 		return;
 
 	int32 count = menu->CountItems();
 	for (int32 index = 0; index < count; index++) {
 		BMenuItem* item = menu->ItemAt(index);
 		int32 attrHash;
-		if (item->Message()) {
+		if (item->Message() != NULL) {
 			if (item->Message()->FindInt32("attr_hash", &attrHash) == B_OK)
 				item->SetMarked(PoseView()->ColumnFor((uint32)attrHash) != 0);
 			else
@@ -3594,11 +3415,11 @@ BContainerWindow::MarkAttributeMenu(BMenu* menu)
 		}
 
 		BMenu* submenu = item->Submenu();
-		if (submenu) {
+		if (submenu != NULL) {
 			int32 count2 = submenu->CountItems();
 			for (int32 subindex = 0; subindex < count2; subindex++) {
 				item = submenu->ItemAt(subindex);
-				if (item->Message()) {
+				if (item->Message() != NULL) {
 					if (item->Message()->FindInt32("attr_hash", &attrHash)
 						== B_OK) {
 						item->SetMarked(PoseView()->ColumnFor((uint32)attrHash)
@@ -3615,13 +3436,13 @@ BContainerWindow::MarkAttributeMenu(BMenu* menu)
 void
 BContainerWindow::MarkArrangeByMenu(BMenu* menu)
 {
-	if (!menu)
+	if (menu == NULL)
 		return;
 
 	int32 count = menu->CountItems();
 	for (int32 index = 0; index < count; index++) {
 		BMenuItem* item = menu->ItemAt(index);
-		if (item->Message()) {
+		if (item->Message() != NULL) {
 			uint32 attrHash;
 			if (item->Message()->FindInt32("attr_hash",
 					(int32*)&attrHash) == B_OK) {
@@ -3738,7 +3559,7 @@ BContainerWindow::AddMimeMenu(const BMimeType& mimeType, bool isSuperType,
 void
 BContainerWindow::AddMimeTypesToMenu(BMenu* menu)
 {
-	if (!menu)
+	if (menu == NULL)
 		return;
 
 	// Remove old mime type menus
@@ -3820,13 +3641,13 @@ BContainerWindow::AddMimeTypesToMenu(BMenu* menu)
 	}
 
 	// remove separator if it's the only item in menu
-	BMenuItem* item = menu->ItemAt(menu->CountItems() - 1);
-	if (dynamic_cast<BSeparatorItem*>(item) != NULL) {
-		menu->RemoveItem(item);
-		delete item;
+	BMenuItem* separator = menu->ItemAt(menu->CountItems() - 1);
+	if (dynamic_cast<BSeparatorItem*>(separator) != NULL) {
+		menu->RemoveItem(separator);
+		delete separator;
 	}
 
-	MarkAttributeMenu(menu);
+	MarkAttributesMenu(menu);
 }
 
 
@@ -3930,7 +3751,7 @@ BContainerWindow::DefaultStateSourceNode(const char* name, BNode* result,
 
 
 void
-BContainerWindow::SetUpDefaultState()
+BContainerWindow::SetupDefaultState()
 {
 	BNode defaultingNode;
 		// this is where we'll ulitimately get the state from
@@ -3979,7 +3800,7 @@ BContainerWindow::SetUpDefaultState()
 		return;
 	}
 
-	if (fIsDesktop) {
+	if (PoseView()->IsDesktop()) {
 		// don't copy over the attributes if we are the Desktop
 		return;
 	}
@@ -4020,7 +3841,7 @@ BContainerWindow::SetUpDefaultState()
 void
 BContainerWindow::RestoreWindowState(AttributeStreamNode* node)
 {
-	if (node == NULL || fIsDesktop) {
+	if (node == NULL || PoseView()->IsDesktop()) {
 		// don't restore any window state if we are the Desktop
 		return;
 	}
@@ -4038,27 +3859,33 @@ BContainerWindow::RestoreWindowState(AttributeStreamNode* node)
 	BRect frame(Frame());
 	if (node->Read(rectAttributeName, 0, B_RECT_TYPE, sizeof(BRect), &frame)
 			== sizeof(BRect)) {
+		const float scalingFactor = be_plain_font->Size() / 12.0f;
+		frame.left *= scalingFactor;
+		frame.top *= scalingFactor;
+		frame.right *= scalingFactor;
+		frame.bottom *= scalingFactor;
+
 		MoveTo(frame.LeftTop());
 		ResizeTo(frame.Width(), frame.Height());
 	} else
-		sNewWindRect.OffsetBy(kWindowStaggerBy, kWindowStaggerBy);
+		sNewWindRect.OffsetBy(sWindowStaggerBy, sWindowStaggerBy);
 
 	fPreviousBounds = Bounds();
 
 	uint32 workspace;
-	if (((fContainerWindowFlags & kRestoreWorkspace) != 0)
+	if (((fOpenFlags & kRestoreWorkspace) != 0)
 		&& node->Read(workspaceAttributeName, 0, B_INT32_TYPE, sizeof(uint32),
 			&workspace) == sizeof(uint32))
 		SetWorkspaces(workspace);
 
-	if ((fContainerWindowFlags & kIsHidden) != 0)
+	if ((fOpenFlags & kIsHidden) != 0)
 		Minimize(true);
 
 	// restore window decor settings
 	int32 size = node->Contains(kAttrWindowDecor, B_RAW_TYPE);
 	if (size > 0) {
 		char buffer[size];
-		if (((fContainerWindowFlags & kRestoreDecor) != 0)
+		if (((fOpenFlags & kRestoreDecor) != 0)
 			&& node->Read(kAttrWindowDecor, 0, B_RAW_TYPE, size, buffer)
 				== size) {
 			BMessage decorSettings;
@@ -4072,7 +3899,7 @@ BContainerWindow::RestoreWindowState(AttributeStreamNode* node)
 void
 BContainerWindow::RestoreWindowState(const BMessage& message)
 {
-	if (fIsDesktop) {
+	if (PoseView()->IsDesktop()) {
 		// don't restore any window state if we are the Desktop
 		return;
 	}
@@ -4089,34 +3916,43 @@ BContainerWindow::RestoreWindowState(const BMessage& message)
 
 	BRect frame(Frame());
 	if (message.FindRect(rectAttributeName, &frame) == B_OK) {
+		const float scalingFactor = be_plain_font->Size() / 12.0f;
+		frame.left *= scalingFactor;
+		frame.top *= scalingFactor;
+		frame.right *= scalingFactor;
+		frame.bottom *= scalingFactor;
+
 		MoveTo(frame.LeftTop());
 		ResizeTo(frame.Width(), frame.Height());
 	} else
-		sNewWindRect.OffsetBy(kWindowStaggerBy, kWindowStaggerBy);
+		sNewWindRect.OffsetBy(sWindowStaggerBy, sWindowStaggerBy);
 
 	uint32 workspace;
-	if ((fContainerWindowFlags & kRestoreWorkspace)
+	if (((fOpenFlags & kRestoreWorkspace) != 0)
 		&& message.FindInt32(workspaceAttributeName,
 			(int32*)&workspace) == B_OK) {
 		SetWorkspaces(workspace);
 	}
 
-	if (fContainerWindowFlags & kIsHidden)
+	if ((fOpenFlags & kIsHidden) != 0)
 		Minimize(true);
 
 	// restore window decor settings
 	BMessage decorSettings;
-	if ((fContainerWindowFlags & kRestoreDecor)
+	if (((fOpenFlags & kRestoreDecor) != 0)
 		&& message.FindMessage(kAttrWindowDecor, &decorSettings) == B_OK) {
 		SetDecoratorSettings(decorSettings);
 	}
+
+	fStateNeedsSaving = false;
+		// Undo the effect of the above MoveTo and ResizeTo calls
 }
 
 
 void
 BContainerWindow::SaveWindowState(AttributeStreamNode* node)
 {
-	if (fIsDesktop) {
+	if (TargetModel() != NULL && PoseView()->IsDesktop()) {
 		// don't save window state if we are the Desktop
 		return;
 	}
@@ -4125,7 +3961,7 @@ BContainerWindow::SaveWindowState(AttributeStreamNode* node)
 
 	const char* rectAttributeName;
 	const char* workspaceAttributeName;
-	if (TargetModel() != NULL && TargetModel()->IsRoot()) {
+	if (TargetModel()->IsRoot()) {
 		rectAttributeName = kAttrDisksFrame;
 		workspaceAttributeName = kAttrDisksWorkspace;
 	} else {
@@ -4135,6 +3971,11 @@ BContainerWindow::SaveWindowState(AttributeStreamNode* node)
 
 	// node is null if it already got deleted
 	BRect frame(Frame());
+	const float scalingFactor = be_plain_font->Size() / 12.0f;
+	frame.left /= scalingFactor;
+	frame.top /= scalingFactor;
+	frame.right /= scalingFactor;
+	frame.bottom /= scalingFactor;
 	node->Write(rectAttributeName, 0, B_RECT_TYPE, sizeof(BRect), &frame);
 
 	uint32 workspaces = Workspaces();
@@ -4168,6 +4009,11 @@ BContainerWindow::SaveWindowState(BMessage& message) const
 
 	// node is null if it already got deleted
 	BRect frame(Frame());
+	const float scalingFactor = be_plain_font->Size() / 12.0f;
+	frame.left /= scalingFactor;
+	frame.top /= scalingFactor;
+	frame.right /= scalingFactor;
+	frame.bottom /= scalingFactor;
 	message.AddRect(rectAttributeName, frame);
 	message.AddInt32(workspaceAttributeName, (int32)Workspaces());
 
@@ -4235,13 +4081,11 @@ BContainerWindow::ShowSelectionWindow()
 void
 BContainerWindow::ShowNavigator(bool show)
 {
-	if (PoseView()->IsDesktopWindow() || !TargetModel()->IsDirectory()
-		|| fPoseView->IsFilePanel()) {
+	if (PoseView()->IsDesktop() || !TargetModel()->IsDirectory() || PoseView()->IsFilePanel())
 		return;
-	}
 
 	if (show) {
-		if (Navigator() && !Navigator()->IsHidden())
+		if (Navigator() != NULL && !Navigator()->IsHidden())
 			return;
 
 		if (Navigator() == NULL) {
@@ -4255,7 +4099,7 @@ BContainerWindow::ShowNavigator(bool show)
 		if (PoseView()->VScrollBar())
 			PoseView()->UpdateScrollRange();
 	} else {
-		if (!Navigator() || Navigator()->IsHidden())
+		if (Navigator() == NULL || Navigator()->IsHidden())
 			return;
 
 		if (PoseView()->VScrollBar())
@@ -4269,11 +4113,11 @@ BContainerWindow::ShowNavigator(bool show)
 void
 BContainerWindow::SetSingleWindowBrowseShortcuts(bool enabled)
 {
-	if (PoseView()->IsDesktopWindow())
+	if (PoseView()->IsDesktop())
 		return;
 
 	if (enabled) {
-		if (!Navigator())
+		if (Navigator() == NULL)
 			return;
 
 		RemoveShortcut(B_DOWN_ARROW, B_COMMAND_KEY | B_OPTION_KEY);
@@ -4297,7 +4141,6 @@ BContainerWindow::SetSingleWindowBrowseShortcuts(bool enabled)
 			new BMessage(kOpenSelection), PoseView());
 		AddShortcut('L', B_COMMAND_KEY,
 			new BMessage(kNavigatorCommandSetFocus), Navigator());
-
 	} else {
 		RemoveShortcut(B_LEFT_ARROW, B_COMMAND_KEY);
 		RemoveShortcut(B_RIGHT_ARROW, B_COMMAND_KEY);
@@ -4397,11 +4240,10 @@ BContainerWindow::PopulateArrangeByMenu(BMenu* menu)
 
 	item->SetTarget(PoseView());
 	menu->AddItem(item);
+
 	menu->AddSeparatorItem();
 
-
-	item = new BMenuItem(B_TRANSLATE("Clean up"), new BMessage(kCleanup),
-		'K');
+	item = new BMenuItem(B_TRANSLATE("Clean up"), new BMessage(kCleanup), 'K');
 	item->SetTarget(PoseView());
 	menu->AddItem(item);
 }
@@ -4417,13 +4259,13 @@ WindowStateNodeOpener::WindowStateNodeOpener(BContainerWindow* window,
 	fNode(NULL),
 	fStreamNode(NULL)
 {
-	if (window->TargetModel() && window->TargetModel()->IsRoot()) {
+	if (window->TargetModel() != NULL && window->TargetModel()->IsRoot()) {
 		BDirectory dir;
 		if (FSGetDeskDir(&dir) == B_OK) {
 			fNode = new BDirectory(dir);
 			fStreamNode = new AttributeStreamFileNode(fNode);
 		}
-	} else if (window->TargetModel()){
+	} else if (window->TargetModel() != NULL) {
 		fModelOpener = new ModelNodeLazyOpener(window->TargetModel(),
 			forWriting, false);
 		if (fModelOpener->IsOpen(forWriting)) {

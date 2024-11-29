@@ -18,6 +18,7 @@
 #include <slab/Slab.h>
 #include <smp.h>
 #include <util/AutoLock.h>
+#include <util/ThreadAutoLock.h>
 #include <util/queue.h>
 #include <vm/vm_page.h>
 #include <vm/vm_priv.h>
@@ -499,7 +500,7 @@ X86VMTranslationMap32Bit::UnmapPages(VMArea* area, addr_t base, size_t size,
 	uint32 freeFlags = CACHE_DONT_WAIT_FOR_MEMORY
 		| (isKernelSpace ? CACHE_DONT_LOCK_KERNEL_SPACE : 0);
 	while (vm_page_mapping* mapping = queue.RemoveHead())
-		object_cache_free(gPageMappingsObjectCache, mapping, freeFlags);
+		vm_free_page_mapping(mapping->page->physical_page_number, mapping, freeFlags);
 }
 
 
@@ -601,7 +602,7 @@ X86VMTranslationMap32Bit::UnmapArea(VMArea* area, bool deletingAddressSpace,
 	uint32 freeFlags = CACHE_DONT_WAIT_FOR_MEMORY
 		| (isKernelSpace ? CACHE_DONT_LOCK_KERNEL_SPACE : 0);
 	while (vm_page_mapping* mapping = mappings.RemoveHead())
-		object_cache_free(gPageMappingsObjectCache, mapping, freeFlags);
+		vm_free_page_mapping(mapping->page->physical_page_number, mapping, freeFlags);
 }
 
 

@@ -390,14 +390,14 @@ pci_info *pcii = &(di->pcii);
    /*
     * We map the whole graphics card memory area (which consist of RAM memory
     * and memory mapped registers) at once. Memory mapped registers must not
-    * be cacheble, so the whole area is mapped with B_MTR_UC (unable caching).
+	* be cacheble, so the whole area is mapped with B_UNCACHED_MEMORY.
     * We certainly could map separately the RAM memory with write combining
-    * (B_MTR_WC) and the memory mapped registers with B_MTR_UC.
+	* and the memory mapped registers with B_UNCACHED_MEMORY.
     */
     si->memoryArea = map_physical_memory(buffer,
         di->pcii.u.h0.base_registers[0],
         di->pcii.u.h0.base_register_sizes[0],
-        B_ANY_KERNEL_BLOCK_ADDRESS | B_MTR_UC,
+		B_ANY_KERNEL_BLOCK_ADDRESS | B_UNCACHED_MEMORY,
         B_READ_AREA + B_WRITE_AREA,
         &(si->memory));
 
@@ -466,7 +466,7 @@ char shared_name[B_OS_NAME_LENGTH];
         di->pcii.bus, di->pcii.device, di->pcii.function);
     /* create this area with NO user-space read or write permissions, to prevent accidental dammage */
     di->sharedArea = create_area(shared_name, (void **)&(di->si), B_ANY_KERNEL_ADDRESS, ((sizeof(ET6000SharedInfo) + (B_PAGE_SIZE - 1)) & ~(B_PAGE_SIZE - 1)), B_FULL_LOCK,
-		B_FULL_LOCK, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA | B_USER_CLONEABLE_AREA);
+		B_FULL_LOCK, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA | B_CLONEABLE_AREA);
     if (di->sharedArea < 0) {
         /* return the error */
         result = di->sharedArea;

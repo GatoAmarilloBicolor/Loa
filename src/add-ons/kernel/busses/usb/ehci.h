@@ -13,8 +13,8 @@
 
 
 struct pci_info;
-struct pci_module_info;
-struct pci_x86_module_info;
+struct pci_device_module_info;
+struct pci_device;
 
 class EHCIRootHub;
 
@@ -51,7 +51,8 @@ typedef struct isochronous_transfer_data {
 
 class EHCI : public BusManager {
 public:
-									EHCI(pci_info *info, Stack *stack);
+									EHCI(pci_info *info, pci_device_module_info* pci,
+										pci_device* device, Stack *stack, device_node *node);
 									~EHCI();
 
 		status_t					Start();
@@ -73,10 +74,8 @@ virtual	status_t					CancelQueuedTransfers(Pipe *pipe, bool force);
 virtual	status_t					NotifyPipeChange(Pipe *pipe,
 										usb_change change);
 
-static	status_t					AddTo(Stack *stack);
-
 		// Port operations for root hub
-		uint8						PortCount() { return fPortCount; };
+		uint8						PortCount() { return fPortCount; }
 		status_t					GetPortStatus(uint8 index, usb_port_status *status);
 		status_t					SetPortFeature(uint8 index, uint16 feature);
 		status_t					ClearPortFeature(uint8 index, uint16 feature);
@@ -84,7 +83,7 @@ static	status_t					AddTo(Stack *stack);
 		status_t					ResetPort(uint8 index);
 		status_t					SuspendPort(uint8 index);
 
-virtual	const char *				TypeName() const { return "ehci"; };
+virtual	const char *				TypeName() const { return "ehci"; }
 
 private:
 		// Controller resets
@@ -143,11 +142,13 @@ static int32						FinishIsochronousThread(void *data);
 		status_t					FillQueueWithRequest(Transfer *transfer,
 										ehci_qh *queueHead,
 										ehci_qtd **dataDescriptor,
-										bool *directionIn);
+										bool *directionIn,
+										bool prepareKernelAccess);
 		status_t					FillQueueWithData(Transfer *transfer,
 										ehci_qh *queueHead,
 										ehci_qtd **dataDescriptor,
-										bool *directionIn);
+										bool *directionIn,
+										bool prepareKernelAccess);
 
 		bool						LockIsochronous();
 		void						UnlockIsochronous();
@@ -177,16 +178,15 @@ static int32						FinishIsochronousThread(void *data);
 
 		size_t						WriteDescriptorChain(
 										ehci_qtd *topDescriptor,
-										iovec *vector, size_t vectorCount);
+										generic_io_vec *vector, size_t vectorCount,
+										bool physical);
 		size_t						ReadDescriptorChain(ehci_qtd *topDescriptor,
-										iovec *vector, size_t vectorCount,
-										bool *nextDataToggle);
+										generic_io_vec *vector, size_t vectorCount,
+										bool physical, bool *nextDataToggle);
 		size_t						ReadActualLength(ehci_qtd *topDescriptor,
 										bool *nextDataToggle);
 		size_t						WriteIsochronousDescriptorChain(
-										isochronous_transfer_data *transfer,
-										uint32 packetCount,
-										iovec *vector);
+										isochronous_transfer_data *transfer);
 		size_t						ReadIsochronousDescriptorChain(
 										isochronous_transfer_data *transfer);
 
@@ -199,13 +199,12 @@ inline	uint8						ReadCapReg8(uint32 reg);
 inline	uint16						ReadCapReg16(uint32 reg);
 inline	uint32						ReadCapReg32(uint32 reg);
 
-static	pci_module_info *			sPCIModule;
-static	pci_x86_module_info *		sPCIx86Module;
-
 		uint8 *						fCapabilityRegisters;
 		uint8 *						fOperationalRegisters;
 		area_id						fRegisterArea;
 		pci_info *					fPCIInfo;
+		pci_device_module_info*		fPci;
+		pci_device*					fDevice;
 		Stack *						fStack;
 		uint32						fEnabledInterrupts;
 		uint32						fThreshold;
@@ -256,7 +255,7 @@ static	pci_x86_module_info *		sPCIx86Module;
 
 		// Interrupt polling
 		thread_id					fInterruptPollThread;
-		uint8						fIRQ;
+		uint32						fIRQ;
 		bool						fUseMSI;
 };
 

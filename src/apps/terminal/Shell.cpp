@@ -74,6 +74,7 @@
 
 // TODO: should extract from /etc/passwd instead???
 const char *kDefaultShell = "/bin/sh";
+const char *kColorTerminalType = "truecolor";
 const char *kTerminalType = "xterm-256color";
 
 /*
@@ -536,7 +537,7 @@ Shell::_Spawn(int row, int col, const ShellParameters& parameters)
 
 		struct winsize ws = { handshake.row, handshake.col };
 
-		ioctl(0, TIOCSWINSZ, &ws);
+		ioctl(0, TIOCSWINSZ, &ws, sizeof(ws));
 
 		tcsetpgrp(0, getpgrp());
 			// set this process group ID as the controlling terminal
@@ -549,6 +550,7 @@ Shell::_Spawn(int row, int col, const ShellParameters& parameters)
 		/*
 		 * setenv TERM and TTY.
 		 */
+		setenv("COLORTERM", kColorTerminalType, true);
 		setenv("TERM", kTerminalType, true);
 		setenv("TTY", ttyName, true);
 		setenv("TTYPE", fShellInfo.EncodingName(), true);

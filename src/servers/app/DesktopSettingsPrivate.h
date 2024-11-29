@@ -27,6 +27,8 @@ public:
 									server_read_only_memory* shared);
 								~DesktopSettingsPrivate();
 
+			bool				DidLoadFontSettings() const
+									{ return fFontSettingsLoadStatus == B_OK; }
 			status_t			Save(uint32 mask = kAllSettings);
 
 			void				SetDefaultPlainFont(const ServerFont& font);
@@ -92,12 +94,17 @@ public:
 									bool subpixelOrdering);
 			bool				IsSubpixelOrderingRegular() const;
 
+			status_t			SetControlLook(const char* path);
+			const BString&		ControlLook() const;
+
 private:
 			void				_SetDefaults();
 			status_t			_Load();
 			status_t			_GetPath(BPath& path);
 			void				_ValidateWorkspacesLayout(int32& columns,
 									int32& rows) const;
+
+			status_t			fFontSettingsLoadStatus;
 
 			ServerFont			fPlainFont;
 			ServerFont			fBoldFont;
@@ -112,6 +119,7 @@ private:
 			int32				fWorkspacesColumns;
 			int32				fWorkspacesRows;
 			BMessage			fWorkspaceMessages[kMaxWorkspaces];
+			BString				fControlLook;
 
 			server_read_only_memory& fShared;
 };

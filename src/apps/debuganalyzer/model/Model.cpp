@@ -46,7 +46,10 @@ wait_object_type_name(uint32 type)
 			return "mutex";
 		case THREAD_BLOCK_TYPE_RW_LOCK:
 			return "rw lock";
+		case THREAD_BLOCK_TYPE_USER:
+			return "user";
 		case THREAD_BLOCK_TYPE_OTHER:
+		case THREAD_BLOCK_TYPE_OTHER_OBJECT:
 			return "other";
 		case THREAD_BLOCK_TYPE_SNOOZE:
 			return "snooze";
@@ -249,7 +252,7 @@ bool
 Model::ThreadWaitObjectGroup::GetThreadWaitObjects(
 	BObjectList<ThreadWaitObject>& objects)
 {
-	ThreadWaitObjectList::Iterator it = fWaitObjects.GetIterator();
+	ThreadWaitObjectList::ConstIterator it = fWaitObjects.GetIterator();
 	while (ThreadWaitObject* object = it.Next()) {
 		if (!objects.AddItem(object))
 			return false;

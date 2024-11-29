@@ -40,6 +40,7 @@ public:
 			bool				IsUser() const { return fUser; }
 
 			void				SetVecs(generic_size_t firstVecOffset,
+									generic_size_t lastVecSize,
 									const generic_io_vec* vecs, uint32 count,
 									generic_size_t length, uint32 flags);
 
@@ -126,6 +127,9 @@ struct IOOperation : IORequestChunk, DoublyLinkedListLinkImpl<IOOperation> {
 public:
 			bool				Finish();
 									// returns true, if it can be recycled
+									// otherwise, there is more to be done
+
+			void				SetStatus(status_t status, generic_size_t completedLength);
 
 			status_t			Prepare(IORequest* request);
 			void				SetOriginalRange(off_t offset,
@@ -133,11 +137,9 @@ public:
 									// also sets range
 			void				SetRange(off_t offset, generic_size_t length);
 
-			void				SetStatus(status_t status)
-									{ IORequestChunk::SetStatus(status); }
-
 			off_t				Offset() const;
 			generic_size_t		Length() const;
+
 			off_t				OriginalOffset() const
 									{ return fOriginalOffset; }
 			generic_size_t		OriginalLength() const
@@ -145,8 +147,6 @@ public:
 
 			generic_size_t		TransferredBytes() const
 									{ return fTransferredBytes; }
-			void				SetTransferredBytes(generic_size_t bytes)
-									{ fTransferredBytes = bytes; }
 
 			generic_io_vec*		Vecs() const;
 			uint32				VecCount() const;
@@ -199,10 +199,9 @@ typedef IOOperation io_operation;
 typedef DoublyLinkedList<IOOperation> IOOperationList;
 
 typedef struct IORequest io_request;
-typedef status_t (*io_request_finished_callback)(void* data,
+typedef void (*io_request_finished_callback)(void* data,
 			io_request* request, status_t status, bool partialTransfer,
-			generic_size_t transferEndOffset);
-			// TODO: Return type: status_t -> void
+			generic_size_t transferredBytes);
 typedef status_t (*io_request_iterate_callback)(void* data,
 			io_request* request, bool* _partialTransfer);
 
@@ -219,10 +218,11 @@ struct IORequest : IORequestChunk, DoublyLinkedListLinkImpl<IORequest> {
 			status_t			Init(off_t offset, const generic_io_vec* vecs,
 									size_t count, generic_size_t length,
 									bool write, uint32 flags)
-									{ return Init(offset, 0, vecs, count,
+									{ return Init(offset, 0, 0, vecs, count,
 										length, write, flags); }
 			status_t			Init(off_t offset,
 									generic_size_t firstVecOffset,
+									generic_size_t lastVecSize,
 									const generic_io_vec* vecs, size_t count,
 									generic_size_t length, bool write,
 									uint32 flags);
@@ -254,9 +254,7 @@ struct IORequest : IORequestChunk, DoublyLinkedListLinkImpl<IORequest> {
 			bool				HasCallbacks() const;
 			void				SetStatusAndNotify(status_t status);
 
-			void				OperationFinished(IOOperation* operation,
-									status_t status, bool partialTransfer,
-									generic_size_t transferEndOffset);
+			void				OperationFinished(IOOperation* operation);
 			void				SubRequestFinished(IORequest* request,
 									status_t status, bool partialTransfer,
 									generic_size_t transferEndOffset);

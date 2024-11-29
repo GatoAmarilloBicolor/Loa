@@ -32,15 +32,9 @@ ATAChannel::ATAChannel(device_node *node)
 	snprintf(fDebugContext, sizeof(fDebugContext), " %" B_PRIu32, fChannelID);
 
 	if (fUseDMA) {
-		void *settings = load_driver_settings(B_SAFEMODE_DRIVER_SETTINGS);
-		if (settings != NULL) {
-			if (get_driver_boolean_parameter(settings,
-				B_SAFEMODE_DISABLE_IDE_DMA, false, false)) {
-				TRACE_ALWAYS("disabling DMA because of safemode setting\n");
-				fUseDMA = false;
-			}
-
-			unload_driver_settings(settings);
+		if (get_safemode_boolean(B_SAFEMODE_DISABLE_IDE_DMA, false)) {
+			TRACE_ALWAYS("disabling DMA because of safemode setting\n");
+			fUseDMA = false;
 		}
 	}
 
@@ -261,7 +255,6 @@ ATAChannel::PathInquiry(scsi_path_inquiry *info)
 {
 	info->hba_inquiry = SCSI_PI_TAG_ABLE | SCSI_PI_WIDE_16;
 	info->hba_misc = 0;
-	info->sim_priv = 0;
 	info->initiator_id = 2;
 	info->hba_queue_size = 1;
 	memset(info->vuhba_flags, 0, sizeof(info->vuhba_flags));

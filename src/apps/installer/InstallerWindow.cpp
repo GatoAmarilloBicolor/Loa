@@ -1,4 +1,5 @@
 /*
+ * Copyright 2020-2023, Panagiotis "Ivory" Vasilopoulos <git@n0toose.net>
  * Copyright 2009-2010, Stephan Aßmus <superstippi@gmx.de>
  * Copyright 2005-2008, Jérôme DUVAL
  * All rights reserved. Distributed under the terms of the MIT License.
@@ -16,6 +17,7 @@
 #include <Box.h>
 #include <Button.h>
 #include <Catalog.h>
+#include <ColorConversion.h>
 #include <ControlLook.h>
 #include <Directory.h>
 #include <FindDirectory.h>
@@ -51,8 +53,7 @@
 
 
 static const char* kDriveSetupSignature = "application/x-vnd.Haiku-DriveSetup";
-static const char* kBootManagerSignature
-	= "application/x-vnd.Haiku-BootManager";
+static const char* kBootManagerSignature = "application/x-vnd.Haiku-BootManager";
 
 const uint32 BEGIN_MESSAGE = 'iBGN';
 const uint32 SHOW_BOTTOM_MESSAGE = 'iSBT';
@@ -107,10 +108,13 @@ LogoView::~LogoView(void)
 void
 LogoView::Draw(BRect update)
 {
+	BRect bounds(Bounds());
+	SetLowColor(ui_color(B_DOCUMENT_BACKGROUND_COLOR));
+	FillRect(bounds, B_SOLID_LOW);
+
 	if (fLogo == NULL)
 		return;
 
-	BRect bounds(Bounds());
 	BPoint placement;
 	placement.x = (bounds.left + bounds.right - fLogo->Bounds().Width()) / 2;
 	placement.y = (bounds.top + bounds.bottom - fLogo->Bounds().Height()) / 2;
@@ -138,7 +142,18 @@ LogoView::GetPreferredSize(float* _width, float* _height)
 void
 LogoView::_Init()
 {
-	fLogo = BTranslationUtils::GetBitmap(B_PNG_FORMAT, "logo.png");
+	SetDrawingMode(B_OP_OVER);
+
+#ifdef HAIKU_DISTRO_COMPATIBILITY_OFFICIAL
+	rgb_color bgColor = ui_color(B_DOCUMENT_BACKGROUND_COLOR);
+
+	if (bgColor.IsLight())
+		fLogo = BTranslationUtils::GetBitmap(B_PNG_FORMAT, "logo.png");
+	else
+		fLogo = BTranslationUtils::GetBitmap(B_PNG_FORMAT, "logo_dark.png");
+#else
+	fLogo = BTranslationUtils::GetBitmap(B_PNG_FORMAT, "walter_logo.png");
+#endif
 }
 
 
@@ -156,7 +171,7 @@ layout_item_for(BView* view)
 
 InstallerWindow::InstallerWindow()
 	:
-	BWindow(BRect(-2000, -2000, -1800, -1800),
+	BWindow(BRect(-2400, -2000, -1800, -1800),
 		B_TRANSLATE_SYSTEM_NAME("Installer"), B_TITLED_WINDOW,
 		B_NOT_ZOOMABLE | B_AUTO_UPDATE_SIZE_LIMITS),
 	fEncouragedToSetupPartitions(false),
@@ -171,24 +186,30 @@ InstallerWindow::InstallerWindow()
 
 	LogoView* logoView = new LogoView();
 
-	fStatusView = new BTextView("statusView", be_plain_font, NULL,
+	rgb_color baseColor = ui_color(B_DOCUMENT_TEXT_COLOR);
+	fStatusView = new BTextView("statusView", be_plain_font, &baseColor,
 		B_WILL_DRAW);
-	fStatusView->SetViewColor(255, 255, 255, 255);
-	fStatusView->SetInsets(10, 0, 10, 0);
+	fStatusView->SetViewUIColor(B_DOCUMENT_BACKGROUND_COLOR);
 	fStatusView->MakeEditable(false);
 	fStatusView->MakeSelectable(false);
 
 	BSize logoSize = logoView->MinSize();
 	logoView->SetExplicitMaxSize(logoSize);
-	fStatusView->SetExplicitMinSize(BSize(logoSize.width * 0.8,
-		logoSize.height));
 
-	// Explicitly create group view to set the background white in case
-	// height resizing is needed for the status view
-	fLogoGroup = new BGroupView(B_HORIZONTAL, 0);
-	fLogoGroup->SetViewColor(255, 255, 255);
-	fLogoGroup->GroupLayout()->AddView(logoView);
-	fLogoGroup->GroupLayout()->AddView(fStatusView);
+	// In the status view, make sure that we can display 5 lines of text of ~28 characters each
+	font_height height;
+	fStatusView->GetFontHeight(&height);
+	float fontHeight = height.ascent + height.descent + height.leading;
+	fStatusView->SetExplicitMinSize(BSize(fStatusView->StringWidth("W") * 28,
+		fontHeight * 5 + 8));
+
+	// Create a group view with a white background since the logo and status text won't have the
+	// same height, this background will show in the remaining space
+	fLogoGroup = new BGroupView(B_HORIZONTAL, 10);
+	fLogoGroup->SetViewUIColor(B_DOCUMENT_BACKGROUND_COLOR);
+	fLogoGroup->GroupLayout()->SetInsets(0, 0, 10, 0);
+	fLogoGroup->AddChild(logoView);
+	fLogoGroup->AddChild(fStatusView);
 
 	fDestMenu = new BPopUpMenu(B_TRANSLATE("scanning" B_UTF8_ELLIPSIS),
 		true, false);
@@ -220,9 +241,8 @@ InstallerWindow::InstallerWindow()
 		= B_TRANSLATE("Additional disk space required: 0.0 KiB");
 	fSizeView = new BStringView("size_view", requiredDiskSpaceString);
 	fSizeView->SetAlignment(B_ALIGN_RIGHT);
-	fSizeView->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNLIMITED));
 	fSizeView->SetExplicitAlignment(
-		BAlignment(B_ALIGN_RIGHT, B_ALIGN_MIDDLE));
+		BAlignment(B_ALIGN_RIGHT, B_ALIGN_TOP));
 
 	fProgressBar = new BStatusBar("progress",
 		B_TRANSLATE("Install progress:  "));
@@ -237,7 +257,7 @@ InstallerWindow::InstallerWindow()
 		B_TRANSLATE("Set up partitions" B_UTF8_ELLIPSIS),
 		new BMessage(LAUNCH_DRIVE_SETUP));
 
-	fLaunchBootManagerItem = new BMenuItem(B_TRANSLATE("Set up boot menu"),
+	fLaunchBootManagerItem = new BMenuItem(B_TRANSLATE("Set up boot menu" B_UTF8_ELLIPSIS),
 		new BMessage(LAUNCH_BOOTMAN));
 	fLaunchBootManagerItem->SetEnabled(false);
 
@@ -250,6 +270,12 @@ InstallerWindow::InstallerWindow()
 	toolsMenu->AddItem(fMakeBootableItem);
 	mainMenu->AddItem(toolsMenu);
 
+	BGroupView* packagesGroup = new BGroupView(B_VERTICAL, B_USE_ITEM_SPACING);
+	packagesGroup->AddChild(fPackagesSwitch);
+	packagesGroup->AddChild(packagesScrollView);
+	packagesGroup->AddChild(fProgressBar);
+	packagesGroup->AddChild(fSizeView);
+
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
 		.Add(mainMenu)
 		.Add(fLogoGroup)
@@ -257,23 +283,19 @@ InstallerWindow::InstallerWindow()
 		.AddGroup(B_VERTICAL, B_USE_ITEM_SPACING)
 			.SetInsets(B_USE_WINDOW_SPACING)
 			.AddGrid(new BGridView(B_USE_ITEM_SPACING, B_USE_ITEM_SPACING))
-				.Add(fSrcMenuField->CreateLabelLayoutItem(), 0, 0)
-				.Add(fSrcMenuField->CreateMenuBarLayoutItem(), 1, 0)
-				.Add(fDestMenuField->CreateLabelLayoutItem(), 0, 1)
-				.Add(fDestMenuField->CreateMenuBarLayoutItem(), 1, 1)
-
-				.Add(BSpaceLayoutItem::CreateVerticalStrut(5), 0, 2, 2)
-
-				.Add(fPackagesSwitch, 0, 3, 2)
-				.Add(packagesScrollView, 0, 4, 2)
-				.Add(fProgressBar, 0, 5, 2)
-				.Add(fSizeView, 0, 6, 2)
+				.AddMenuField(fSrcMenuField, 0, 0)
+				.AddMenuField(fDestMenuField, 0, 1)
+				.AddGlue(2, 0, 1, 2)
+				.Add(BSpaceLayoutItem::CreateVerticalStrut(5), 0, 2, 3)
 			.End()
-
+			.Add(packagesGroup)
 			.AddGroup(B_HORIZONTAL, B_USE_WINDOW_SPACING)
 				.Add(fLaunchDriveSetupButton)
 				.AddGlue()
-				.Add(fBeginButton);
+				.Add(fBeginButton)
+			.End()
+		.End()
+	.End();
 
 	// Make the optional packages and progress bar invisible on start
 	fPackagesLayoutItem = layout_item_for(packagesScrollView);
@@ -284,25 +306,6 @@ InstallerWindow::InstallerWindow()
 	fPackagesLayoutItem->SetVisible(false);
 	fSizeViewLayoutItem->SetVisible(false);
 	fProgressLayoutItem->SetVisible(false);
-
-	// Setup tool tips for the non-obvious features
-	fLaunchDriveSetupButton->SetToolTip(
-		B_TRANSLATE("Launch the DriveSetup utility to partition\n"
-		"available hard drives and other media.\n"
-		"Partitions can be initialized with the\n"
-		"Be File System needed for a Haiku boot\n"
-		"partition."));
-//	fLaunchBootManagerItem->SetToolTip(
-//		B_TRANSLATE("Install or uninstall the Haiku boot menu, which allows "
-//		"to choose an operating system to boot when the computer starts.\n"
-//		"If this computer already has a boot manager such as GRUB installed, "
-//		"it is better to add Haiku to that menu than to overwrite it."));
-//	fMakeBootableItem->SetToolTip(
-//		B_TRANSLATE("Writes the Haiku boot code to the partition start\n"
-//		"sector. This step is automatically performed by\n"
-//		"the installation, but you can manually make a\n"
-//		"partition bootable in case you do not need to\n"
-//		"perform an installation."));
 
 	// finish creating window
 	if (!be_roster->IsRunning(kDeskbarSignature))
@@ -436,13 +439,14 @@ InstallerWindow::MessageReceived(BMessage *msg)
 			snprintf(string, sizeof(string),
 				B_TRANSLATE("Additional disk space required: %s"), buffer);
 			fSizeView->SetText(string);
+			fSizeView->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNSET));
 			break;
 		}
 		case ENCOURAGE_DRIVESETUP:
 		{
 			BAlert* alert = new BAlert("use drive setup", B_TRANSLATE("No partitions have "
 				"been found that are suitable for installation. Please set "
-				"up partitions and initialize at least one partition with the "
+				"up partitions and format at least one partition with the "
 				"Be File System."), B_TRANSLATE("OK"));
 			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 			alert->Go();
@@ -450,10 +454,6 @@ InstallerWindow::MessageReceived(BMessage *msg)
 		}
 		case MSG_STATUS_MESSAGE:
 		{
-// TODO: Was this supposed to prevent status messages still arriving
-// after the copy engine was shut down?
-//			if (fInstallStatus != kInstalling)
-//				break;
 			float progress;
 			if (msg->FindFloat("progress", &progress) == B_OK) {
 				const char* currentItem;
@@ -468,9 +468,8 @@ InstallerWindow::MessageReceived(BMessage *msg)
 					&& msg->FindInt32("maximum", &maximumCount) == B_OK) {
 					char buffer[64];
 					snprintf(buffer, sizeof(buffer),
-						B_TRANSLATE_COMMENT("%1ld of %2ld",
-							"number of files copied"),
-						currentCount, maximumCount);
+						B_TRANSLATE_COMMENT("%1ld of %2ld", "number of files copied"),
+						(long int)currentCount, (long int)maximumCount);
 					trailingLabel << buffer;
 				} else {
 					trailingLabel <<
@@ -501,7 +500,7 @@ InstallerWindow::MessageReceived(BMessage *msg)
 				fBeginButton->SetLabel(B_TRANSLATE("Quit"));
 				status.SetToFormat(B_TRANSLATE("Installation "
 					"completed. Boot sector has been written to '%s'. Press "
-					"Quit to leave the Installer or choose a new target "
+					"'Quit' to leave the Installer or choose a new target "
 					"volume to perform another installation."),
 					dstItem ? dstItem->Name() : B_TRANSLATE_COMMENT("???",
 						"Unknown partition name"));
@@ -509,7 +508,7 @@ InstallerWindow::MessageReceived(BMessage *msg)
 				fBeginButton->SetLabel(B_TRANSLATE("Restart"));
 				status.SetToFormat(B_TRANSLATE("Installation "
 					"completed. Boot sector has been written to '%s'. Press "
-					"Restart to restart the computer or choose a new target "
+					"'Restart' to restart the computer or choose a new target "
 					"volume to perform another installation."),
 					dstItem ? dstItem->Name() : B_TRANSLATE_COMMENT("???",
 						"Unknown partition name"));
@@ -517,6 +516,7 @@ InstallerWindow::MessageReceived(BMessage *msg)
 
 			_SetStatusMessage(status.String());
 			fInstallStatus = kFinished;
+
 			_DisableInterface(false);
 			fProgressLayoutItem->SetVisible(false);
 			fPkgSwitchLayoutItem->SetVisible(true);
@@ -546,7 +546,7 @@ InstallerWindow::MessageReceived(BMessage *msg)
 					!fDriveSetupLaunched && !fBootManagerLaunched);
 				_DisableInterface(fDriveSetupLaunched || fBootManagerLaunched);
 				if (fDriveSetupLaunched && fBootManagerLaunched) {
-					_SetStatusMessage(B_TRANSLATE("Running Boot Manager and "
+					_SetStatusMessage(B_TRANSLATE("Running BootManager and "
 						"DriveSetup" B_UTF8_ELLIPSIS
 						"\n\nClose both applications to continue with the "
 						"installation."));
@@ -556,18 +556,21 @@ InstallerWindow::MessageReceived(BMessage *msg)
 						"\n\nClose DriveSetup to continue with the "
 						"installation."));
 				} else if (fBootManagerLaunched) {
-					_SetStatusMessage(B_TRANSLATE("Running Boot Manager"
+					_SetStatusMessage(B_TRANSLATE("Running BootManager"
 						B_UTF8_ELLIPSIS
-						"\n\nClose Boot Manager to continue with the "
+						"\n\nClose BootManager to continue with the "
 						"installation."));
 				} else {
 					// If neither DriveSetup nor Bootman is running, we need
 					// to scan partitions in case DriveSetup has quit, or
-					// we need to update the guidance message.
+					// we need to update the guidance message, unless install
+					// was already finished.
 					if (scanPartitions)
 						_ScanPartitions();
-					else
+					else if (fInstallStatus != kFinished)
 						_UpdateControls();
+					else
+						PostMessage(MSG_INSTALL_FINISHED);
 				}
 			}
 			break;
@@ -591,8 +594,8 @@ InstallerWindow::QuitRequested()
 		// thing on the screen and we will reboot the machine once it quits.
 
 		if (fDriveSetupLaunched && fBootManagerLaunched) {
-			BAlert* alert = new BAlert(B_TRANSLATE("Quit Boot Manager and "
-				"DriveSetup"),	B_TRANSLATE("Please close the Boot Manager "
+			BAlert* alert = new BAlert(B_TRANSLATE("Quit BootManager and "
+				"DriveSetup"),	B_TRANSLATE("Please close the BootManager "
 				"and DriveSetup windows before closing the Installer window."),
 				B_TRANSLATE("OK"));
 			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
@@ -608,8 +611,8 @@ InstallerWindow::QuitRequested()
 			return false;
 		}
 		if (fBootManagerLaunched) {
-			BAlert* alert = new BAlert(B_TRANSLATE("Quit Boot Manager"),
-				B_TRANSLATE("Please close the Boot Manager window before "
+			BAlert* alert = new BAlert(B_TRANSLATE("Quit BootManager"),
+				B_TRANSLATE("Please close the BootManager window before "
 				"closing the Installer window."), B_TRANSLATE("OK"));
 			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 			alert->Go();
@@ -617,9 +620,8 @@ InstallerWindow::QuitRequested()
 		}
 		if (fInstallStatus != kFinished) {
 			BAlert* alert = new BAlert(B_TRANSLATE_SYSTEM_NAME("Installer"),
-				B_TRANSLATE("Are you sure you want to abort the "
-					"installation and restart the system?"),
-				B_TRANSLATE("Cancel"), B_TRANSLATE("Restart system"), NULL,
+				B_TRANSLATE("Are you sure you want to stop the installation?"),
+				B_TRANSLATE("Cancel"), B_TRANSLATE("Stop"), NULL,
 				B_WIDTH_AS_USUAL, B_STOP_ALERT);
 			alert->SetShortcut(0, B_ESCAPE);
 			if (alert->Go() == 0)
@@ -627,8 +629,9 @@ InstallerWindow::QuitRequested()
 		}
 	} else if (fInstallStatus == kInstalling) {
 			BAlert* alert = new BAlert(B_TRANSLATE_SYSTEM_NAME("Installer"),
-				B_TRANSLATE("Are you sure you want to abort the installation?"),
-				B_TRANSLATE("Cancel"), B_TRANSLATE("Abort"), NULL,
+				B_TRANSLATE("The installation is not complete yet!\n"
+                                "Are you sure you want to stop it?"),
+				B_TRANSLATE("Cancel"), B_TRANSLATE("Stop"), NULL,
 				B_WIDTH_AS_USUAL, B_STOP_ALERT);
 			alert->SetShortcut(0, B_ESCAPE);
 			if (alert->Go() == 0)
@@ -636,8 +639,13 @@ InstallerWindow::QuitRequested()
 	}
 
 	_QuitCopyEngine(false);
-	fWorkerThread->PostMessage(B_QUIT_REQUESTED);
-	be_app->PostMessage(B_QUIT_REQUESTED);
+
+	BMessage quitWithInstallStatus(B_QUIT_REQUESTED);
+	quitWithInstallStatus.AddBool("install_complete",
+		fInstallStatus == kFinished);
+
+	fWorkerThread->PostMessage(&quitWithInstallStatus);
+	be_app->PostMessage(&quitWithInstallStatus);
 	return true;
 }
 
@@ -700,8 +708,8 @@ InstallerWindow::_LaunchBootManager()
 		entry_ref ref;
 		if (entry.GetRef(&ref) != B_OK || be_roster->Launch(&ref) != B_OK) {
 			BAlert* alert = new BAlert(
-				B_TRANSLATE("Failed to launch Boot Manager"),
-				B_TRANSLATE("Boot Manager, the application to configure the "
+				B_TRANSLATE("Failed to launch BootManager"),
+				B_TRANSLATE("BootManager, the application to configure the "
 					"Haiku boot menu, could not be launched."),
 				B_TRANSLATE("OK"), NULL, NULL, B_WIDTH_AS_USUAL, B_STOP_ALERT);
 			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
@@ -786,21 +794,45 @@ InstallerWindow::_UpdateControls()
 	}
 	fDestMenuField->MenuItem()->SetLabel(label.String());
 
+	BString statusText;
 	if (srcItem != NULL && dstItem != NULL) {
-		BString message;
-		message.SetToFormat(B_TRANSLATE("Press the Begin button to install "
+		statusText.SetToFormat(B_TRANSLATE("Press the 'Begin' button to install "
 			"from '%1s' onto '%2s'."), srcItem->Name(), dstItem->Name());
-		_SetStatusMessage(message.String());
 	} else if (srcItem != NULL) {
-		_SetStatusMessage(B_TRANSLATE("Choose the disk you want to install "
-			"onto from the pop-up menu. Then click \"Begin\"."));
+		BString partitionRequiredHaiku = B_TRANSLATE(
+			"Haiku has to be installed on a partition that uses "
+			"the Be File System, but there are currently no such "
+			"partitions available on your system.");
+
+		BString partitionRequiredDebranded = B_TRANSLATE(
+			"This operating system has to be installed on a partition "
+			"that uses the Be File System, but there are currently "
+			"no such partitions available on your system.");
+
+		if (!foundOneSuitableTarget) {
+#ifdef HAIKU_DISTRO_COMPATIBILITY_OFFICIAL
+			statusText.Append(partitionRequiredHaiku);
+#else
+			statusText.Append(partitionRequiredDebranded);
+#endif
+			statusText.Append(" ");
+			statusText.Append(B_TRANSLATE(
+				"Click on 'Set up partitions" B_UTF8_ELLIPSIS
+				"' to create one."));
+		} else {
+			statusText = B_TRANSLATE(
+				"Choose the disk you want to install "
+				"onto from the pop-up menu. Then click 'Begin'.");
+		}
 	} else if (dstItem != NULL) {
-		_SetStatusMessage(B_TRANSLATE("Choose the source disk from the "
-			"pop-up menu. Then click \"Begin\"."));
+		statusText = B_TRANSLATE("Choose the source disk from the "
+			"pop-up menu. Then click 'Begin'.");
 	} else {
-		_SetStatusMessage(B_TRANSLATE("Choose the source and destination disk "
-			"from the pop-up menus. Then click \"Begin\"."));
+		statusText = B_TRANSLATE("Choose the source and destination disk "
+			"from the pop-up menus. Then click 'Begin'.");
 	}
+
+	_SetStatusMessage(statusText.String());
 
 	fInstallStatus = kReadyForInstall;
 	fBeginButton->SetLabel(B_TRANSLATE("Begin"));
@@ -872,7 +904,9 @@ void
 InstallerWindow::_SetStatusMessage(const char *text)
 {
 	fStatusView->SetText(text);
-	fLogoGroup->GroupLayout()->InvalidateLayout();
+	fStatusView->InvalidateLayout();
+		// In case the status message makes the text view higher than the
+		// logo, then we need to resize te whole window to fit it.
 }
 
 

@@ -44,7 +44,7 @@ typedef struct err_res {
 } err_res;
 
 #define MK_ERROR( aaction, code ) ({ \
-	err_res _res = {error_code: (code), action: (aaction) };	\
+	err_res _res = {.error_code = (code), .action = (aaction) };	\
 	_res;					\
 })
 
@@ -63,7 +63,7 @@ typedef struct scsi_periph_callbacks {
 	// informs of new size of medium
 	// (set to NULL if not a block device)
 	void (*set_capacity)(periph_device_cookie cookie, uint64 capacity,
-		uint32 blockSize);
+		uint32 blockSize, uint32 physicalBlockSize);
 
 	// *** removable devices
 	// called when media got changed (can be NULL if medium is not changable)
@@ -73,7 +73,8 @@ typedef struct scsi_periph_callbacks {
 } scsi_periph_callbacks;
 
 typedef struct scsi_block_range {
-	uint64	offset;
+	// values are in blocks
+	uint64	lba;
 	uint64	size;
 } scsi_block_range;
 
@@ -123,7 +124,7 @@ typedef struct scsi_periph_interface {
 	err_res (*synchronize_cache)(scsi_periph_device device, scsi_ccb *request);
 
 	status_t (*trim_device)(scsi_periph_device_info *device, scsi_ccb *request,
-		scsi_block_range* ranges, uint32 rangeCount);
+		scsi_block_range* ranges, uint32 rangeCount, uint64* trimmedBlocks);
 
 	// *** removable media ***
 	// to be called when a medium change is detected to block subsequent commands

@@ -642,20 +642,6 @@ BHandler::_ObserverList()
 }
 
 
-BHandler::BHandler(const BHandler &)
-{
-	// No copy construction allowed.
-}
-
-
-BHandler &
-BHandler::operator=(const BHandler &)
-{
-	// No assignments allowed.
-	return *this;
-}
-
-
 void
 BHandler::SetLooper(BLooper* looper)
 {
@@ -682,6 +668,19 @@ _ReservedHandler1__8BHandler(BHandler* handler, uint32 what,
 	handler->BHandler::SendNotices(what, notice);
 }
 
+
+BHandler::BHandler(const BHandler &)
+{
+	// No copy construction allowed.
+}
+
+
+BHandler &
+BHandler::operator=(const BHandler &)
+{
+	// No assignments allowed.
+	return *this;
+}
 #endif
 
 void BHandler::_ReservedHandler2() {}
@@ -718,6 +717,8 @@ ObserverList::_ValidateHandlers(uint32 what)
 		Add(target, what);
 		iterator = handlers.erase(iterator);
 	}
+	if (handlers.empty())
+		fHandlerMap.erase(what);
 }
 
 
@@ -741,6 +742,8 @@ ObserverList::_SendNotices(uint32 what, BMessage* notice)
 		(*iterator).SendMessage(notice);
 		iterator++;
 	}
+	if (messengers.empty())
+		fMessengerMap.erase(what);
 }
 
 
@@ -819,38 +822,40 @@ ObserverList::Remove(const BHandler* handler, uint32 what)
 	if (target.IsValid() && Remove(target, what) == B_OK)
 		return B_OK;
 
+	status_t status = B_BAD_HANDLER;
+
 	vector<const BHandler*> &handlers = fHandlerMap[what];
 
 	vector<const BHandler*>::iterator iterator = find(handlers.begin(),
 		handlers.end(), handler);
 	if (iterator != handlers.end()) {
 		handlers.erase(iterator);
-		if (handlers.empty())
-			fHandlerMap.erase(what);
-
-		return B_OK;
+		status = B_OK;
 	}
+	if (handlers.empty())
+		fHandlerMap.erase(what);
 
-	return B_BAD_HANDLER;
+	return status;
 }
 
 
 status_t
 ObserverList::Remove(const BMessenger &messenger, uint32 what)
 {
+	status_t status = B_BAD_HANDLER;
+
 	vector<BMessenger> &messengers = fMessengerMap[what];
 
 	vector<BMessenger>::iterator iterator = find(messengers.begin(),
 		messengers.end(), messenger);
 	if (iterator != messengers.end()) {
 		messengers.erase(iterator);
-		if (messengers.empty())
-			fMessengerMap.erase(what);
-
-		return B_OK;
+		status = B_OK;
 	}
+	if (messengers.empty())
+		fMessengerMap.erase(what);
 
-	return B_BAD_HANDLER;
+	return status;
 }
 
 

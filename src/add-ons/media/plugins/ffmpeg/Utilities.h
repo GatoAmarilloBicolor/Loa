@@ -14,12 +14,26 @@
 
 
 #include <assert.h>
+#include <stdio.h>
 
 #include <GraphicsDefs.h>
 
 extern "C" {
 	#include "avcodec.h"
 }
+
+
+/*! \brief Structure used for passing AVPacket metadata through media_header::user_data. */
+struct avpacket_user_data {
+    int64_t pts;
+    int64_t dts;
+    int stream_index;
+    int flags;
+    int64_t duration;
+    int64_t pos;
+};
+
+#define AVPACKET_USER_DATA_TYPE 'ffav'
 
 
 /*! \brief Converts FFmpeg notation of video aspect ratio into the Media Kits
@@ -44,13 +58,15 @@ inline void
 ConvertAVCodecContextToVideoAspectWidthAndHeight(AVCodecContext& contextIn,
 	uint16& pixelWidthAspectOut, uint16& pixelHeightAspectOut)
 {
-	assert(contextIn.sample_aspect_ratio.num >= 0);
-	assert(contextIn.width > 0);
-	assert(contextIn.height > 0);
+	if (contextIn.width <= 0 || contextIn.height <= 0) {
+		fprintf(stderr, "Cannot compute video aspect ratio correctly\n");
+		pixelWidthAspectOut = 1;
+		pixelHeightAspectOut = 1;
+		return;
+	}
 
-	// The following code is based on code originally located in
-	// AVFormatReader::Stream::Init() and thus should be copyrighted to Stephan
-	// Aßmus
+	assert(contextIn.sample_aspect_ratio.num >= 0);
+
 	AVRational pixelAspectRatio;
 
 	if (contextIn.sample_aspect_ratio.num == 0
@@ -59,7 +75,7 @@ ConvertAVCodecContextToVideoAspectWidthAndHeight(AVCodecContext& contextIn,
 		// ourselve based solely on the video dimensions
 		av_reduce(&pixelAspectRatio.num, &pixelAspectRatio.den, contextIn.width,
 			contextIn.height, 1024 * 1024);
-	
+
 		pixelWidthAspectOut = static_cast<int16>(pixelAspectRatio.num);
 		pixelHeightAspectOut = static_cast<int16>(pixelAspectRatio.den);
 		return;
@@ -80,13 +96,15 @@ inline void
 ConvertAVCodecParametersToVideoAspectWidthAndHeight(AVCodecParameters& parametersIn,
 	uint16& pixelWidthAspectOut, uint16& pixelHeightAspectOut)
 {
-	assert(parametersIn.sample_aspect_ratio.num >= 0);
-	assert(parametersIn.width > 0);
-	assert(parametersIn.height > 0);
+	if (parametersIn.width <= 0 || parametersIn.height <= 0) {
+		fprintf(stderr, "Cannot compute video aspect ratio correctly\n");
+		pixelWidthAspectOut = 1;
+		pixelHeightAspectOut = 1;
+		return;
+	}
 
-	// The following code is based on code originally located in
-	// AVFormatReader::Stream::Init() and thus should be copyrighted to Stephan
-	// Aßmus
+	assert(parametersIn.sample_aspect_ratio.num >= 0);
+
 	AVRational pixelAspectRatio;
 
 	if (parametersIn.sample_aspect_ratio.num == 0
@@ -136,10 +154,16 @@ inline void
 ConvertVideoAspectWidthAndHeightToAVCodecContext(uint16 pixelWidthAspectIn,
 	uint16 pixelHeightAspectIn, AVCodecContext& contextInOut)
 {
+	if (contextInOut.width <= 0 || contextInOut.height <= 0) {
+		fprintf(stderr, "Cannot compute video aspect ratio correctly\n");
+		// We can't do anything, set the aspect ratio to 'ignore'.
+		contextInOut.sample_aspect_ratio.num = 0;
+		contextInOut.sample_aspect_ratio.den = 1;
+		return;
+	}
+
 	assert(pixelWidthAspectIn > 0);
 	assert(pixelHeightAspectIn > 0);
-	assert(contextInOut.width > 0);
-	assert(contextInOut.height > 0);
 
 	AVRational pureVideoDimensionAspectRatio;
 	av_reduce(&pureVideoDimensionAspectRatio.num,
@@ -177,13 +201,14 @@ CalculateBytesPerRowWithColorSpaceAndVideoWidth(color_space colorSpace, int vide
 	assert(videoWidth >= 0);
 
 	const uint32 kBytesPerRowUnknown = 0;
-	size_t bytesPerPixel;
+	size_t pixelChunk;
 	size_t rowAlignment;
+	size_t pixelsPerChunk;
 
-	if (get_pixel_size_for(colorSpace, &bytesPerPixel, &rowAlignment, NULL) != B_OK)
+	if (get_pixel_size_for(colorSpace, &pixelChunk, &rowAlignment, &pixelsPerChunk) != B_OK)
 		return kBytesPerRowUnknown;
 
-	uint32 bytesPerRow = bytesPerPixel * videoWidth;
+	uint32 bytesPerRow = pixelChunk * videoWidth / pixelsPerChunk;
 	uint32 numberOfUnalignedBytes = bytesPerRow % rowAlignment;
 
 	if (numberOfUnalignedBytes == 0)
@@ -196,42 +221,9 @@ CalculateBytesPerRowWithColorSpaceAndVideoWidth(color_space colorSpace, int vide
 }
 
 
-/*! \brief Converts FFmpeg notation of video frame rate into the Media Kits
-		notation.
-
-	\see ConvertAVCodecContextToVideoFrameRate() for converting in the other
-		direction.
-
-	\param contextIn An AVCodeContext structure of FFmpeg containing the values
-		needed to calculate the Media Kit video frame rate.
-		The following fields are used for the calculation:
-			- AVCodecContext.time_base.num (must)
-			- AVCodecContext.time_base.den (must)
-			- AVCodecContext.ticks_per_frame (must)
-	\param frameRateOut On return contains Media Kits notation of the video
-		frame rate.
-*/
-inline void
-ConvertAVCodecContextToVideoFrameRate(AVCodecContext& contextIn, float& frameRateOut)
-{
-	// assert that av_q2d(contextIn.time_base) > 0 and computable
-	assert(contextIn.time_base.num > 0);
-	assert(contextIn.time_base.den > 0);
-
-	// The following code is based on private get_fps() function of FFmpeg's
-	// ratecontrol.c:
-	// https://lists.ffmpeg.org/pipermail/ffmpeg-cvslog/2012-April/049280.html
-	double possiblyInterlacedFrameRate = 1.0 / av_q2d(contextIn.time_base);
-	double numberOfInterlacedFramesPerFullFrame = FFMAX(contextIn.ticks_per_frame, 1);
-
-	frameRateOut
-		= possiblyInterlacedFrameRate / numberOfInterlacedFramesPerFullFrame;
-}
-
-
 /*!	\brief Converts the Media Kits notation of video frame rate to FFmpegs
 	notation.
-	
+
 	\see ConvertAVCodecContextToVideoFrameRate() for converting in the other
 		direction.
 
@@ -243,7 +235,8 @@ ConvertAVCodecContextToVideoFrameRate(AVCodecContext& contextIn, float& frameRat
 		fields stay as they were on input):
 			- AVCodecContext.time_base.num
 			- AVCodecContext.time_base.den
-			- AVCodecContext.ticks_per_frame is set to 1
+			- AVCodecContext.framerate.num
+			- AVCodecContext.framerate.den
 */
 inline void
 ConvertVideoFrameRateToAVCodecContext(float frameRateIn,
@@ -251,7 +244,7 @@ ConvertVideoFrameRateToAVCodecContext(float frameRateIn,
 {
 	assert(frameRateIn > 0);
 
-	contextOut.ticks_per_frame = 1;
+	contextOut.framerate = av_d2q(frameRateIn, 1024);
 	contextOut.time_base = av_d2q(1.0 / frameRateIn, 1024);
 }
 

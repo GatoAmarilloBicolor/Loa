@@ -1,9 +1,12 @@
 /*
  * Copyright 2003-2010, Axel Dörfler, axeld@pinc-software.de.
  * Copyright 2011, Alexander von Gluck, kallisti5@unixzen.com
+ * Copyright 2019, Adrien Destugues, pulkomandy@pulkomandy.tk
  * Distributed under the terms of the MIT License.
  */
 
+
+#include "start.h"
 
 #include <string.h>
 
@@ -20,28 +23,15 @@
 #include "real_time_clock.h"
 
 
-#define HEAP_SIZE 65536
-
-
-extern "C" void _start(uint32 _unused1, uint32 _unused2,
-	void *openFirmwareEntry);
-extern "C" void start(void *openFirmwareEntry);
-
-// XCOFF "entry-point" is actually a pointer to the real code
-extern "C" void *_coff_start;
-void *_coff_start = (void *)&_start;
-
 // GCC defined globals
 extern void (*__ctor_list)(void);
 extern void (*__ctor_end)(void);
-extern uint8 __bss_start;
-extern uint8 _end;
 
 uint32 gMachine;
 static uint32 sBootOptions;
 
 
-static void
+void
 call_ctors(void)
 {
 	void (**f)(void);
@@ -52,57 +42,27 @@ call_ctors(void)
 }
 
 
-static void
-clear_bss(void)
+static addr_t
+get_kernel_entry(void)
 {
-	memset(&__bss_start, 0, &_end - &__bss_start);
-}
-
-
-static void
-determine_machine(void)
-{
-	gMachine = MACHINE_UNKNOWN;
-
-	int root = of_finddevice("/");
-	char buffer[64];
-	int length;
-
-	// TODO : Probe other OpenFirmware platforms and set gMachine as needed
-
-	if ((length = of_getprop(root, "device_type", buffer, sizeof(buffer) - 1))
-		!= OF_FAILED) {
-		buffer[length] = '\0';
-		if (!strcasecmp("chrp", buffer))
-			gMachine = MACHINE_CHRP;
-		else if (!strcasecmp("bootrom", buffer))
-			gMachine = MACHINE_MAC;
-	} else
-		gMachine = MACHINE_MAC;
-
-	if ((length = of_getprop(root, "model", buffer, sizeof(buffer) - 1))
-		!= OF_FAILED) {
-		buffer[length] = '\0';
-		if (!strcasecmp("pegasos", buffer))
-			gMachine |= MACHINE_PEGASOS;
+	if (gKernelArgs.kernel_image->elf_class == ELFCLASS64) {
+		preloaded_elf64_image *image = static_cast<preloaded_elf64_image *>(
+			gKernelArgs.kernel_image.Pointer());
+		return image->elf_header.e_entry;
+	} else if (gKernelArgs.kernel_image->elf_class == ELFCLASS32) {
+		preloaded_elf32_image *image = static_cast<preloaded_elf32_image *>(
+			gKernelArgs.kernel_image.Pointer());
+		return image->elf_header.e_entry;
 	}
-
-	if ((length = of_getprop(root, "name", buffer, sizeof(buffer) - 1))
-		!= OF_FAILED) {
-		buffer[length] = '\0';
-		if (!strcasecmp("openbiosteam,openbios", buffer))
-			gMachine |= MACHINE_QEMU;
-	}
+	panic("Unknown kernel format! Not 32-bit or 64-bit!");
+	return 0;
 }
 
 
 extern "C" void
 platform_start_kernel(void)
 {
-	preloaded_elf32_image* image = static_cast<preloaded_elf32_image*>(
-		gKernelArgs.kernel_image.Pointer());
-
-	addr_t kernelEntry = image->elf_header.e_entry;
+	addr_t kernelEntry = get_kernel_entry();
 	addr_t stackTop = gKernelArgs.cpu_kstack[0].start
 		+ gKernelArgs.cpu_kstack[0].size;
 
@@ -116,7 +76,7 @@ platform_start_kernel(void)
 
 	status_t error = arch_start_kernel(&gKernelArgs, kernelEntry, stackTop);
 
-	panic("Kernel returned! Return value: %ld\n", error);
+	panic("Kernel returned! Return value: %" B_PRId32 "\n", error);
 }
 
 
@@ -135,30 +95,17 @@ platform_boot_options(void)
 
 
 extern "C" void
-_start(uint32 _unused1, uint32 _unused3, void *openFirmwareEntry)
-{
-	// According to the PowerPC bindings, OpenFirmware should have created
-	// a stack of 32kB or higher for us at this point
-
-	clear_bss();
-	call_ctors();
-		// call C++ constructors before doing anything else
-
-	start(openFirmwareEntry);
-}
-
-
-extern "C" void
 start(void *openFirmwareEntry)
 {
-	char bootargs[512];
+	static char bootargs[512];
 
 	// stage2 args - might be set via the command line one day
 	stage2_args args;
-	args.heap_size = HEAP_SIZE;
+	args.heap_size = 0;
 	args.arguments = NULL;
 
-	of_init((int (*)(void*))openFirmwareEntry);
+	if (of_init((intptr_t (*)(void*))openFirmwareEntry) != B_OK)
+		return;
 
 	// check for arguments
 	if (of_getprop(gChosen, "bootargs", bootargs, sizeof(bootargs))
@@ -170,14 +117,17 @@ start(void *openFirmwareEntry)
 	}
 
 	determine_machine();
-	console_init();
+	if (console_init() != B_OK)
+		return;
 
+#ifdef __powerpc__
 	if ((gMachine & MACHINE_QEMU) != 0)
 		dprintf("OpenBIOS (QEMU?) OpenFirmware machine detected\n");
 	else if ((gMachine & MACHINE_PEGASOS) != 0)
 		dprintf("Pegasos PowerPC machine detected\n");
 	else
 		dprintf("Apple PowerPC machine assumed\n");
+#endif
 
 	// Initialize and take over MMU and set the OpenFirmware callbacks - it
 	// will ask us for memory after that instead of maintaining it itself
@@ -187,8 +137,7 @@ start(void *openFirmwareEntry)
 	if (boot_arch_cpu_init() != B_OK)
 		of_exit();
 
-	if (init_real_time_clock() != B_OK)
-		of_exit();
+	init_real_time_clock();
 
 	// check for key presses once
 	sBootOptions = 0;

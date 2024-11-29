@@ -1,27 +1,28 @@
-1	swedish	x-vnd.Haiku.TV	1995288111
-TV	MainWin		TV
-Channel	MainWin		Kanal
-Settings…	MainWin		Inställningar...
-Interface	MainWin		Gränssnitt
-Keep aspect ratio	MainWin		Behåll bildförhållande
-Previous channel	MainWin		Föregående kanal
-Settings	MainWin		Inställningar
-TV	System name		TV
+1	swedish	x-vnd.Haiku.TV	337483365
+No menu	MainWin		Ingen meny
 No border	MainWin		Ingen kant
-Always on top	MainWin		Alltid överst
-OK	MainWin		OK
-Quit	MainWin		Avsluta
+Error, connecting to interface failed:\n\n	MainWin		Fel, misslyckades att ansluta till gränssnittet:\n\n
+force 720 × 576, display aspect 4:3	MainWin	The '×' is the Unicode multiplication sign U+00D7	tvinga 720 × 576, bildförhållande 4:3
 Full screen	MainWin		Hela skärmen
-Debug	MainWin		Felsök
 Scale to native size	MainWin		Skala till ursprungsstorlek
 unknown	MainWin		okänd
 Next channel	MainWin		Nästa kanal
-Error, interface is busy:\n\n	MainWin		Fel, gränsnittet är upptaget:\n\n
-None	MainWin		Ingen
-force 704 x 576, display aspect 4:3	MainWin		påtvinga 704 x 576, bildförhållande 4:3
+Keep aspect ratio	MainWin		Behåll bildförhållande
 DVB - Digital Video Broadcasting TV	MainWin		DVB - Digital Video Broadcasting TV
-force 544 x 576, display aspect 4:3	MainWin		tvinga 544 x 573, bildförhållande 4:3
+Always on top	MainWin		Alltid överst
+Debug	MainWin		Felsök
+Interface	MainWin		Gränssnitt
+Quit	MainWin		Avsluta
+Channel	MainWin		Kanal
+Previous channel	MainWin		Föregående kanal
+OK	MainWin		OK
+TV	MainWin		TV
+force 544 × 576, display aspect 4:3	MainWin	The '×' is the Unicode multiplication sign U+00D7	tvinga 544 × 576, bildförhållande 4:3
+Settings	MainWin		Inställningar
+force 704 × 576, display aspect 4:3	MainWin	The '×' is the Unicode multiplication sign U+00D7	tvinga 704 × 576, bildförhållande 4:3
+%s - %d × %d, %.3f:%.3f => %.0f × %.0f	MainWin	The '×' is the Unicode multiplication sign U+00D7	%s - %d × %d, %.3f:%.3f => %.0f × %.0f
+TV	System name		TV
+Settings…	MainWin		Inställningar...
+None	MainWin		Ingen
+Error, interface is busy:\n\n	MainWin		Fel, gränsnittet är upptaget:\n\n
 pixel aspect ratio	MainWin		pixel bildförhållande
-No menu	MainWin		Ingen meny
-Error, connecting to interface failed:\n\n	MainWin		Fel, misslyckades att ansluta till gränssnittet:\n\n
-force 720 x 576, display aspect 4:3	MainWin		tvinga 720 x 576, bildförhållande 4:3

@@ -328,7 +328,7 @@ ipv6_print_address_buffer(const sockaddr *_address, char *buffer,
 
 		if (printPort) {
 			char port[7];
-			sprintf(port, "]:%d", ntohs(address->sin6_port));
+			snprintf(port, sizeof(port), "]:%d", ntohs(address->sin6_port));
 			if (bufferSize - strlen(buffer) < strlen(port) + 1)
 				return B_NO_MEMORY;
 			strcat(buffer, port);
@@ -518,7 +518,7 @@ ipv6_hash_address_pair(const sockaddr *ourAddress, const sockaddr *peerAddress)
 	        the given address is not initialized
 */
 static status_t
-ipv6_checksum_address(struct Checksum *checksum, const sockaddr *address)
+ipv6_checksum_address(Checksum *checksum, const sockaddr *address)
 {
 	if (checksum == NULL || address == NULL || address->sa_len == 0)
 		return B_BAD_VALUE;

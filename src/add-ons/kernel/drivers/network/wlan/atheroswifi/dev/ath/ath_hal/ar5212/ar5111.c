@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5212/ar5111.c 187831 2009-01-28 18:00:22Z sam $
  */
 #include "opt_ah.h"
 
@@ -334,7 +334,6 @@ ar5111SetRfRegs(struct ath_hal *ah, const struct ieee80211_channel *chan,
         	ar5212ModifyRfBuffer(rfReg, rfWaitS, 5, 19, 0);
         	ar5212ModifyRfBuffer(rfReg, rfWaitI, 5, 24, 0);
         	ar5212ModifyRfBuffer(rfReg, rfMaxTime, 2, 49, 0);
-
 	}
 
 	HAL_INI_WRITE_BANK(ah, ar5212Bank7_5111, rfReg, regWrites);

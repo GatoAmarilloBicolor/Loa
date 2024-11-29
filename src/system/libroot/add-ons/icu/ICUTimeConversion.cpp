@@ -13,6 +13,9 @@
 #include <unicode/gregocal.h>
 
 
+U_NAMESPACE_USE
+
+
 namespace BPrivate {
 namespace Libroot {
 
@@ -44,6 +47,7 @@ status_t
 ICUTimeConversion::TZSet(const char* timeZoneID, const char* tz)
 {
 	bool offsetHasBeenSet = false;
+	bool timeZoneIdMatches = false;
 
 	// The given TZ environment variable's content overrides the default
 	// system timezone.
@@ -52,8 +56,10 @@ ICUTimeConversion::TZSet(const char* timeZoneID, const char* tz)
 		// value is implementation specific, we expect a full timezone ID.
 		if (*tz == ':') {
 			// nothing to do if the given name matches the current timezone
-			if (strcasecmp(fTimeZoneID, tz + 1) == 0)
-				return B_OK;
+			if (strcasecmp(fTimeZoneID, tz + 1) == 0) {
+				timeZoneIdMatches = true;
+				goto done;
+			}
 
 			strlcpy(fTimeZoneID, tz + 1, sizeof(fTimeZoneID));
 		} else {
@@ -61,8 +67,10 @@ ICUTimeConversion::TZSet(const char* timeZoneID, const char* tz)
 			strlcpy(fTimeZoneID, tz, sizeof(fTimeZoneID));
 
 			// nothing to do if the given name matches the current timezone
-			if (strcasecmp(fTimeZoneID, fDataBridge->addrOfTZName[0]) == 0)
-				return B_OK;
+			if (strcasecmp(fTimeZoneID, fDataBridge->addrOfTZName[0]) == 0) {
+				timeZoneIdMatches = true;
+				goto done;
+			}
 
 			// parse TZ variable (only <std> and <offset> supported)
 			const char* tzNameEnd = tz;
@@ -85,16 +93,29 @@ ICUTimeConversion::TZSet(const char* timeZoneID, const char* tz)
 		}
 	} else {
 		// nothing to do if the given name matches the current timezone
-		if (strcasecmp(fTimeZoneID, timeZoneID) == 0)
-			return B_OK;
+		if (strcasecmp(fTimeZoneID, timeZoneID) == 0) {
+			timeZoneIdMatches = true;
+			goto done;
+		}
 
 		strlcpy(fTimeZoneID, timeZoneID, sizeof(fTimeZoneID));
 	}
+
+done:
+	// fTimeZone can still be NULL if we don't initialize it
+	// in the first TZSet, causing problems for future
+	// Localtime invocations.
+	if (fTimeZone != NULL && timeZoneIdMatches)
+		return B_OK;
 
 	delete fTimeZone;
 	fTimeZone = TimeZone::createTimeZone(fTimeZoneID);
 	if (fTimeZone == NULL)
 		return B_NO_MEMORY;
+
+	UnicodeString temp;
+	if (fTimeZone->getID(temp) == UCAL_UNKNOWN_ZONE_ID)
+		goto error;
 
 	if (offsetHasBeenSet) {
 		fTimeZone->setRawOffset(*fDataBridge->addrOfTimezone * -1 * 1000);
@@ -104,14 +125,8 @@ ICUTimeConversion::TZSet(const char* timeZoneID, const char* tz)
 		UDate nowMillis = 1000 * (UDate)time(NULL);
 		UErrorCode icuStatus = U_ZERO_ERROR;
 		fTimeZone->getOffset(nowMillis, FALSE, rawOffset, dstOffset, icuStatus);
-		if (!U_SUCCESS(icuStatus)) {
-			*fDataBridge->addrOfTimezone = 0;
-			*fDataBridge->addrOfDaylight = false;
-			strcpy(fDataBridge->addrOfTZName[0], "GMT");
-			strcpy(fDataBridge->addrOfTZName[1], "GMT");
-
-			return B_ERROR;
-		}
+		if (!U_SUCCESS(icuStatus))
+			goto error;
 		*fDataBridge->addrOfTimezone = -1 * (rawOffset + dstOffset) / 1000;
 			// we want seconds, not the ms that ICU gives us
 	}
@@ -120,14 +135,18 @@ ICUTimeConversion::TZSet(const char* timeZoneID, const char* tz)
 
 	for (int i = 0; i < 2; ++i) {
 		if (tz != NULL && *tz != ':' && i == 0) {
-			strcpy(fDataBridge->addrOfTZName[0], fTimeZoneID);
+			strlcpy(fDataBridge->addrOfTZName[0], fTimeZoneID,
+				fDataBridge->kTZNameLength);
 		} else {
 			UnicodeString icuString;
 			fTimeZone->getDisplayName(i == 1, TimeZone::SHORT,
 				fTimeData.ICULocaleForStrings(), icuString);
 			CheckedArrayByteSink byteSink(fDataBridge->addrOfTZName[i],
-				sizeof(fTimeZoneID));
+				fDataBridge->kTZNameLength);
 			icuString.toUTF8(byteSink);
+
+			if (byteSink.Overflowed())
+				goto error;
 
 			// make sure to canonicalize "GMT+00:00" to just "GMT"
 			if (strcmp(fDataBridge->addrOfTZName[i], "GMT+00:00") == 0)
@@ -136,6 +155,14 @@ ICUTimeConversion::TZSet(const char* timeZoneID, const char* tz)
 	}
 
 	return B_OK;
+
+error:
+	*fDataBridge->addrOfTimezone = 0;
+	*fDataBridge->addrOfDaylight = false;
+	strcpy(fDataBridge->addrOfTZName[0], "GMT");
+	strcpy(fDataBridge->addrOfTZName[1], "GMT");
+
+	return B_ERROR;
 }
 
 
@@ -156,32 +183,28 @@ ICUTimeConversion::Gmtime(const time_t* inTime, struct tm* tmOut)
 	const TimeZone* icuTimeZone = TimeZone::getGMT();
 		// no delete - doesn't belong to us
 
-	return _FillTmValues(icuTimeZone, inTime, tmOut);
+	status_t status = _FillTmValues(icuTimeZone, inTime, tmOut);
+	if (status == B_OK) {
+		// tm_zone must be "GMT" for gmtime, not the current timezone
+		// (even if that happens to be equivalent to GMT).
+		tmOut->tm_zone = (char*)"GMT";
+	}
+	return status;
 }
 
 
 status_t
 ICUTimeConversion::Mktime(struct tm* inOutTm, time_t& timeOut)
 {
-	if (fTimeZone == NULL)
-		return B_NO_INIT;
+	return _Mktime(fTimeZone, inOutTm, timeOut);
+}
 
-	UErrorCode icuStatus = U_ZERO_ERROR;
-	GregorianCalendar calendar(*fTimeZone, fTimeData.ICULocale(),
-		icuStatus);
-	if (!U_SUCCESS(icuStatus))
-		return B_ERROR;
 
-	calendar.setLenient(TRUE);
-	calendar.set(inOutTm->tm_year + 1900, inOutTm->tm_mon, inOutTm->tm_mday,
-		inOutTm->tm_hour, inOutTm->tm_min, inOutTm->tm_sec);
-
-	UDate timeInMillis = calendar.getTime(icuStatus);
-	if (!U_SUCCESS(icuStatus))
-		return B_ERROR;
-	timeOut = (time_t)((int64_t)timeInMillis / 1000);
-
-	return _FillTmValues(fTimeZone, &timeOut, inOutTm);
+status_t
+ICUTimeConversion::Timegm(struct tm* inOutTm, time_t& timeOut)
+{
+	const TimeZone* icuTimeZone = TimeZone::getGMT();
+	return _Mktime(icuTimeZone, inOutTm, timeOut);
 }
 
 
@@ -229,9 +252,35 @@ ICUTimeConversion::_FillTmValues(const TimeZone* icuTimeZone,
 		+ calendar.get(UCAL_DST_OFFSET, icuStatus)) / 1000;
 	if (!U_SUCCESS(icuStatus))
 		return B_ERROR;
-	tmOut->tm_zone = fDataBridge->addrOfTZName[tmOut->tm_isdst ? 1 : 0];
 
+	tmOut->tm_zone = fDataBridge->addrOfTZName[tmOut->tm_isdst ? 1 : 0];
 	return B_OK;
+}
+
+
+status_t
+ICUTimeConversion::_Mktime(const TimeZone* icuTimeZone,
+	struct tm* inOutTm, time_t& timeOut)
+{
+	if (icuTimeZone == NULL)
+		return B_NO_INIT;
+
+	UErrorCode icuStatus = U_ZERO_ERROR;
+	GregorianCalendar calendar(*icuTimeZone, fTimeData.ICULocale(),
+		icuStatus);
+	if (!U_SUCCESS(icuStatus))
+		return B_ERROR;
+
+	calendar.setLenient(TRUE);
+	calendar.set(inOutTm->tm_year + 1900, inOutTm->tm_mon, inOutTm->tm_mday,
+		inOutTm->tm_hour, inOutTm->tm_min, inOutTm->tm_sec);
+
+	UDate timeInMillis = calendar.getTime(icuStatus);
+	if (!U_SUCCESS(icuStatus))
+		return B_ERROR;
+	timeOut = (time_t)((int64_t)timeInMillis / 1000);
+
+	return _FillTmValues(icuTimeZone, &timeOut, inOutTm);
 }
 
 

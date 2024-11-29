@@ -65,7 +65,7 @@
 # define PAD(f, c, n) __printf_pad (f, c, n)
 ssize_t __printf_pad __P ((FILE *, char pad, int n)); /* In vfprintf.c.  */
 #endif	/* USE_IN_LIBIO */
-
+
 /* Macros for doing the actual output.  */
 
 #define outchar(ch)							      \
@@ -107,7 +107,7 @@ ssize_t __printf_pad __P ((FILE *, char pad, int n)); /* In vfprintf.c.  */
       done += len;							      \
     }									      \
   while (0)
-
+
 /* We use the GNU MP library to handle large numbers.
 
    An MP variable occupies a varying number of entries in its array.  We keep
@@ -119,8 +119,6 @@ ssize_t __printf_pad __P ((FILE *, char pad, int n)); /* In vfprintf.c.  */
   memcpy (dst, src, (dst##size = src##size) * sizeof (mp_limb_t))
 #define MPN_GE(u,v) \
   (u##size > v##size || (u##size == v##size && __mpn_cmp (u, v, u##size) >= 0))
-
-extern int __isinfl (long double), __isnanl (long double);
 
 extern mp_size_t __mpn_extract_double (mp_ptr res_ptr, mp_size_t size,
 				       int *expt, int *is_neg,
@@ -188,7 +186,7 @@ __printf_fp (FILE *fp,
   /* Digit which is result of last hack_digit() call.  */
   wchar_t digit;
 
-  /* The type of output format that will be used: 'e'/'E' or 'f'.  */
+  /* The type of output format that will be used: 'e'/'E' or 'f'/'F'.  */
   int type;
 
   /* Counter for number of written characters.	*/
@@ -208,7 +206,7 @@ __printf_fp (FILE *fp,
       mp_limb_t hi;
 
 hack_digit:
-      if (expsign != 0 && type == 'f' && exponent-- > 0)
+      if (expsign != 0 && _tolower (type) == 'f' && exponent-- > 0)
 	hi = 0;
       else if (scalesize == 0)
 	{
@@ -328,7 +326,7 @@ hack_digit_end:
       fpnum.ldbl = *(const long double *) args[0];
 
       /* Check for special values: not a number or infinity.  */
-      if (__isnanl (fpnum.ldbl))
+      if (isnan (fpnum.ldbl))
 	{
 	  if (isupper (info->spec))
 	    {
@@ -342,7 +340,7 @@ hack_digit_end:
 	      }
 	  is_neg = 0;
 	}
-      else if (__isinfl (fpnum.ldbl))
+      else if (isinf (fpnum.ldbl))
 	{
 	  if (isupper (info->spec))
 	    {
@@ -372,7 +370,7 @@ hack_digit_end:
       fpnum.dbl = *(const double *) args[0];
 
       /* Check for special values: not a number or infinity.  */
-      if (__isnan (fpnum.dbl))
+      if (isnan (fpnum.dbl))
 	{
 	  if (isupper (info->spec))
 	    {
@@ -386,7 +384,7 @@ hack_digit_end:
 	    }
 	  is_neg = 0;
 	}
-      else if (__isinf (fpnum.dbl))
+      else if (isinf (fpnum.dbl))
 	{
 	  if (isupper (info->spec))
 	    {
@@ -817,9 +815,9 @@ hack_digit_end:
 	dig_max = INT_MAX;		/* Unlimited.  */
 	significant = 1;		/* Does not matter here.  */
       }
-    else if (info->spec == 'f')
+    else if (_tolower (info->spec) == 'f')
       {
-	type = 'f';
+	type = info->spec;
 	fracdig_min = fracdig_max = info->prec < 0 ? 6 : info->prec;
 	if (expsign == 0)
 	  {
@@ -890,7 +888,7 @@ hack_digit_end:
     wcp = wstartp = wbuffer + 2;	/* Let room for rounding.  */
 
     /* Do the real work: put digits in allocated buffer.  */
-    if (expsign == 0 || type != 'f')
+    if (expsign == 0 || _tolower (type) != 'f')
       {
 	assert (expsign == 0 || intdig_max == 1);
 	while (intdig_no < intdig_max)
@@ -994,7 +992,7 @@ hack_digit_callee3:
 	    else
 	      /* It is more critical.  All digits were 9's.  */
 	      {
-		if (type != 'f')
+		if (_tolower (type) != 'f')
 		  {
 		    *wstartp = '1';
 		    exponent += expsign == 0 ? 1 : -1;
@@ -1059,7 +1057,7 @@ hack_digit_callee3:
 			  ngroups);
 
     /* Write the exponent if it is needed.  */
-    if (type != 'f')
+    if (_tolower (type) != 'f')
       {
 	*wcp++ = (wchar_t) type;
 	*wcp++ = expsign ? L'-' : L'+';
@@ -1162,7 +1160,7 @@ hack_digit_callee3:
   }
   return done;
 }
-
+
 /* Return the number of extra grouping characters that will be inserted
    into a number with INTDIG_MAX integer digits.  */
 

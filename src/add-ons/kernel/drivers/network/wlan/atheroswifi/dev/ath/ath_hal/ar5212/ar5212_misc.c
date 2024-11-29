@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5212/ar5212_misc.c 281128 2015-04-06 01:12:53Z adrian $
  */
 #include "opt_ah.h"
 
@@ -621,7 +621,7 @@ ar5212SetCoverageClass(struct ath_hal *ah, uint8_t coverageclass, int now)
 		 * timeouts. This value is in core clocks.
   		 */
 		timeout = ACK_CTS_TIMEOUT_11A + (coverageclass * 3 * clkRate);
-	
+
 		/*
 		 * Write the values: slot, eifs, ack/cts timeouts.
 		 */
@@ -1192,7 +1192,6 @@ ar5212EnableDfs(struct ath_hal *ah, HAL_PHYERR_PARAM *pe)
 		val &= ~ AR_PHY_RADAR_0_ENA;
 
 	if (IS_5413(ah)) {
-
 		if (pe->pe_blockradar == 1)
 			OS_REG_SET_BIT(ah, AR_PHY_RADAR_2,
 			    AR_PHY_RADAR_2_BLOCKOFDMWEAK);
@@ -1456,4 +1455,31 @@ void
 ar5212SetChainMasks(struct ath_hal *ah, uint32_t tx_chainmask,
     uint32_t rx_chainmask)
 {
+}
+
+/*
+ * Get the current NAV value from the hardware.
+ *
+ * 0xdeadbeef indicates the hardware is currently powered off.
+ */
+u_int
+ar5212GetNav(struct ath_hal *ah)
+{
+	uint32_t reg;
+
+	reg = OS_REG_READ(ah, AR_NAV);
+
+	if (reg == 0xdeadbeef)
+		return (0);
+	return (reg);
+}
+
+/*
+ * Set the current NAV value to the hardware.
+ */
+void
+ar5212SetNav(struct ath_hal *ah, u_int val)
+{
+
+	OS_REG_WRITE(ah, AR_NAV, val);
 }

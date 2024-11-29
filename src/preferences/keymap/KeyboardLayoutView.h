@@ -17,13 +17,15 @@
 #include "KeyboardLayout.h"
 
 
+class BInputServerDevice;
 class BMenuItem;
 class Keymap;
 
 
 class KeyboardLayoutView : public BView {
 public:
-								KeyboardLayoutView(const char* name);
+								KeyboardLayoutView(const char* name,
+									BInputServerDevice* dev = NULL);
 								~KeyboardLayoutView();
 
 			void				SetKeyboardLayout(KeyboardLayout* layout);
@@ -60,7 +62,6 @@ private:
 				kIndicator
 			};
 
-			void				_InitOffscreen();
 			void				_LayoutKeyboard();
 			void				_DrawKeyButton(BView* view, BRect& rect,
 									BRect updateRect, rgb_color base,
@@ -96,15 +97,12 @@ private:
 			BRect				_FrameFor(const Key* key);
 			void				_SetFontSize(BView* view, key_kind keyKind);
 			void				_EvaluateDropTarget(BPoint point);
-			void				_SendFakeKeyDown(const Key* key);
+			void				_SendKeyDown(const Key* key);
 
 			BMenuItem*			_CreateSwapModifiersMenuItem(uint32 modifier,
 									uint32 displayModifier, uint32 oldCode,
 									uint32 newCode);
 			const char*			_NameForModifier(uint32 modifier, bool pretty);
-
-			BBitmap*			fOffscreenBitmap;
-			BView*				fOffscreenView;
 
 			KeyboardLayout*		fLayout;
 			Keymap*				fKeymap;
@@ -130,6 +128,8 @@ private:
 			BPoint				fOffset;
 			float				fFactor;
 			float				fGap;
+
+			BInputServerDevice*	fDevice;
 };
 
 

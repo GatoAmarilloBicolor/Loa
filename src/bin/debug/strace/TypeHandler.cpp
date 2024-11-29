@@ -10,6 +10,8 @@
 #include "TypeHandler.h"
 
 #include <string.h>
+#include <String.h>
+#include <sys/uio.h>
 
 #include "Context.h"
 #include "MemoryReader.h"
@@ -90,6 +92,40 @@ TypeHandlerFactory<bool>::Create()
 	return new TypeHandlerImpl<bool>();
 }
 
+// status_t
+class StatusTypeHandler : public TypeHandler {
+public:
+	StatusTypeHandler() {}
+
+	string GetParameterValue(Context &context, Parameter *, const void *address)
+	{
+		return RenderValue(context, get_value<status_t>(address));
+	}
+
+	string GetReturnValue(Context &context, uint64 value)
+	{
+		return RenderValue(context, value);
+	}
+
+private:
+	string RenderValue(Context &context, uint64 value) const
+	{
+		string rendered = context.FormatUnsigned(value);
+		if (value <= UINT32_MAX && (status_t)value <= 0) {
+			rendered += " ";
+			rendered += strerror(value);
+		}
+		return rendered;
+	}
+};
+
+TypeHandler *
+create_status_t_type_handler()
+{
+	return new StatusTypeHandler;
+}
+
+
 // read_string
 static
 string
@@ -102,22 +138,10 @@ read_string(Context &context, void *data)
 	int32 bytesRead;
 	status_t error = context.Reader().Read(data, buffer, sizeof(buffer), bytesRead);
 	if (error == B_OK) {
-//		return string("\"") + string(buffer, bytesRead) + "\"";
-//string result("\"");
-//result += string(buffer, bytesRead);
-//result += "\"";
-//return result;
-
-// TODO: Unless I'm missing something obvious, our STL string class is broken.
-// The appended "\"" doesn't appear in either of the above cases.
-
-		int32 len = strnlen(buffer, sizeof(buffer));
-		char largeBuffer[259];
-		largeBuffer[0] = '"';
-		memcpy(largeBuffer + 1, buffer, len);
-		largeBuffer[len + 1] = '"';
-		largeBuffer[len + 2] = '\0';
-		return largeBuffer;
+		string result("\"");
+		result += string(buffer, strnlen(buffer, sizeof(buffer)));
+		result += "\"";
+		return result;
 	}
 
 	return context.FormatPointer(data) + " (" + strerror(error) + ")";
@@ -155,6 +179,8 @@ TypeHandlerImpl<const char*>::GetReturnValue(Context &context, uint64 value)
 	return read_string(context, (void *)value);
 }
 
+// #pragma mark - enums, flags, enum_flags
+
 EnumTypeHandler::EnumTypeHandler(const EnumMap &m) : fMap(m) {}
 
 string
@@ -177,6 +203,93 @@ EnumTypeHandler::RenderValue(Context &context, unsigned int value) const
 		EnumMap::const_iterator i = fMap.find(value);
 		if (i != fMap.end() && i->second != NULL)
 			return i->second;
+	}
+
+	return context.FormatUnsigned(value);
+}
+
+FlagsTypeHandler::FlagsTypeHandler(const FlagsList &m) : fList(m) {}
+
+string
+FlagsTypeHandler::GetParameterValue(Context &context, Parameter *,
+	const void *address)
+{
+	return RenderValue(context, get_value<unsigned int>(address));
+}
+
+string
+FlagsTypeHandler::GetReturnValue(Context &context, uint64 value)
+{
+	return RenderValue(context, value);
+}
+
+string
+FlagsTypeHandler::RenderValue(Context &context, unsigned int value) const
+{
+	if (context.GetContents(Context::ENUMERATIONS)) {
+		// Enumerate the list in reverse. That way, any later values which use
+		// the same bits as earlier values will be processed correctly.
+		string rendered;
+		FlagsList::const_reverse_iterator i = fList.rbegin();
+		for (; i != fList.rend(); i++) {
+			if (value == 0)
+				break;
+			if ((value & i->value) != i->value)
+				continue;
+
+			if (!rendered.empty())
+				rendered.insert(0, "|");
+			rendered.insert(0, i->name);
+			value &= ~(i->value);
+		}
+		if (value != 0) {
+			if (!rendered.empty())
+				rendered += "|";
+
+			char hex[20];
+			snprintf(hex, sizeof(hex), "0x%x", value);
+			rendered += hex;
+		}
+		if (rendered.empty())
+			rendered = "0";
+		return rendered;
+	}
+
+	return context.FormatUnsigned(value);
+}
+
+
+EnumFlagsTypeHandler::EnumFlagsTypeHandler(const EnumMap &m, const FlagsTypeHandler::FlagsList &l)
+	:
+	EnumTypeHandler(m), fList(l) {}
+
+
+string
+EnumFlagsTypeHandler::RenderValue(Context &context, unsigned int value) const
+{
+	if (context.GetContents(Context::ENUMERATIONS)) {
+		string rendered;
+		FlagsTypeHandler::FlagsList::const_reverse_iterator i = fList.rbegin();
+		for (; i != fList.rend(); i++) {
+			if (value == 0)
+				break;
+			if ((value & i->value) != i->value)
+				continue;
+
+			if (!rendered.empty())
+				rendered.insert(0, "|");
+			rendered.insert(0, i->name);
+			value &= ~(i->value);
+		}
+
+		EnumMap::const_iterator j = fMap.find(value);
+		if (j != fMap.end() && j->second != NULL) {
+			if (!rendered.empty())
+				rendered.insert(0, "|");
+			rendered.insert(0, j->second);
+		}
+
+		return rendered;
 	}
 
 	return context.FormatUnsigned(value);
@@ -225,24 +338,39 @@ obtain_pointer_data(Context &context, Type *data, void *address, uint32 what)
 
 template<typename Type>
 static string
-format_signed_integer_pointer(Context &context, void *address)
+format_signed_integer_pointer(Context &context, void *address, uint32 count)
 {
 	Type data;
 
-	if (obtain_pointer_data(context, &data, address, Context::POINTER_VALUES))
-		return "[" + context.FormatSigned(data, sizeof(Type)) + "]";
-
+	if (obtain_pointer_data(context, &data, address, Context::POINTER_VALUES)) {
+		string formatted = "[" + context.FormatSigned(data);
+		for (uint32 i = 1; i < count; i++) {
+			address = (void*)((Type*)address + 1);
+			obtain_pointer_data(context, &data, address, Context::POINTER_VALUES);
+			formatted += ", " + context.FormatSigned(data);
+		}
+		formatted += "]";
+		return formatted;
+	}
 	return context.FormatPointer(address);
 }
 
 template<typename Type>
 static string
-format_unsigned_integer_pointer(Context &context, void *address)
+format_unsigned_integer_pointer(Context &context, void *address, uint32 count)
 {
 	Type data;
 
-	if (obtain_pointer_data(context, &data, address, Context::POINTER_VALUES))
-		return "[" + context.FormatUnsigned(data) + "]";
+	if (obtain_pointer_data(context, &data, address, Context::POINTER_VALUES)) {
+		string formatted = "[" + context.FormatUnsigned(data);
+		for (uint32 i = 1; i < count; i++) {
+			address = (void*)((Type*)address + 1);
+			obtain_pointer_data(context, &data, address, Context::POINTER_VALUES);
+			formatted += ", " + context.FormatUnsigned(data);
+		}
+		formatted += "]";
+		return formatted;
+	}
 
 	return context.FormatPointer(address);
 }
@@ -279,29 +407,31 @@ public:
 
 template<typename Type>
 class SignedIntegerPointerTypeHandler : public TypeHandler {
-	string GetParameterValue(Context &context, Parameter *,
+	string GetParameterValue(Context &context, Parameter *parameter,
 				 const void *address)
 	{
-		return format_signed_integer_pointer<Type>(context, *(void **)address);
+		return format_signed_integer_pointer<Type>(context, *(void **)address,
+			parameter->Count());
 	}
 
 	string GetReturnValue(Context &context, uint64 value)
 	{
-		return format_signed_integer_pointer<Type>(context, (void *)value);
+		return format_signed_integer_pointer<Type>(context, (void *)value, 1);
 	}
 };
 
 template<typename Type>
 class UnsignedIntegerPointerTypeHandler : public TypeHandler {
-	string GetParameterValue(Context &context, Parameter *,
+	string GetParameterValue(Context &context, Parameter *parameter,
 				 const void *address)
 	{
-		return format_unsigned_integer_pointer<Type>(context, *(void **)address);
+		return format_unsigned_integer_pointer<Type>(context, *(void **)address,
+			parameter->Count());
 	}
 
 	string GetReturnValue(Context &context, uint64 value)
 	{
-		return format_unsigned_integer_pointer<Type>(context, (void *)value);
+		return format_unsigned_integer_pointer<Type>(context, (void *)value, 1);
 	}
 };
 

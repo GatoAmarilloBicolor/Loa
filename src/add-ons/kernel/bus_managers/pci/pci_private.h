@@ -48,7 +48,7 @@ phys_addr_t		pci_ram_address(phys_addr_t physical_address_in_system_memory);
 
 status_t 	pci_find_capability(uint8 bus, uint8 device, uint8 function,
 	uint8 cap_id, uint8 *offset);
-status_t 	pci_find_extended_capability(uint8 bus, uint8 device, uint8 function, 
+status_t 	pci_find_extended_capability(uint8 bus, uint8 device, uint8 function,
 	uint16 cap_id, uint16 *offset);
 
 status_t	pci_reserve_device(uchar virtualBus, uchar device, uchar function,
@@ -58,8 +58,11 @@ status_t	pci_unreserve_device(uchar virtualBus, uchar device, uchar function,
 
 status_t	pci_update_interrupt_line(uchar virtualBus, uchar device,
 				uchar function, uchar newInterruptLineValue);
+status_t	pci_get_powerstate(uchar virtualBus, uint8 device,
+				uint8 function, uint8* state);
+status_t 	pci_set_powerstate(uchar virtualBus, uint8 device,
+				uint8 function, uint8 newState);
 
-status_t 	pci_io_init(void);
 uint8		pci_read_io_8(int mapped_io_addr);
 void		pci_write_io_8(int mapped_io_addr, uint8 value);
 uint16		pci_read_io_16(int mapped_io_addr);

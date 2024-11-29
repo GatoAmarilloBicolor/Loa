@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2008, Haiku Inc. All rights reserved.
+ * Copyright 2002-2022, Haiku Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Copyright 2001, Thomas Kurschel. All rights reserved.
@@ -334,7 +334,7 @@ using namespace Module;
  * first.
  */
 static const directory_which kModulePaths[] = {
-	B_BEOS_ADDONS_DIRECTORY,
+	B_SYSTEM_ADDONS_DIRECTORY,
 	B_SYSTEM_NONPACKAGED_ADDONS_DIRECTORY,
 	B_USER_ADDONS_DIRECTORY,
 	B_USER_NONPACKAGED_ADDONS_DIRECTORY,
@@ -624,6 +624,11 @@ search_module(const char* name, module_image** _moduleImage)
 
 	TRACE(("search_module(%s)\n", name));
 
+	if (gKernelStartup) {
+		panic("search_module called during kernel startup! name: \"%s\"", name);
+		return NULL;
+	}
+
 	for (i = kNumModulePaths; i-- > 0;) {
 		if (sDisableUserAddOns && i >= kFirstNonSystemModulePath)
 			continue;
@@ -897,7 +902,7 @@ iterator_get_next_module(module_iterator* iterator, char* buffer,
 	}
 
 	if (iterator->loaded_modules) {
-		recursive_lock_lock(&sModulesLock);
+		RecursiveLocker _(sModulesLock);
 		ModuleTable::Iterator hashIterator(sModulesHash);
 
 		for (int32 i = 0; hashIterator.HasNext(); i++) {
@@ -910,13 +915,10 @@ iterator_get_next_module(module_iterator* iterator, char* buffer,
 					*_bufferSize = strlcpy(buffer, module->name, *_bufferSize);
 					iterator->module_offset = i + 1;
 
-					recursive_lock_unlock(&sModulesLock);
 					return B_OK;
 				}
 			}
 		}
-
-		recursive_lock_unlock(&sModulesLock);
 
 		// prevent from falling into modules hash iteration again
 		iterator->loaded_modules = false;
@@ -1367,7 +1369,7 @@ ModuleNotificationService::_AddNode(dev_t device, ino_t node, const char* path,
 		return status;
 	}
 
-	//dprintf("  add %s %ld:%Ld (%s)\n", flags == B_WATCH_DIRECTORY
+	//dprintf("  add %s %ld:%lld (%s)\n", flags == B_WATCH_DIRECTORY
 	//	? "dir" : "file", device, node, path);
 
 	entry->device = device;
@@ -1737,6 +1739,28 @@ load_module(const char* path, module_info*** _modules)
 
 	*_modules = moduleImage->info;
 	return B_OK;
+}
+
+
+status_t
+module_get_path(const char* moduleName, char** filePath)
+{
+	if (moduleName == NULL || filePath == NULL)
+		return B_BAD_VALUE;
+
+	RecursiveLocker _(sModulesLock);
+
+	// Check if the module and its image are already cached in the module system.
+	module* foundModule = sModulesHash->Lookup(moduleName);
+	if (foundModule != NULL) {
+		if (foundModule->module_image == NULL)
+			return ENOTSUP;
+				// The module is built-in and has no associated image.
+		*filePath = strdup(foundModule->module_image->path);
+		return *filePath != NULL ? B_OK : B_NO_MEMORY;
+	}
+
+	return B_NAME_NOT_FOUND;
 }
 
 

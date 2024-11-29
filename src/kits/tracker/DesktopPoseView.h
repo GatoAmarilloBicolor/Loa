@@ -32,8 +32,8 @@ names are registered trademarks or trademarks of their respective holders.
 All rights reserved.
 */
 
-//	DesktopPoseView adds support for displaying integrated desktops
-//	from multiple volumes to BPoseView
+// DesktopPoseView adds support for displaying integrated desktops
+// from multiple volumes to BPoseView
 #ifndef _DESKTOP_POSE_VIEW_H
 #define _DESKTOP_POSE_VIEW_H
 
@@ -71,6 +71,9 @@ protected:
 
 	void AdaptToVolumeChange(BMessage*);
 	void AdaptToDesktopIntegrationChange(BMessage*);
+
+	virtual rgb_color TextColor(bool selected = false) const;
+	virtual rgb_color BackColor(bool selected = false) const;
 
 private:
 	typedef BPoseView _inherited;

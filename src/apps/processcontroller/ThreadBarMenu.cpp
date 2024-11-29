@@ -1,21 +1,7 @@
 /*
-	ProcessController © 2000, Georges-Edouard Berenger, All Rights Reserved.
-	Copyright (C) 2004 beunited.org 
-
-	This library is free software; you can redistribute it and/or 
-	modify it under the terms of the GNU Lesser General Public 
-	License as published by the Free Software Foundation; either 
-	version 2.1 of the License, or (at your option) any later version. 
-
-	This library is distributed in the hope that it will be useful, 
-	but WITHOUT ANY WARRANTY; without even the implied warranty of 
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU 
-	Lesser General Public License for more details. 
-
-	You should have received a copy of the GNU Lesser General Public 
-	License along with this library; if not, write to the Free Software 
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA	
-*/
+ * Copyright 2000, Georges-Edouard Berenger. All rights reserved.
+ * Distributed under the terms of the MIT License.
+ */
 
 #include "ThreadBarMenu.h"
 
@@ -102,7 +88,7 @@ ThreadBarMenu::AddNew()
 				k = fThreadsRecCount; // flag that the search didn't work.
 		}
 		if (k == fThreadsRecCount) {
-//			printf("*** Thread %d %s/%s, user %Ld, kernel %Ld\n", info.thread, info.name, info.user_time, info.kernel_time);
+//			printf("*** Thread %d %s/%s, user %lld, kernel %lld\n", info.thread, info.name, info.user_time, info.kernel_time);
 			// this is a new thread...
 			k = 0;
 			while (k < fThreadsRecCount && !(fThreadsRec[k].thread == -1 || fThreadsRec[k].last_round+1 < fRound))

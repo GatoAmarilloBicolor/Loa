@@ -1,20 +1,22 @@
 /*
- * Copyright 2017-2018, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2017-2021, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
 #include "ServerSettings.h"
 
-#include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
 
-#include <AppFileInfo.h>
 #include <Application.h>
 #include <Autolock.h>
 #include <NetworkInterface.h>
 #include <NetworkRoster.h>
 #include <Roster.h>
 #include <Url.h>
+
+#include "AppUtils.h"
+#include "Logger.h"
 
 
 #define BASEURL_DEFAULT "https://depot.haiku-os.org"
@@ -35,12 +37,12 @@ status_t
 ServerSettings::SetBaseUrl(const BUrl& value)
 {
 	if (!value.IsValid()) {
-		fprintf(stderr, "the url is not valid\n");
+		HDERROR("the url is not valid");
 		return B_BAD_VALUE;
 	}
 
 	if (value.Protocol() != "http" && value.Protocol() != "https") {
-		fprintf(stderr, "the url protocol must be 'http' or 'https'\n");
+		HDERROR("the url protocol must be 'http' or 'https'");
 		return B_BAD_VALUE;
 	}
 
@@ -78,35 +80,11 @@ ServerSettings::_InitUserAgent()
 const BString
 ServerSettings::_GetUserAgentVersionString()
 {
-	app_info info;
-
-	if (be_app->GetAppInfo(&info) != B_OK) {
-		fprintf(stderr, "Unable to get the application info\n");
-		be_app->Quit();
-		return BString(USERAGENT_FALLBACK_VERSION);
-	}
-
-	BFile file(&info.ref, B_READ_ONLY);
-
-	if (file.InitCheck() != B_OK) {
-		fprintf(stderr, "Unable to access the application info file\n");
-		be_app->Quit();
-		return BString(USERAGENT_FALLBACK_VERSION);
-	}
-
-	BAppFileInfo appFileInfo(&file);
-	version_info versionInfo;
-
-	if (appFileInfo.GetVersionInfo(
-		&versionInfo, B_APP_VERSION_KIND) != B_OK) {
-		fprintf(stderr, "Unable to establish the application version\n");
-		be_app->Quit();
-		return BString(USERAGENT_FALLBACK_VERSION);
-	}
-
 	BString result;
-	result.SetToFormat("%" B_PRId32 ".%" B_PRId32 ".%" B_PRId32,
-		versionInfo.major, versionInfo.middle, versionInfo.minor);
+	if (AppUtils::GetAppVersionString(result) != B_OK) {
+		be_app->Quit();
+		return BString(USERAGENT_FALLBACK_VERSION);
+	}
 	return result;
 }
 

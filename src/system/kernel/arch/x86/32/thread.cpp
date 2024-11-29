@@ -200,8 +200,8 @@ arch_thread_init_kthread_stack(Thread* thread, void* _stack, void* _stackTop,
 		*--stackTop = 0;
 
 	// save the stack position
-	thread->arch_info.current_stack.esp = stackTop;
-	thread->arch_info.current_stack.ss = (addr_t*)KERNEL_DATA_SELECTOR;
+	thread->arch_info.current_stack.esp = (uint32*)stackTop;
+	thread->arch_info.current_stack.ss = (uint32*)KERNEL_DATA_SELECTOR;
 }
 
 
@@ -251,8 +251,7 @@ arch_thread_enter_userspace(Thread* thread, addr_t entry, void* args1,
 	frame.ds = USER_DATA_SELECTOR;
 	frame.ip = entry;
 	frame.cs = USER_CODE_SELECTOR;
-	frame.flags = X86_EFLAGS_RESERVED1 | X86_EFLAGS_INTERRUPT
-		| (3 << X86_EFLAGS_IO_PRIVILEG_LEVEL_SHIFT);
+	frame.flags = X86_EFLAGS_RESERVED1 | X86_EFLAGS_INTERRUPT;
 	frame.user_sp = stackTop;
 	frame.user_ss = USER_DATA_SELECTOR;
 
@@ -360,6 +359,7 @@ arch_setup_signal_frame(Thread* thread, struct sigaction* action,
 	frame->ip = x86_get_user_signal_handler_wrapper(
 		(action->sa_flags & SA_BEOS_COMPATIBLE_HANDLER) != 0,
 		thread->team->commpage_address);
+	frame->flags &= ~(X86_EFLAGS_TRAP | X86_EFLAGS_DIRECTION);
 
 	return B_OK;
 }

@@ -130,7 +130,7 @@ codec_table codecs[] =
 	{ CODEC_ID_AD1887,	0xffffffff, ad1881_init,	"Analog Devices AD1887 SoundMAX" B_UTF8_REGISTERED },
 	{ CODEC_ID_AD1888,	0xffffffff, ad1881_init,	"Analog Devices AD1888 SoundMAX" B_UTF8_REGISTERED },
 	{ CODEC_ID_AD1980,	0xffffffff, ad1980_init,	"Analog Devices AD1980 SoundMAX" B_UTF8_REGISTERED },
-	{ 0x41445371,		0xffffffff, default_init,	"Analog Devices 0x41445371 (???)" },
+	{ 0x41445371,		0xffffffff, default_init,	"Analog Devices 0x41445371 (\?\?\?)" },
 	{ 0x41445372,		0xffffffff, default_init,	"Analog Devices AD1981A SoundMAX" B_UTF8_REGISTERED },
 	{ CODEC_ID_AD1981B,	0xffffffff, ad1981b_init,	"Analog Devices AD1981B SoundMAX" B_UTF8_REGISTERED },
 	{ CODEC_ID_AD1985,	0xffffffff, default_init,	"Analog Devices AD1985 SoundMAX" B_UTF8_REGISTERED },
@@ -177,8 +177,8 @@ codec_table codecs[] =
 	{ 0x49544560,		0xffffffff, default_init,	"Integrated Technology Express ITE2646E" },
 	{ 0x4e534331,		0xffffffff, default_init,	"National Semiconductor LM4549" },
 	{ CODEC_ID_STAC9700,0xffffffff, default_init,	"SigmaTel STAC9700/9783/9784" },
-	{ CODEC_ID_STAC9704,0xffffffff, default_init,	"SigmaTel STAC9701/03, STAC9704/07, STAC9705 (???)" },
-	{ CODEC_ID_STAC9705,0xffffffff, default_init,	"SigmaTel STAC9704 (???)" },
+	{ CODEC_ID_STAC9704,0xffffffff, default_init,	"SigmaTel STAC9701/03, STAC9704/07, STAC9705 (\?\?\?)" },
+	{ CODEC_ID_STAC9705,0xffffffff, default_init,	"SigmaTel STAC9704 (\?\?\?)" },
 	{ CODEC_ID_STAC9708,0xffffffff, stac9708_init,	"SigmaTel STAC9708/9711" },
 	{ CODEC_ID_STAC9721,0xffffffff, stac9721_init,	"SigmaTel STAC9721/9723" },
 	{ CODEC_ID_STAC9744,0xffffffff, stac9744_init,	"SigmaTel STAC9744" },
@@ -313,7 +313,7 @@ ac97_attach(ac97_dev **_dev, codec_reg_read reg_read, codec_reg_write reg_write,
 	/* set record line in */
 	ac97_reg_update(dev, AC97_RECORD_SELECT, 0x0404);
 
-	LOG(("codec vendor id      = %#08lx\n", dev->codec_id));
+	LOG(("codec vendor id      = %#08" B_PRIx32 "\n", dev->codec_id));
 	LOG(("codec description     = %s\n", dev->codec_info));
 	LOG(("codec 3d enhancement = %s\n", dev->codec_3d_stereo_enhancement));
 
@@ -438,7 +438,10 @@ ac97_set_rate(ac97_dev *dev, uint8 reg, uint32 rate)
 
 	value = (uint32)((rate * 48000ULL) / dev->clock); /* need 64 bit calculation for rates 96000 or higher */
 
-	LOG(("ac97_set_rate: clock = %ld, rate = %ld, value = %ld\n", dev->clock, rate, value));
+	LOG(("ac97_set_rate: clock = %" B_PRIu32 ", "
+		"rate = %" B_PRIu32 ", "
+		"value = %" B_PRIu32 "\n",
+		dev->clock, rate, value));
 
 	/* if double rate audio is currently enabled, divide value by 2 */
 	if (ac97_reg_cached_read(dev, AC97_EXTENDED_STAT_CTRL) & 0x0002)
@@ -483,7 +486,7 @@ ac97_get_rate(ac97_dev *dev, uint8 reg, uint32 *rate)
 void
 ac97_set_clock(ac97_dev *dev, uint32 clock)
 {
-	LOG(("ac97_set_clock: clock = %ld\n", clock));
+	LOG(("ac97_set_clock: clock = %" B_PRIu32 "\n", clock));
 	dev->clock = clock;
 	ac97_detect_rates(dev);
 	ac97_dump_capabilities(dev);
@@ -756,7 +759,10 @@ ad1819_set_rate(ac97_dev *dev, uint8 reg, uint32 rate)
 
 	value = (uint32)((rate * 48000ULL) / dev->clock); /* need 64 bit calculation for rates 96000 or higher */
 
-	LOG(("ad1819_set_rate: clock = %ld, rate = %ld, value = %ld\n", dev->clock, rate, value));
+	LOG(("ad1819_set_rate: clock = %" B_PRIu32 ", "
+		"rate = %" B_PRIu32 ", "
+		"value = %" B_PRIu32 "\n",
+		dev->clock, rate, value));
 
 	if (value < 0x1B58 || value > 0xBB80)
 		return false;

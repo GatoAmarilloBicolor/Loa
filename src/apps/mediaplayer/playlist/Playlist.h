@@ -17,6 +17,7 @@
 #include "FilePlaylistItem.h"
 #include "PlaylistItem.h"
 #include "UrlPlaylistItem.h"
+#include "PlaylistFileReader.h"
 
 class BDataIO;
 class BMessage;
@@ -95,7 +96,8 @@ public:
 			// support functions
 			void				AppendItems(const BMessage* refsReceivedMessage,
 									int32 appendIndex
-										= APPEND_INDEX_REPLACE_PLAYLIST);
+										= APPEND_INDEX_REPLACE_PLAYLIST,
+									bool sortItems = false);
 
 	static	void				AppendToPlaylistRecursive(const entry_ref& ref,
 									Playlist* playlist);

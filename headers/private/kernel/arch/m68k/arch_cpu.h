@@ -1,6 +1,6 @@
 /*
 ** Copyright 2003-2004, Axel Dörfler, axeld@pinc-software.de. All rights reserved.
-** Distributed under the terms of the Haiku License.
+** Distributed under the terms of the MIT License.
 */
 #ifndef _KERNEL_ARCH_M68K_CPU_H
 #define _KERNEL_ARCH_M68K_CPU_H
@@ -18,8 +18,8 @@
 #define CACHE_LINE_SIZE		16
 
 
-#define set_ac()
-#define clear_ac()
+#define arch_cpu_enable_user_access()
+#define arch_cpu_disable_user_access()
 
 
 #define SR_IP_MASK 0x0700

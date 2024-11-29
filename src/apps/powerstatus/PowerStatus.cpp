@@ -8,7 +8,6 @@
 
 
 #include "PowerStatus.h"
-#include "PowerStatusWindow.h"
 
 #include <Alert.h>
 #include <Application.h>
@@ -20,6 +19,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ACPIDriverInterface.h"
+#include "APMDriverInterface.h"
+#include "PowerStatusWindow.h"
+
 
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "PowerStatus"
@@ -30,8 +33,12 @@ class PowerStatus : public BApplication {
 		PowerStatus();
 		virtual	~PowerStatus();
 
+		virtual void	ArgvReceived(int32 argc, char** argv);
 		virtual	void	ReadyToRun();
 		virtual void	AboutRequested();
+
+	private:
+		bool fAutoInstallInDeskbar;
 };
 
 
@@ -58,7 +65,9 @@ our_image(image_info& image)
 
 
 PowerStatus::PowerStatus()
-	: BApplication(kSignature)
+	:
+	BApplication(kSignature),
+	fAutoInstallInDeskbar(false)
 {
 }
 
@@ -69,29 +78,61 @@ PowerStatus::~PowerStatus()
 
 
 void
+PowerStatus::ArgvReceived(int32 argc, char** argv)
+{
+	if (argc <= 1)
+		return;
+
+	if (strcmp(argv[1], "--help") == 0
+		|| strcmp(argv[1], "-h") == 0) {
+		const char* str = "PowerStatus options:\n"
+			"\t--deskbar\tautomatically add replicant to Deskbar\n"
+			"\t--help\t\tprint this info and exit";
+		puts(str);
+		Quit();
+		return;
+	}
+
+	if (strcmp(argv[1], "--deskbar") == 0)
+		fAutoInstallInDeskbar = true;
+}
+
+
+void
 PowerStatus::ReadyToRun()
 {
 	bool isInstalled = false;
 	bool isDeskbarRunning = true;
 
+	if (ACPIDriverInterface().Connect() != B_OK) {
+		if (APMDriverInterface().Connect() != B_OK) {
+			BAlert* alert = new BAlert("",
+				B_TRANSLATE("No supported battery detected. PowerStatus "
+				"cannot be used on your system."), B_TRANSLATE("Too bad!"),
+				NULL, NULL, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+			if (!fAutoInstallInDeskbar)
+				alert->Go();
+			Quit();
+			return;
+		}
+	}
+
 	{
 		// if the Deskbar is not alive at this point, it might be after having
 		// acknowledged the requester below
 		BDeskbar deskbar;
-#ifdef HAIKU_TARGET_PLATFORM_HAIKU
 		isDeskbarRunning = deskbar.IsRunning();
-#endif
 		isInstalled = deskbar.HasItem(kDeskbarItemName);
 	}
 
 	if (isDeskbarRunning && !isInstalled) {
-		BAlert* alert = new BAlert("", 
+		BAlert* alert = new BAlert("",
 			B_TRANSLATE("You can run PowerStatus in a window "
 			"or install it in the Deskbar."), B_TRANSLATE("Run in window"),
 			B_TRANSLATE("Install in Deskbar"), NULL, B_WIDTH_AS_USUAL,
 			B_WARNING_ALERT);
 
-		if (alert->Go()) {
+		if (fAutoInstallInDeskbar || alert->Go()) {
 			image_info info;
 			entry_ref ref;
 
@@ -132,11 +173,10 @@ PowerStatus::AboutRequested()
 
 
 int
-main(int, char**)
+main(int argc, char* argv[])
 {
 	PowerStatus app;
 	app.Run();
 
 	return 0;
 }
-

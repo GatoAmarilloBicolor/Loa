@@ -14,10 +14,11 @@ KUndoItem::KUndoItem(const char* redo_text, int32 length, int32 offset,
 
 	if (redo_text != NULL) {
 		RedoText = (char*)malloc(length);
-		memcpy(RedoText, redo_text, length);
-		if (RedoText != NULL)
+
+		if (RedoText != NULL) {
+			memcpy(RedoText, redo_text, length);
 			fStatus = B_OK;
-		else
+		} else
 			fStatus = B_ERROR;
 	}
 }
@@ -153,7 +154,7 @@ KUndoBuffer::AddUndo(const char* text, int32 length, int32 offset,
 			int32 c_offset = CurrentUndoItem->Offset;
 			undo_type c_history = CurrentUndoItem->History;
 			if (c_history == history) {
-				switch(c_history) {
+				switch (c_history) {
 					case K_INSERTED:
 					case K_REPLACED:
 						if ((c_offset + c_length) == offset)

@@ -244,16 +244,17 @@ low_resource_manager(void*)
 {
 	bigtime_t timeout = kLowResourceInterval;
 	while (true) {
-		int32 state = low_resource_state_no_update(B_ALL_KERNEL_RESOURCES);
-		if (state != B_LOW_RESOURCE_CRITICAL) {
-			acquire_sem_etc(sLowResourceWaitSem, 1, B_RELATIVE_TIMEOUT,
-				timeout);
-		}
+		const status_t status = acquire_sem_etc(sLowResourceWaitSem, 1,
+			B_RELATIVE_TIMEOUT, timeout);
 
 		RecursiveLocker _(&sLowResourceLock);
 
-		compute_state();
-		state = low_resource_state_no_update(B_ALL_KERNEL_RESOURCES);
+		// Do not recompute the state if we actually acquired the semaphore,
+		// as in this case, it has likely been set to something specific.
+		if (status == B_TIMED_OUT)
+			compute_state();
+
+		const int32 state = low_resource_state_no_update(B_ALL_KERNEL_RESOURCES);
 
 		TRACE(("low_resource_manager: state = %ld, %ld free pages, %lld free "
 			"memory, %lu free semaphores\n", state, vm_page_num_free_pages(),
@@ -265,7 +266,7 @@ low_resource_manager(void*)
 
 		call_handlers(sLowResources);
 
-		if (state == B_LOW_RESOURCE_WARNING)
+		if (state >= B_LOW_RESOURCE_WARNING)
 			timeout = kWarnResourceInterval;
 		else
 			timeout = kLowResourceInterval;
@@ -329,20 +330,67 @@ dump_handlers(int argc, char** argv)
 void
 low_resource(uint32 resource, uint64 requirements, uint32 flags, uint32 timeout)
 {
-	// TODO: take requirements into account
-
+	int32 newState = B_NO_LOW_RESOURCE;
 	switch (resource) {
 		case B_KERNEL_RESOURCE_PAGES:
-		case B_KERNEL_RESOURCE_MEMORY:
+			if (requirements <= kCriticalPagesLimit)
+				newState = B_LOW_RESOURCE_CRITICAL;
+			else if (requirements <= kWarnPagesLimit)
+				newState = B_LOW_RESOURCE_WARNING;
+			else
+				newState = B_LOW_RESOURCE_NOTE;
+
+			if (sLowPagesState < newState)
+				sLowPagesState = newState;
+			break;
+
+		case B_KERNEL_RESOURCE_MEMORY: {
+			const off_t required = requirements;
+			if (required <= sCriticalMemoryLimit)
+				newState = B_LOW_RESOURCE_CRITICAL;
+			else if (required <= sWarnMemoryLimit)
+				newState = B_LOW_RESOURCE_WARNING;
+			else
+				newState = B_LOW_RESOURCE_NOTE;
+
+			if (sLowMemoryState < newState)
+				sLowMemoryState = newState;
+			break;
+		}
+
 		case B_KERNEL_RESOURCE_SEMAPHORES:
+			if (requirements <= 4)
+				newState = B_LOW_RESOURCE_CRITICAL;
+			else if (requirements <= 32)
+				newState = B_LOW_RESOURCE_WARNING;
+			else
+				newState = B_LOW_RESOURCE_NOTE;
+
+			if (sLowSemaphoresState < newState)
+				sLowSemaphoresState = newState;
+			break;
+
 		case B_KERNEL_RESOURCE_ADDRESS_SPACE:
+			if (requirements <= (kCriticalPagesLimit * B_PAGE_SIZE))
+				newState = B_LOW_RESOURCE_CRITICAL;
+			else if (requirements <= (kWarnPagesLimit * B_PAGE_SIZE))
+				newState = B_LOW_RESOURCE_WARNING;
+			else
+				newState = B_LOW_RESOURCE_NOTE;
+
+			if (sLowSpaceState < newState)
+				sLowSpaceState = newState;
 			break;
 	}
 
+	ConditionVariableEntry entry;
+	if ((flags & B_RELATIVE_TIMEOUT) == 0 || timeout > 0)
+		sLowResourceWaiterCondition.Add(&entry);
+
 	release_sem(sLowResourceWaitSem);
 
-	if ((flags & B_RELATIVE_TIMEOUT) == 0 || timeout > 0)
-		sLowResourceWaiterCondition.Wait(flags, timeout);
+	if (entry.Variable() != NULL)
+		entry.Wait(flags, timeout);
 }
 
 
@@ -418,7 +466,7 @@ unregister_low_resource_handler(low_resource_func function, void* data)
 
 		if (handler->function == function && handler->data == data) {
 			sLowResourceHandlers.Remove(handler);
-			free(handler);
+			delete handler;
 			return B_OK;
 		}
 	}
@@ -437,8 +485,7 @@ register_low_resource_handler(low_resource_func function, void* data,
 	TRACE(("register_low_resource_handler(function = %p, data = %p)\n",
 		function, data));
 
-	low_resource_handler *newHandler = (low_resource_handler*)malloc(
-		sizeof(low_resource_handler));
+	low_resource_handler *newHandler = new(std::nothrow) low_resource_handler;
 	if (newHandler == NULL)
 		return B_NO_MEMORY;
 
@@ -458,7 +505,7 @@ register_low_resource_handler(low_resource_func function, void* data,
 		low_resource_handler *handler = iterator.Next();
 
 		if (handler->priority >= priority) {
-			sLowResourceHandlers.Insert(last, newHandler);
+			sLowResourceHandlers.InsertBefore(last, newHandler);
 			return B_OK;
 		}
 		last = handler;

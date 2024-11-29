@@ -41,8 +41,8 @@ struct AbbreviationEntry {
 	void SetTo(uint32 code, const void* data, off_t size)
 	{
 		fCode = code;
-		fAttributesReader.SetTo(data, size, 4);
-			// address size doesn't matter here
+		fAttributesReader.SetTo(data, size, 4, false);
+			// address size and endianness don't matter here
 		fTag = fAttributesReader.ReadUnsignedLEB128(0);
 		fHasChildren = fAttributesReader.Read<uint8>(0);
 		fData = fAttributesReader.Data();
@@ -53,10 +53,12 @@ struct AbbreviationEntry {
 	uint32	Tag() const			{ return fTag; }
 	bool	HasChildren() const	{ return fHasChildren == DW_CHILDREN_yes; }
 
-	bool GetNextAttribute(uint32& name, uint32& form)
+	bool GetNextAttribute(uint32& name, uint32& form, int32& implicitConst)
 	{
 		name = fAttributesReader.ReadUnsignedLEB128(0);
 		form = fAttributesReader.ReadUnsignedLEB128(0);
+		if (form == DW_FORM_implicit_const)
+			implicitConst = fAttributesReader.ReadSignedLEB128(0);
 		return !fAttributesReader.HasOverflow() && (name != 0 || form != 0);
 	}
 

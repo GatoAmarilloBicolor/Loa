@@ -25,7 +25,6 @@
 #include <elf.h>
 #include <load_tracking.h>
 #include <util/AutoLock.h>
-#include <util/kqueue.h>
 #include <smp.h>
 
 #include "kernel_debug_config.h"
@@ -316,6 +315,9 @@ int_io_interrupt_handler(int vector, bool levelTriggered)
 			handled = true;
 	}
 
+	ASSERT_PRINT(!are_interrupts_enabled(),
+		"interrupts enabled after calling handlers for vector %d", vector);
+
 #if DEBUG_INTERRUPTS
 	sVectors[vector].trigger_count++;
 	if (status != B_UNHANDLED_INTERRUPT || handled) {
@@ -431,8 +433,8 @@ uint32 assign_cpu(void)
 	for the given interrupt number with \a data as the argument.
 */
 status_t
-install_io_interrupt_handler(long vector, interrupt_handler handler, void *data,
-	ulong flags)
+install_io_interrupt_handler(int32 vector, interrupt_handler handler, void *data,
+	uint32 flags)
 {
 	struct io_handler *io = NULL;
 	cpu_status state;
@@ -468,7 +470,7 @@ install_io_interrupt_handler(long vector, interrupt_handler handler, void *data,
 		&& sVectors[vector].assigned_cpu->cpu == -1) {
 
 		int32 cpuID = assign_cpu();
-		arch_int_assign_to_cpu(vector, cpuID);
+		cpuID = arch_int_assign_to_cpu(vector, cpuID);
 		sVectors[vector].assigned_cpu->cpu = cpuID;
 
 		cpu_ent* cpu = &gCPU[cpuID];
@@ -525,7 +527,7 @@ install_io_interrupt_handler(long vector, interrupt_handler handler, void *data,
 
 /*!	Remove a previously installed interrupt handler */
 status_t
-remove_io_interrupt_handler(long vector, interrupt_handler handler, void *data)
+remove_io_interrupt_handler(int32 vector, interrupt_handler handler, void *data)
 {
 	status_t status = B_BAD_VALUE;
 	struct io_handler *io = NULL;
@@ -608,14 +610,14 @@ remove_io_interrupt_handler(long vector, interrupt_handler handler, void *data)
 	vectors using allocate_io_interrupt_vectors() instead.
 */
 status_t
-reserve_io_interrupt_vectors(long count, long startVector, interrupt_type type)
+reserve_io_interrupt_vectors(int32 count, int32 startVector, interrupt_type type)
 {
 	MutexLocker locker(&sIOInterruptVectorAllocationLock);
 
-	for (long i = 0; i < count; i++) {
+	for (int32 i = 0; i < count; i++) {
 		if (sAllocatedIOInterruptVectors[startVector + i]) {
-			panic("reserved interrupt vector range %ld-%ld overlaps already "
-				"allocated vector %ld", startVector, startVector + count - 1,
+			panic("reserved interrupt vector range %" B_PRId32 "-%" B_PRId32 " overlaps already "
+				"allocated vector %" B_PRId32, startVector, startVector + count - 1,
 				startVector + i);
 			free_io_interrupt_vectors(i, startVector);
 			return B_BUSY;
@@ -628,8 +630,8 @@ reserve_io_interrupt_vectors(long count, long startVector, interrupt_type type)
 		sAllocatedIOInterruptVectors[startVector + i] = true;
 	}
 
-	dprintf("reserve_io_interrupt_vectors: reserved %ld vectors starting "
-		"from %ld\n", count, startVector);
+	dprintf("reserve_io_interrupt_vectors: reserved %" B_PRId32 " vectors starting "
+		"from %" B_PRId32 "\n", count, startVector);
 	return B_OK;
 }
 
@@ -639,14 +641,14 @@ reserve_io_interrupt_vectors(long count, long startVector, interrupt_type type)
 	The first vector to be used is returned in \a startVector on success.
 */
 status_t
-allocate_io_interrupt_vectors(long count, long *startVector,
+allocate_io_interrupt_vectors(int32 count, int32 *startVector,
 	interrupt_type type)
 {
 	MutexLocker locker(&sIOInterruptVectorAllocationLock);
 
-	long vector = 0;
+	int32 vector = 0;
 	bool runFound = true;
-	for (long i = 0; i < NUM_IO_VECTORS - (count - 1); i++) {
+	for (int32 i = 0; i < NUM_IO_VECTORS - (count - 1); i++) {
 		if (sAllocatedIOInterruptVectors[i])
 			continue;
 
@@ -665,11 +667,11 @@ allocate_io_interrupt_vectors(long count, long *startVector,
 	}
 
 	if (!runFound) {
-		dprintf("found no free vectors to allocate %ld io interrupts\n", count);
+		dprintf("found no free vectors to allocate %" B_PRId32 " io interrupts\n", count);
 		return B_NO_MEMORY;
 	}
 
-	for (long i = 0; i < count; i++) {
+	for (int32 i = 0; i < count; i++) {
 		sVectors[vector + i].type = type;
 		sVectors[vector + i].assigned_cpu = &sVectorCPUAssignments[vector];
 		sAllocatedIOInterruptVectors[vector + i] = true;
@@ -679,8 +681,8 @@ allocate_io_interrupt_vectors(long count, long *startVector,
 	sVectorCPUAssignments[vector].count = count;
 
 	*startVector = vector;
-	dprintf("allocate_io_interrupt_vectors: allocated %ld vectors starting "
-		"from %ld\n", count, vector);
+	dprintf("allocate_io_interrupt_vectors: allocated %" B_PRId32 " vectors starting "
+		"from %" B_PRId32 "\n", count, vector);
 	return B_OK;
 }
 
@@ -691,30 +693,39 @@ allocate_io_interrupt_vectors(long count, long *startVector,
 	a vector range.
 */
 void
-free_io_interrupt_vectors(long count, long startVector)
+free_io_interrupt_vectors(int32 count, int32 startVector)
 {
 	if (startVector + count > NUM_IO_VECTORS) {
-		panic("invalid start vector %ld or count %ld supplied to "
+		panic("invalid start vector %" B_PRId32 " or count %" B_PRId32 " supplied to "
 			"free_io_interrupt_vectors\n", startVector, count);
+		return;
 	}
 
-	dprintf("free_io_interrupt_vectors: freeing %ld vectors starting "
-		"from %ld\n", count, startVector);
+	dprintf("free_io_interrupt_vectors: freeing %" B_PRId32 " vectors starting "
+		"from %" B_PRId32 "\n", count, startVector);
 
 	MutexLocker locker(sIOInterruptVectorAllocationLock);
-	for (long i = 0; i < count; i++) {
+	for (int32 i = 0; i < count; i++) {
 		if (!sAllocatedIOInterruptVectors[startVector + i]) {
-			panic("io interrupt vector %ld was not allocated\n",
+			panic("io interrupt vector %" B_PRId32 " was not allocated\n",
 				startVector + i);
 		}
 
-		sVectors[startVector + i].assigned_cpu = NULL;
+		io_vector& vector = sVectors[startVector + i];
+		InterruptsSpinLocker vectorLocker(vector.vector_lock);
+		if (vector.assigned_cpu != NULL && vector.assigned_cpu->cpu != -1) {
+			panic("freeing io interrupt vector %" B_PRId32 " that is still asigned to a "
+				"cpu", startVector + i);
+			continue;
+		}
+
+		vector.assigned_cpu = NULL;
 		sAllocatedIOInterruptVectors[startVector + i] = false;
 	}
 }
 
 
-void assign_io_interrupt_to_cpu(long vector, int32 newCPU)
+void assign_io_interrupt_to_cpu(int32 vector, int32 newCPU)
 {
 	ASSERT(sVectors[vector].type == INTERRUPT_TYPE_IRQ);
 
@@ -734,10 +745,9 @@ void assign_io_interrupt_to_cpu(long vector, int32 newCPU)
 	list_remove_item(&cpu->irqs, sVectors[vector].assigned_cpu);
 	locker.Unlock();
 
+	newCPU = arch_int_assign_to_cpu(vector, newCPU);
+	sVectors[vector].assigned_cpu->cpu = newCPU;
 	cpu = &gCPU[newCPU];
 	locker.SetTo(cpu->irqs_lock, false);
-	sVectors[vector].assigned_cpu->cpu = newCPU;
-	arch_int_assign_to_cpu(vector, newCPU);
 	list_add_item(&cpu->irqs, sVectors[vector].assigned_cpu);
 }
-

@@ -1,6 +1,10 @@
 /*
  * Copyright 2006-2010, Stephan Aßmus <superstippi@gmx.de>.
+ * Copyright 2023, Haiku, Inc.
  * All rights reserved. Distributed under the terms of the MIT License.
+ *
+ * Authors:
+ *		Zardshard
  */
 #ifndef MAIN_WINDOW_H
 #define MAIN_WINDOW_H
@@ -55,6 +59,7 @@ public:
 
 	// BWindow interface
 	virtual	void				MessageReceived(BMessage* message);
+	virtual	void				Show();
 	virtual	bool				QuitRequested();
 	virtual	void				WorkspaceActivated(int32 workspace,
 									bool active);
@@ -73,6 +78,9 @@ public:
 			void				Open(const BMessenger& externalObserver,
 									const uint8* data, size_t size);
 
+			void				AddReferenceImage(const entry_ref& ref);
+			void				AddStyledText(BMessage* pasteData);
+
 			void				StoreSettings(BMessage* archive);
 			void				RestoreSettings(const BMessage* archive);
 
@@ -83,6 +91,8 @@ private:
 
 			void				_ImproveScrollBarLayout(BView* target);
 
+			void				_WorkspaceEntered();
+
 			bool				_CheckSaveIcon(const BMessage* currentMessage);
 			void				_PickUpActionBeforeSave();
 
@@ -90,7 +100,7 @@ private:
 			DocumentSaver*		_CreateSaver(const entry_ref& ref,
 									uint32 exportMode);
 
-			const char*			_FileName(bool preferExporter) const;
+			const entry_ref*	_FileRef(bool preferExporter) const;
 			void				_UpdateWindowTitle();
 
 private:

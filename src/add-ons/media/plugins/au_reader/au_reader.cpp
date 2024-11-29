@@ -201,10 +201,10 @@ auReader::Sniff(int32 *streamCount)
 	fBufferSize = (BUFFER_SIZE / fBlockAlign) * fBlockAlign;
 	fBuffer = malloc(fBufferSize);
 
-	TRACE("  fDataStart     %Ld\n", fDataStart);
-	TRACE("  fDataSize      %Ld\n", fDataSize);
-	TRACE("  fFrameCount    %Ld\n", fFrameCount);
-	TRACE("  fDuration      %Ld\n", fDuration);
+	TRACE("  fDataStart     %lld\n", fDataStart);
+	TRACE("  fDataSize      %lld\n", fDataSize);
+	TRACE("  fFrameCount    %lld\n", fFrameCount);
+	TRACE("  fDuration      %lld\n", fDuration);
 	TRACE("  fChannelCount  %d\n", fChannelCount);
 	TRACE("  fFrameRate     %ld\n", fFrameRate);
 	TRACE("  fBitsPerSample %d\n", fBitsPerSample);
@@ -271,10 +271,10 @@ auReader::GetFileFormatInfo(media_file_format *mff)
 						| media_file_format::B_IMPERFECTLY_SEEKABLE;
 	mff->family = B_MISC_FORMAT_FAMILY;
 	mff->version = 100;
-	strcpy(mff->mime_type, "audio/x-au");
-	strcpy(mff->file_extension, "au");
-	strcpy(mff->short_name,  "Sun audio file");
-	strcpy(mff->pretty_name, "Sun audio file");
+	strlcpy(mff->mime_type, "audio/x-au", sizeof(mff->mime_type));
+	strlcpy(mff->file_extension, "au", sizeof(mff->file_extension));
+	strlcpy(mff->short_name,  "Sun audio file", sizeof(mff->short_name));
+	strlcpy(mff->pretty_name, "Sun audio file", sizeof(mff->pretty_name));
 }
 
 
@@ -317,14 +317,14 @@ auReader::Seek(void *cookie,
 		else
 			pos = (*frame * fDataSize) / fFrameCount;
 		pos = (pos / fBlockAlign) * fBlockAlign; // round down to a block start
-		TRACE("auReader::Seek to frame %Ld, pos %Ld\n", *frame, pos);
+		TRACE("auReader::Seek to frame %lld, pos %lld\n", *frame, pos);
 	} else if (seekTo & B_MEDIA_SEEK_TO_TIME) {
 		if (fRaw)
 			pos = (*time * fFrameRate * fBitsPerFrame) / (1000000LL * 8);
 		else
 			pos = (*time * fDataSize) / fDuration;
 		pos = (pos / fBlockAlign) * fBlockAlign; // round down to a block start
-		TRACE("auReader::Seek to time %Ld, pos %Ld\n", *time, pos);
+		TRACE("auReader::Seek to time %lld, pos %lld\n", *time, pos);
 	} else {
 		return B_ERROR;
 	}
@@ -335,11 +335,11 @@ auReader::Seek(void *cookie,
 		*frame = (pos * fFrameCount) / fDataSize;
 	*time = (*frame * 1000000LL) / fFrameRate;
 
-	TRACE("auReader::Seek newtime %Ld\n", *time);
-	TRACE("auReader::Seek newframe %Ld\n", *frame);
+	TRACE("auReader::Seek newtime %lld\n", *time);
+	TRACE("auReader::Seek newframe %lld\n", *frame);
 	
 	if (pos < 0 || pos > fDataSize) {
-		TRACE("auReader::Seek invalid position %Ld\n", pos);
+		TRACE("auReader::Seek invalid position %lld\n", pos);
 		return B_ERROR;
 	}
 	

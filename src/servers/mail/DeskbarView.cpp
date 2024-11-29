@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2012, Haiku Inc. All Rights Reserved.
+ * Copyright 2004-2018, Haiku Inc. All Rights Reserved.
  * Copyright 2001 Dr. Zoidberg Enterprises. All rights reserved.
  *
  * Distributed under the terms of the MIT License.
@@ -56,38 +56,31 @@
 const char* kTrackerSignature = "application/x-vnd.Be-TRAK";
 
 
-//-----The following #defines get around a bug in get_image_info on ppc---
-#if __INTEL__
-#define text_part text
-#define text_part_size text_size
-#else
-#define text_part data
-#define text_part_size data_size
-#endif
-
-extern "C" _EXPORT BView* instantiate_deskbar_item();
+extern "C" _EXPORT BView* instantiate_deskbar_item(float maxWidth,
+	float maxHeight);
 
 
-status_t our_image(image_info* image)
+static status_t
+our_image(image_info& image)
 {
 	int32 cookie = 0;
-	status_t ret;
-	while ((ret = get_next_image_info(0, &cookie,image)) == B_OK) {
-		if ((char*)our_image >= (char*)image->text_part &&
-			(char*)our_image <= (char*)image->text_part + image->text_part_size)
-			break;
+	while (get_next_image_info(B_CURRENT_TEAM, &cookie, &image) == B_OK) {
+		if ((char *)our_image >= (char *)image.text
+			&& (char *)our_image <= (char *)image.text + image.text_size)
+			return B_OK;
 	}
 
-	return ret;
+	return B_ERROR;
 }
 
-BView* instantiate_deskbar_item(void)
+
+BView*
+instantiate_deskbar_item(float maxWidth, float maxHeight)
 {
-	return new DeskbarView(BRect(0, 0, 15, 15));
+	return new DeskbarView(BRect(0, 0, maxHeight - 1, maxHeight - 1));
 }
 
 
-//-------------------------------------------------------------------------------
 //	#pragma mark -
 
 
@@ -168,17 +161,9 @@ void DeskbarView::_RefreshMailQuery()
 		BQuery *newMailQuery = new BQuery;
 		newMailQuery->SetTarget(this);
 		newMailQuery->SetVolume(&volume);
-		newMailQuery->PushAttr(B_MAIL_ATTR_READ);
-		newMailQuery->PushInt32(B_UNREAD);
+		newMailQuery->PushAttr(B_MAIL_ATTR_STATUS);
+		newMailQuery->PushString("New");
 		newMailQuery->PushOp(B_EQ);
-		newMailQuery->PushAttr("BEOS:TYPE");
-		newMailQuery->PushString("text/x-email");
-		newMailQuery->PushOp(B_EQ);
-		newMailQuery->PushAttr("BEOS:TYPE");
-		newMailQuery->PushString("text/x-partial-email");
-		newMailQuery->PushOp(B_EQ);
-		newMailQuery->PushOp(B_OR);
-		newMailQuery->PushOp(B_AND);
 		newMailQuery->Fetch();
 
 		BEntry entry;
@@ -261,35 +246,27 @@ DeskbarView::MessageReceived(BMessage* message)
 
 		case B_QUERY_UPDATE:
 		{
-			int32 what;
-			dev_t device;
-			ino_t directory;
-			const char *name;
-			entry_ref ref;
-			message->FindInt32("opcode", &what);
-			message->FindInt32("device", &device);
-			message->FindInt64("directory", &directory);
-			switch (what) {
+			int32 opcode;
+			message->FindInt32("opcode", &opcode);
+
+			switch (opcode) {
 				case B_ENTRY_CREATED:
-					if (message->FindString("name", &name) == B_OK) {
-						ref.device = device;
-						ref.directory = directory;
-						ref.set_name(name);
-						if (!_EntryInTrash(&ref))
+				case B_ENTRY_REMOVED:
+				{
+					entry_ref ref;
+					message->FindInt32("device", &ref.device);
+					message->FindInt64("directory", &ref.directory);
+
+					if (!_EntryInTrash(&ref)) {
+						if (opcode == B_ENTRY_CREATED)
 							fNewMessages++;
+						else
+							fNewMessages--;
 					}
 					break;
-				case B_ENTRY_REMOVED:
-					node_ref node;
-					node.device = device;
-					node.node = directory;
-					BDirectory dir(&node);
-					BEntry entry(&dir, NULL);
-					entry.GetRef(&ref);
-					if (!_EntryInTrash(&ref))
-						fNewMessages--;
-					break;
+				}
 			}
+
 			fStatus = fNewMessages > 0 ? kStatusNewMail : kStatusNoMail;
 			Invalidate();
 			break;
@@ -333,7 +310,7 @@ DeskbarView::_InitBitmaps()
 		fBitmaps[i] = NULL;
 
 	image_info info;
-	if (our_image(&info) != B_OK)
+	if (our_image(info) != B_OK)
 		return;
 
 	BFile file(info.name, B_READ_ONLY);
@@ -454,8 +431,7 @@ DeskbarView::_CreateNewMailQuery(BEntry& query)
 	if (file.InitCheck() != B_OK)
 		return;
 
-	BString string("((" B_MAIL_ATTR_READ "<2)&&((BEOS:TYPE=="
-		"\"text/x-email\")||(BEOS:TYPE==\"text/x-partial-email\")))");
+	BString string(B_MAIL_ATTR_STATUS "==\"New\"");
 	file.WriteAttrString("_trk/qrystr", &string);
 	file.WriteAttrString("_trk/qryinitstr", &string);
 	int32 mode = 'Fbyq';

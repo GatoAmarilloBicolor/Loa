@@ -28,11 +28,11 @@
 
 //#define TRACE_LID
 #ifdef TRACE_LID
-#	define TRACE(x...) dprintf("acpi_lid: "x)
+#	define TRACE(x...) dprintf("acpi_lid: " x)
 #else
 #	define TRACE(x...)
 #endif
-#define ERROR(x...)	dprintf("acpi_lid: "x)
+#define ERROR(x...)	dprintf("acpi_lid: " x)
 
 
 static device_manager_info *sDeviceManager;
@@ -54,8 +54,7 @@ acpi_lid_read_status(acpi_lid_device_info *device)
 	acpi_data buf;
 	buf.pointer = NULL;
 	buf.length = ACPI_ALLOCATE_BUFFER;
-	if (device->acpi->evaluate_method(device->acpi_cookie, "_LID", NULL,
-			&buf) != B_OK
+	if (device->acpi->evaluate_method(device->acpi_cookie, "_LID", NULL, &buf) != B_OK
 		|| buf.pointer == NULL
 		|| ((acpi_object_type*)buf.pointer)->object_type != ACPI_TYPE_INTEGER) {
 		ERROR("couldn't get status\n");
@@ -63,9 +62,9 @@ acpi_lid_read_status(acpi_lid_device_info *device)
 		acpi_object_type* object = (acpi_object_type*)buf.pointer;
 		device->last_status = object->integer.integer;
 		device->updated = true;
-		free(buf.pointer);
 		TRACE("status %d\n", device->last_status);
 	}
+	free(buf.pointer);
 }
 
 
@@ -119,7 +118,14 @@ acpi_lid_read(void* _cookie, off_t position, void *buf, size_t* num_bytes)
 	if (*num_bytes < 1)
 		return B_IO_ERROR;
 
-	*((uint8 *)(buf)) = device->last_status;
+	if (position > 0) {
+		*num_bytes = 0;
+		return B_OK;
+	}
+
+	if (user_memcpy(buf, &device->last_status, sizeof(uint8)) < B_OK)
+		return B_BAD_ADDRESS;
+
 	*num_bytes = 1;
 	device->updated = false;
 	return B_OK;
@@ -152,7 +158,7 @@ acpi_lid_select(void *_cookie, uint8 event, selectsync *sync)
 	status_t error = add_select_sync_pool_entry(&device->select_pool, sync,
 		event);
 	if (error != B_OK) {
-		ERROR("add_select_sync_pool_entry() failed: %#lx\n", error);
+		ERROR("add_select_sync_pool_entry() failed: %#" B_PRIx32 "\n", error);
 		return error;
 	}
 
@@ -229,7 +235,7 @@ static status_t
 acpi_lid_register_device(device_node *node)
 {
 	device_attr attrs[] = {
-		{ B_DEVICE_PRETTY_NAME, B_STRING_TYPE, { string: "ACPI Lid" }},
+		{ B_DEVICE_PRETTY_NAME, B_STRING_TYPE, { .string = "ACPI Lid" }},
 		{ NULL }
 	};
 

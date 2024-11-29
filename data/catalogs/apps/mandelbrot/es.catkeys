@@ -1,23 +1,28 @@
-1	spanish; castilian	x-vnd.Haiku-Mandelbrot	1781779654
-About	MandelbrotWindow		Acerca de
-Julia	MandelbrotWindow		Julia
+1	spanish; castilian	x-vnd.Haiku-Mandelbrot	2302392624
 Grassland	MandelbrotWindow		Pradera
-Spring	MandelbrotWindow		Primavera
-High contrast	MandelbrotWindow		Alto contraste
-Fire	MandelbrotWindow		Fuego
-Royal	MandelbrotWindow		Real
-File	MandelbrotWindow		Archivo
-Lightning	MandelbrotWindow		Relámpago
-Midnight	MandelbrotWindow		Medianoche
-Palette	MandelbrotWindow		Paleta
-Mandelbrot	MandelbrotWindow		Mandelbrot
-Burning Ship	MandelbrotWindow		Nave Ardiendo
-Quit	MandelbrotWindow		Salir
-Frost	MandelbrotWindow		Hielo
-Set	MandelbrotWindow		Establecer
-Iterations	MandelbrotWindow		Iteraciones
-Mandelbrot	System name		Mandelbrot
-Deepfrost	MandelbrotWindow		Helada profunda
 Tricorn	MandelbrotWindow		Tricornio
-Multibrot	MandelbrotWindow		Multibrot
 Orbit Trap	MandelbrotWindow		Trampa Orbital
+Deepfrost	MandelbrotWindow		Helada profunda
+1 (none)	MandelbrotWindow		1 (ninguno)
+Quit	MandelbrotWindow		Salir
+Save as image…	MandelbrotWindow		Guardar como imagen…
+Fire	MandelbrotWindow		Fuego
+High contrast	MandelbrotWindow		Alto contraste
+Full screen	MandelbrotWindow		Pantalla completa
+Midnight	MandelbrotWindow		Medianoche
+Burning Ship	MandelbrotWindow		Nave Ardiendo
+Lightning	MandelbrotWindow		Relámpago
+About	MandelbrotWindow		Acerca de
+Palette	MandelbrotWindow		Paleta
+Set	MandelbrotWindow		Establecer
+Royal	MandelbrotWindow		Real
+Subsampling	MandelbrotWindow		Sub muestreo
+File	MandelbrotWindow		Archivo
+Julia	MandelbrotWindow		Julia
+Frost	MandelbrotWindow		Hielo
+View	MandelbrotWindow		Ver
+Mandelbrot	System name		Mandelbrot
+Multibrot	MandelbrotWindow		Multibrot
+Iterations	MandelbrotWindow		Iteraciones
+Spring	MandelbrotWindow		Primavera
+Mandelbrot	MandelbrotWindow		Mandelbrot

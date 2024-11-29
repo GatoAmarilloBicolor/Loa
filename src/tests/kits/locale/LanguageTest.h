@@ -1,5 +1,5 @@
 /*
- * Copyright 2014 Haiku, Inc.
+ * Copyright 2014-2021 Haiku, Inc.
  * Distributed under the terms of the MIT License.
  */
 #ifndef LANGUAGE_TEST_H
@@ -15,7 +15,14 @@ public:
 					LanguageTest();
 	virtual			~LanguageTest();
 
-			void	TestLanguage();
+			void	TestLanguageParseJapanese();
+			void	TestLanguageParseFrenchWithCountry();
+			void	TestLanguageParseSerbianScriptAndCountry();
+			void	TestLanguageParseSerbianScriptAndCountryHyphens();
+
+			void	TestLanguageNameFrenchInEnglish();
+			void	TestLanguageNameFrenchInFrench();
+			void	TestLanguagePropertiesFrench();
 
 	static	void	AddTests(BTestSuite& suite);
 };

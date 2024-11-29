@@ -1,6 +1,7 @@
 /*
  * Copyright 2013, Stephan Aßmus <superstippi@gmx.de>.
  * Copyright 2013, Rene Gollent <rene@gollent.com>.
+ * Copyright 2020, Andrew Lindesay <apl@lindesay.co.nz>
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #ifndef PACKAGE_LIST_VIEW_H
@@ -12,6 +13,7 @@
 #include <Locker.h>
 #include <util/OpenHashTable.h>
 
+#include "Model.h"
 #include "PackageInfo.h"
 
 
@@ -22,7 +24,7 @@ class WorkStatusView;
 
 class PackageListView : public BColumnListView {
 public:
-								PackageListView(BLocker* modelLock);
+								PackageListView(Model* model);
 	virtual						~PackageListView();
 
 	virtual void				AttachedToWindow();
@@ -49,12 +51,14 @@ private:
 			struct RowByNameHashDefinition;
 			typedef BOpenHashTable<RowByNameHashDefinition> RowByNameTable;
 
-			BLocker*			fModelLock;
+			Model*				fModel;
 			ItemCountView*		fItemCountView;
 			PackageListener*	fPackageListener;
 			RowByNameTable*		fRowByNameTable;
 
 			WorkStatusView*		fWorkStatusView;
+
+			bool				fIgnoreSelectionChanged;
 };
 
 #endif // PACKAGE_LIST_VIEW_H

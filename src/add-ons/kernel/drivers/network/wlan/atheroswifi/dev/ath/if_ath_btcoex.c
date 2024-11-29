@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2013 Adrian Chadd <adrian@FreeBSD.org>
  * All rights reserved.
  *
@@ -25,12 +27,8 @@
  * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/if_ath_btcoex.c 301307 2016-06-04 08:56:30Z adrian $
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: releng/11.1/sys/dev/ath/if_ath_btcoex.c 301307 2016-06-04 08:56:30Z adrian $");
-
 /*
  * This implements some very basic bluetooth coexistence methods for
  * the ath(4) hardware.
@@ -40,7 +38,7 @@ __FBSDID("$FreeBSD: releng/11.1/sys/dev/ath/if_ath_btcoex.c 301307 2016-06-04 08
 #include "opt_wlan.h"
 
 #include <sys/param.h>
-#include <sys/systm.h>
+#include <sys/systm.h> 
 #include <sys/sysctl.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
@@ -461,7 +459,7 @@ ath_btcoex_ioctl(struct ath_softc *sc, struct ath_diag *ad)
 		 * pointer for us to use below in reclaiming the buffer;
 		 * may want to be more defensive.
 		 */
-		outdata = malloc(outsize, M_TEMP, M_NOWAIT);
+		outdata = malloc(outsize, M_TEMP, M_NOWAIT | M_ZERO);
 		if (outdata == NULL) {
 			error = ENOMEM;
 			goto bad;
@@ -470,6 +468,7 @@ ath_btcoex_ioctl(struct ath_softc *sc, struct ath_diag *ad)
 	switch (id) {
 		default:
 			error = EINVAL;
+			goto bad;
 	}
 	if (outsize < ad->ad_out_size)
 		ad->ad_out_size = outsize;
@@ -482,4 +481,3 @@ bad:
 		free(outdata, M_TEMP);
 	return (error);
 }
-

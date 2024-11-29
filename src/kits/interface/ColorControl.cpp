@@ -19,8 +19,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include <iostream>
-
 #include <ControlLook.h>
 #include <Bitmap.h>
 #include <TextControl.h>
@@ -178,6 +176,11 @@ BColorControl::_InitData(color_control_layout layout, float size,
 		AddChild(fGreenText);
 		AddChild(fBlueText);
 	}
+
+	// right align rgb values so that they line up
+	fRedText->SetAlignment(B_ALIGN_LEFT, B_ALIGN_RIGHT);
+	fGreenText->SetAlignment(B_ALIGN_LEFT, B_ALIGN_RIGHT);
+	fBlueText->SetAlignment(B_ALIGN_LEFT, B_ALIGN_RIGHT);
 
 	ResizeToPreferred();
 
@@ -427,7 +430,7 @@ BColorControl::_DrawColorArea(BView* target, BRect updateRect)
 	BRect rect = _PaletteFrame();
 	bool enabled = IsEnabled();
 
-	rgb_color base = ui_color(B_PANEL_BACKGROUND_COLOR);
+	rgb_color base = ViewColor();
 	rgb_color darken1 = tint_color(base, B_DARKEN_1_TINT);
 
 	uint32 flags = be_control_look->Flags(this);
@@ -495,7 +498,7 @@ BColorControl::_DrawColorArea(BView* target, BRect updateRect)
 void
 BColorControl::_DrawSelectors(BView* target)
 {
-	rgb_color base = ui_color(B_PANEL_BACKGROUND_COLOR);
+	rgb_color base = ViewColor();
 	rgb_color lightenmax = tint_color(base, B_LIGHTEN_MAX_TINT);
 
 	if (fPaletteMode) {

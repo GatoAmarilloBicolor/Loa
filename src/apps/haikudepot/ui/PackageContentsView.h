@@ -1,5 +1,6 @@
 /*
  * Copyright 2015, TigerKid001.
+ * Copyright 2020-2022, Andrew Lindesay <apl@lindesay.co.nz>
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #ifndef PACKAGE_CONTENTS_VIEW_H
@@ -27,10 +28,7 @@ public:
 private:
 			void				_InitContentPopulator();
 	static	int32				_ContentPopulatorThread(void* arg);
-			bool				_PopuplatePackageContens(
-									const PackageInfo& package);
-			int32				_InstallLocation(
-									const PackageInfo& package) const;
+			bool				_PopulatePackageContents(const PackageInfoRef& package);
 
 private:
 			BOutlineListView*	fContentListView;

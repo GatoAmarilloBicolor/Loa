@@ -13,6 +13,7 @@
 #include <algorithm>
 
 #include <unicode/uchar.h>
+#include <unicode/uvernum.h>
 
 #include <Debug.h>
 
@@ -25,6 +26,9 @@
 #else
 #	define TRACE(x) ;
 #endif
+
+
+U_NAMESPACE_USE
 
 
 namespace BPrivate {
@@ -231,13 +235,11 @@ ICUCtypeData::MultibyteToWchar(wchar_t* wcOut, const char* mb, size_t mbLen,
 	size_t targetLengthUsed = (size_t)(target - targetBuffer);
 
 	if (U16_IS_LEAD(targetBuffer[0])) {
-		// we have a surrogate pair, so re-read with enough space for a pair
-		// of characters instead
+		// we have a surrogate pair, read the second character
 		TRACE(("MultibyteToWchar(): have a surrogate pair\n"));
-		ucnv_resetToUnicode(converter);
-		buffer = mb;
-		target = targetBuffer;
-		ucnv_toUnicode(converter, &target, target + 2, &buffer, buffer + mbLen,
+		icuStatus = U_ZERO_ERROR;
+		ucnv_toUnicode(converter, &target, target + 2 - targetLengthUsed,
+			&buffer, buffer + mbLen - sourceLengthUsed,
 			NULL, FALSE, &icuStatus);
 		sourceLengthUsed = buffer - mb;
 		targetLengthUsed = (size_t)(target - targetBuffer);
@@ -253,7 +255,7 @@ ICUCtypeData::MultibyteToWchar(wchar_t* wcOut, const char* mb, size_t mbLen,
 		TRACE(("MultibyteToWchar(): illegal character sequence\n"));
 		ucnv_resetToUnicode(converter);
 		result = B_BAD_DATA;
-	} else 	if (targetLengthUsed == 0) {
+	} else if (targetLengthUsed == 0) {
 		TRACE(("MultibyteToWchar(): incomplete character (len=%lu)\n", mbLen));
 		for (size_t i = 0; i < mbLen; ++i)
 			TRACE(("\tbyte %lu: %x\n", i, mb[i]));
@@ -544,6 +546,7 @@ ICUCtypeData::_GetConverterForMbState(mbstate_t* mbState,
 	int32_t bufferSize = sizeof(mbState->data);
 	UConverter* clone
 		= ucnv_safeClone(icuConverter, mbState->data, &bufferSize, &icuStatus);
+
 	if (clone == NULL || !U_SUCCESS(icuStatus))
 		return B_ERROR;
 

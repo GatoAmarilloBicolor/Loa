@@ -13,6 +13,11 @@ SimpleTest fibo_exec : fibo_exec.cpp ;
 
 SimpleTest fifo_poll_test : fifo_poll_test.cpp ;
 
+SimpleTest hello_avx : hello_avx.c ;
+local avxSource = [ FGristFiles hello_avx.c ] ;
+local avxObject = $(avxSource:S=$(SUFOBJ)) ;
+CCFLAGS on $(avxObject) = -mavx ;
+
 SimpleTest live_query :
 	live_query.cpp
 	: be
@@ -50,6 +55,8 @@ SimpleTest port_wakeup_test_8 : port_wakeup_test_8.cpp ;
 SimpleTest port_wakeup_test_9 : port_wakeup_test_9.cpp ;
 
 SimpleTest mmap_resize_test : mmap_resize_test.cpp ;
+SimpleTest mmap_cut_tests : mmap_cut_tests.cpp ;
+SimpleTest mmap_fixed_test : mmap_fixed_test.cpp ;
 
 SimpleTest null_poll_test : null_poll_test.cpp ;
 
@@ -65,8 +72,6 @@ SimpleTest spinlock_contention : spinlock_contention.cpp ;
 SimpleTest syscall_restart_test : syscall_restart_test.cpp
 	: network [ TargetLibsupc++ ] ;
 
-SetSupportedPlatformsForTarget syscall_time
-	: $(HAIKU_BEOS_COMPATIBLE_PLATFORMS) ;
 SimpleTest syscall_time : syscall_time.cpp ;
 
 SimpleTest transfer_area_test : transfer_area_test.cpp ;
@@ -80,19 +85,15 @@ SimpleTest wait_for_objects_test : wait_for_objects_test.cpp ;
 
 SimpleTest yield_test : yield_test.cpp ;
 
-SetSupportedPlatformsForTarget sigint_bug113_test
-	: $(HAIKU_BEOS_COMPATIBLE_PLATFORMS) ;
 SimpleTest sigint_bug113_test : sigint_bug113_test.cpp ;
 
-SetSupportedPlatformsForTarget set_area_protection_test1
-	: $(HAIKU_BEOS_COMPATIBLE_PLATFORMS) ;
 SimpleTest set_area_protection_test1 : set_area_protection_test1.cpp ;
 
 SimpleTest sigsuspend_test : sigsuspend_test.cpp ;
 
 SubInclude HAIKU_TOP src tests system kernel cache ;
 SubInclude HAIKU_TOP src tests system kernel fs ;
-#SubInclude HAIKU_TOP src tests system kernel disk_device_manager ;
+SubInclude HAIKU_TOP src tests system kernel disk_device_manager ;
 SubInclude HAIKU_TOP src tests system kernel device_manager ;
 SubInclude HAIKU_TOP src tests system kernel file_corruption ;
 SubInclude HAIKU_TOP src tests system kernel scheduler ;

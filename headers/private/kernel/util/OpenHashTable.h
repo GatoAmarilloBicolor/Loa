@@ -15,6 +15,7 @@
 #	include <util/kernel_cpp.h>
 #	include <util/TypeOperation.h>
 #else
+#	include <new>
 #	include <TypeOperation.h>
 #endif
 
@@ -343,7 +344,7 @@ public:
 		return true;
 	}
 
-	/*! \brief Iterator for BOpenHashMap
+	/*! \brief Iterator for BOpenHashTable
 
 		The iterator is not invalidated when removing the current element from
 		the table, unless the removal triggers a resize.

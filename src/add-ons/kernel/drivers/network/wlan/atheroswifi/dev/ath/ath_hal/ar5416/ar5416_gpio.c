@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5416/ar5416_gpio.c 237611 2012-06-26 22:16:53Z adrian $
  */
 #include "opt_ah.h"
 
@@ -87,6 +87,8 @@ ar5416GpioCfgOutput(struct ath_hal *ah, uint32_t gpio, HAL_GPIO_MUX_TYPE type)
 
 #define	N(a)	(sizeof(a) / sizeof(a[0]))
 
+	HALASSERT(gpio < AH_PRIVATE(ah)->ah_caps.halNumGpioPins);
+
 	/*
 	 * This table maps the HAL GPIO pins to the actual hardware
 	 * values.
@@ -100,8 +102,6 @@ ar5416GpioCfgOutput(struct ath_hal *ah, uint32_t gpio, HAL_GPIO_MUX_TYPE type)
 		AR_GPIO_OUTPUT_MUX_AS_RX_CLEAR_EXTERNAL,
 		AR_GPIO_OUTPUT_MUX_AS_TX_FRAME,
 	};
-
-	HALASSERT(gpio < AH_PRIVATE(ah)->ah_caps.halNumGpioPins);
 
 	HALDEBUG(ah, HAL_DEBUG_GPIO,
 	    "%s: gpio=%d, type=%d\n", __func__, gpio, type);
@@ -169,9 +169,9 @@ ar5416GpioSet(struct ath_hal *ah, uint32_t gpio, uint32_t val)
 	reg = OS_REG_READ(ah, AR_GPIO_IN_OUT);
 	if (val & 1)
 		reg |= AR_GPIO_BIT(gpio);
-	else
+	else 
 		reg &= ~AR_GPIO_BIT(gpio);
-	OS_REG_WRITE(ah, AR_GPIO_IN_OUT, reg);
+	OS_REG_WRITE(ah, AR_GPIO_IN_OUT, reg);	
 	return AH_TRUE;
 }
 

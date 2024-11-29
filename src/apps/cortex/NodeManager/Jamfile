@@ -6,8 +6,6 @@ SubDirHdrs [ FDirName $(SUBDIR) $(DOTDOT) support ] ;
 
 SubDirCcFlags -DCORTEX_NAMESPACE=cortex ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
-
 StaticLibrary cortex_node_manager.a :
 	AddOnHost.cpp
 	Connection.cpp
@@ -15,4 +13,10 @@ StaticLibrary cortex_node_manager.a :
 	NodeGroup.cpp
 	NodeRef.cpp
 	NodeSyncThread.cpp
+;
+
+DoCatalogs cortex_node_manager.a :
+	x-vnd.Cortex.NodeManager
+	:
+	NodeManager.cpp
 ;

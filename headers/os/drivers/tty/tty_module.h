@@ -39,18 +39,19 @@ typedef bool (*tty_service_func)(struct tty *tty, uint32 op, void *buffer,
 #define	TTYSETDTR		6	/* bool dataTerminalReady */
 #define TTYSETRTS		7	/* bool requestToSend */
 #define	TTYGETSIGNALS	8	/* call tty_hardware_signal for all bits */
+#define TTYFLUSH		9	/* clear input and/or output buffers */
 
 typedef struct tty_module_info tty_module_info;
 
 struct tty_module_info {
 	module_info	mi;
 
-	struct tty *(*tty_create)(tty_service_func serviceFunction, bool isMaster);
+	status_t	(*tty_create)(tty_service_func serviceFunction, struct tty *master,
+					struct tty **tty);
 	void		(*tty_destroy)(struct tty *tty);
 
-	struct tty_cookie *
-				(*tty_create_cookie)(struct tty *masterTTY, struct tty *slaveTTY,
-					uint32 openMode);
+	status_t	(*tty_create_cookie)(struct tty *masterTTY, struct tty *slaveTTY,
+					uint32 openMode, struct tty_cookie **cookie);
 	void		(*tty_close_cookie)(struct tty_cookie *cookie);
 	void		(*tty_destroy_cookie)(struct tty_cookie *cookie);
 

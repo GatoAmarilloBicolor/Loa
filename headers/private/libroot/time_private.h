@@ -11,9 +11,8 @@
 #include <sys/time.h>
 #include <time.h>
 
-#include <SupportDefs.h>
+#include <OS.h>
 
-#include <new>
 
 #define CLOCKS_PER_SEC_BEOS					1000
 #define CLK_TCK_BEOS						CLOCKS_PER_SEC_BEOS
@@ -64,6 +63,14 @@ timeval_to_timespec(const timeval& val, timespec& spec)
 	spec.tv_nsec = val.tv_usec * 1000;
 
 	return true;
+}
+
+
+static inline bool
+timeval_to_bigtime(const timeval& val, bigtime_t& _time)
+{
+	 timespec spec;
+	 return timeval_to_timespec(val, spec) && timespec_to_bigtime(spec, _time);
 }
 
 

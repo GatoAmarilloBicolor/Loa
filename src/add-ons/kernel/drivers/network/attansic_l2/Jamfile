@@ -1,3 +1,0 @@
-SubDir HAIKU_TOP src add-ons kernel drivers network attansic_l2 ;
-
-SubInclude HAIKU_TOP src add-ons kernel drivers network attansic_l2 dev ;

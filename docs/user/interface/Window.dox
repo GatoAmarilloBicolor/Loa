@@ -7,8 +7,8 @@
  *		Joseph Groover, looncraz@looncraz.net
  *
  * Corresponds to:
- *		headers/os/interface/Window.h	 hrev497**
- *		src/kits/interface/Window.cpp	 hrev497**
+ *		headers/os/interface/Window.h	 hrev50816
+ *		src/kits/interface/Window.cpp	 hrev54774
  */
 
 
@@ -467,6 +467,28 @@
 */
 
 
+// MoveOnScreen() flags
+
+
+/*!
+	\var B_DO_NOT_RESIZE_TO_FIT
+	\brief Flag to not resize the window to fit the screen when using
+		\ref BWindow::MoveOnScreen()
+
+	\since Haiku R1
+*/
+
+
+/*!
+	\var B_MOVE_IF_PARTIALLY_OFFSCREEN
+	\brief Flag to only move a window to make the top left corner visible, when
+		it is partially off screen (instead of centering it) when using
+		\ref BWindow::MoveOnScreen()
+
+	\since Haiku R1
+*/
+
+
 /*!
 	\class BWindow
 	\ingroup interface
@@ -795,6 +817,16 @@
 
 
 /*!
+	\fn void BWindow::Close()
+	\brief Deprecated alias for BWindow::Quit().
+
+	The advised way to close a window is to use BWindow::Quit().
+
+	\since BeOS R3
+*/
+
+
+/*!
 	\fn void BWindow::AddChild(BView* child, BView* before)
 	\brief Adds \a child to the view hierarchy immediately before \a before.
 
@@ -1024,10 +1056,11 @@
 /*!
 	\fn void BWindow::WorkspacesChanged(uint32 oldWorkspaces,
 		uint32 newWorkspaces)
-	\brief Hook method that gets called when the number of workspaces changes.
+	\brief Hook method that gets called whenever the workspaces the window is
+	       in changes.
 
-	\param oldWorkspaces The old number of workspaces.
-	\param newWorkspaces The new number of workspaces.
+	\param oldWorkspaces The old set of workspaces the window was visible in.
+	\param newWorkspaces The new set of workspaces the window is visible in.
 
 	\since BeOS R3
 */
@@ -1036,6 +1069,9 @@
 /*!
 	\fn void BWindow::WorkspaceActivated(int32 workspace, bool state)
 	\brief Hook method that gets called when the active workspace changes.
+
+	This method is only called when a workspace in which the window resides
+	is activated or deactivated.
 
 	\param workspace The \a workspace number that was activated/deactivated.
 	\param state \c true if activated, \c false if deactivated.
@@ -1943,6 +1979,14 @@
 
 
 /*!
+	\fn void BWindow::ResizeToPreferred()
+	\brief Resize the window to the preferred size of the window's layout.
+
+	\since Haiku R1
+*/
+
+
+/*!
 	\fn void BWindow::CenterIn(const BRect& rect)
 	\brief Center the window in \a rect.
 
@@ -1963,6 +2007,44 @@
 /*!
 	\fn void BWindow::CenterOnScreen(screen_id id)
 	\brief Centers the window on the screen with the passed in \a id.
+
+	\since Haiku R1
+*/
+
+
+/*!
+	\fn void BWindow::MoveOnScreen(uint32 flags=0)
+	\brief Update window size and position to make it visible on screen.
+
+	This convenience method helps you to automatically move and resize a window
+	to make it visible on the screen, in case the window is partially off
+	screen because of its size or its position. This method will do nothing if
+	the window fits on the screen.
+
+	The default behavior is as follows:
+		- If the window size is larger than the screen, the window is resized
+		  so that it fits on the screen.
+		- If the window is still partially off-screen, it will then be centered
+		  horizontally and vertically so that it is fully visible.
+
+	Note that this does not affect window size and positions for windows that
+	are currently visible on the screen. Also note that this method does not
+	affect whether the window is covered by other windows that are on top. You
+	can use \ref BWindow::Activate() to bring a window to the top.
+
+	The behavior of this method can be altered by passing either or both of the
+	following modifiers in the \a flags parameter:
+		- \ref B_DO_NOT_RESIZE_TO_FIT Do not resize the window. If the window
+		  is too large to be on the screen, then it will at least be moved so
+		  that the left-top of the window is visible, and only the right and/or
+		  bottom of the window will be off screen.
+		- \ref B_MOVE_IF_PARTIALLY_OFFSCREEN Use this parameter if instead of
+		  centering the window in the middle of the screen, you only want to
+		  do the minimum movement so that at least the top left part of the
+		  window is visible on screen.
+
+	\param flags Can be \c 0 for the default behavior, or a any combination of
+		\c B_DO_NOT_RESIZE_TO_FIT and \c B_MOVE_IF_PARTIALLY_OFFSCREEN.
 
 	\since Haiku R1
 */

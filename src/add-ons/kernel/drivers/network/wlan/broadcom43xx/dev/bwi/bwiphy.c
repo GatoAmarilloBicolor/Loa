@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2007 The DragonFly Project.  All rights reserved.
  * 
  * This code is derived from software contributed to The DragonFly Project
@@ -35,8 +37,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: releng/11.1/sys/dev/bwi/bwiphy.c 288087 2015-09-22 02:44:59Z adrian $");
-
 #include "opt_inet.h"
 #include "opt_wlan.h"
 
@@ -51,7 +51,7 @@ __FBSDID("$FreeBSD: releng/11.1/sys/dev/bwi/bwiphy.c 288087 2015-09-22 02:44:59Z
 #include <sys/sockio.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
- 
+
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_dl.h>
@@ -86,7 +86,6 @@ static void	bwi_phy_config_agc(struct bwi_mac *);
 
 static void	bwi_tbl_write_2(struct bwi_mac *mac, uint16_t, uint16_t);
 static void	bwi_tbl_write_4(struct bwi_mac *mac, uint16_t, uint32_t);
-
 #define SUP_BPHY(num)	{ .rev = num, .init = bwi_phy_init_11b_rev##num }
 
 static const struct {

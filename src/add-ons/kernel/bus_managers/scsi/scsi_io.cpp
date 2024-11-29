@@ -34,7 +34,7 @@ scsi_requeue_request(scsi_ccb *request, bool bus_overflow)
 
 	request->state = SCSI_STATE_QUEUED;
 
-	ACQUIRE_BEN(&bus->mutex);
+	mutex_lock(&bus->mutex);
 
 	was_servicable = scsi_can_service_bus(bus);
 
@@ -70,7 +70,7 @@ scsi_requeue_request(scsi_ccb *request, bool bus_overflow)
 
 	start_retry = !was_servicable && scsi_can_service_bus(bus);
 
-	RELEASE_BEN(&bus->mutex);
+	mutex_unlock(&bus->mutex);
 
 	// submit requests to other devices in case bus was overloaded
 	if (start_retry)
@@ -96,7 +96,7 @@ scsi_resubmit_request(scsi_ccb *request)
 
 	request->state = SCSI_STATE_QUEUED;
 
-	ACQUIRE_BEN(&bus->mutex);
+	mutex_lock(&bus->mutex);
 
 	was_servicable = scsi_can_service_bus(bus);
 
@@ -126,7 +126,7 @@ scsi_resubmit_request(scsi_ccb *request)
 
 	start_retry = !was_servicable && scsi_can_service_bus(bus);
 
-	RELEASE_BEN(&bus->mutex);
+	mutex_unlock(&bus->mutex);
 
 	// let the service thread do the resubmit
 	if (start_retry)
@@ -152,11 +152,11 @@ submit_autosense(scsi_ccb *request)
 
 	// no DMA buffer (we made sure that the data buffer fulfills all
 	// limitations)
-	request->buffered = false;
+	device->auto_sense_request->buffered = false;
 	// don't let any request bypass us
-	request->ordered = true;
-	// initial SIM state for this request
-	request->sim_state = 0;
+	device->auto_sense_request->ordered = true;
+	// request is not emulated
+	device->auto_sense_request->emulated = false;
 
 	device->auto_sense_originator = request;
 
@@ -194,7 +194,7 @@ finish_autosense(scsi_device_info *device)
 	}
 
 	// inform peripheral driver
-	release_sem_etc(orig_request->completion_sem, 1, 0/*B_DO_NOT_RESCHEDULE*/);
+	orig_request->completion_cond.NotifyAll();
 }
 
 
@@ -219,13 +219,13 @@ scsi_device_queue_overflow(scsi_ccb *request, uint num_requests)
 	SHOW_INFO(2, "Restricting device queue to %d requests", num_requests);
 
 	// update slot count
-	ACQUIRE_BEN(&bus->mutex);
+	mutex_lock(&bus->mutex);
 
 	diff_max_slots = device->total_slots - num_requests;
 	device->total_slots = num_requests;
 	device->left_slots -= diff_max_slots;
 
-	RELEASE_BEN(&bus->mutex);
+	mutex_unlock(&bus->mutex);
 
 	// requeue request, blocking further device requests
 	scsi_requeue_request(request, false);
@@ -263,7 +263,7 @@ scsi_request_finished(scsi_ccb *request, uint num_requests)
 
 	request->state = SCSI_STATE_FINISHED;
 
-	ACQUIRE_BEN(&bus->mutex);
+	mutex_lock(&bus->mutex);
 
 	was_servicable = scsi_can_service_bus(bus);
 
@@ -305,7 +305,7 @@ scsi_request_finished(scsi_ccb *request, uint num_requests)
 
 	start_service = !was_servicable && scsi_can_service_bus(bus);
 
-	RELEASE_BEN(&bus->mutex);
+	mutex_unlock(&bus->mutex);
 
 	// tell service thread to submit new requests to SIM
 	// (do this ASAP to keep bus/device busy)
@@ -325,7 +325,7 @@ scsi_request_finished(scsi_ccb *request, uint num_requests)
 	else {
 		// tell peripheral driver about completion
 		if (!do_autosense)
-			release_sem_etc(request->completion_sem, 1, 0/*B_DO_NOT_RESCHEDULE*/);
+			request->completion_cond.NotifyAll();
 	}
 }
 
@@ -342,7 +342,7 @@ scsi_check_enqueue_request(scsi_ccb *request)
 	scsi_device_info *device = request->device;
 	bool execute;
 
-	ACQUIRE_BEN(&bus->mutex);
+	mutex_lock(&bus->mutex);
 
 	// if device/bus is locked, or there are waiting requests
 	// or waiting devices (last condition makes sure we don't overtake
@@ -373,7 +373,7 @@ scsi_check_enqueue_request(scsi_ccb *request)
 		execute = true;
 	}
 
-	RELEASE_BEN(&bus->mutex);
+	mutex_unlock(&bus->mutex);
 
 	return execute;
 }
@@ -469,9 +469,6 @@ scsi_async_io(scsi_ccb *request)
 
 	SHOW_FLOW(3, "ordered=%d", request->ordered);
 
-	// give SIM a well-defined first state
-	request->sim_state = 0;
-
 	// make sure device/bus is not blocked
 	if (!scsi_check_enqueue_request(request))
 		return;
@@ -486,7 +483,7 @@ err2:
 	if (request->buffered)
 		scsi_release_dma_buffer(request);
 err:
-	release_sem(request->completion_sem);
+	request->completion_cond.NotifyAll(B_ERROR);
 	return;
 }
 
@@ -511,11 +508,15 @@ scsi_sync_io(scsi_ccb *request)
 		}
 	}
 
+	ConditionVariableEntry entry;
+	request->completion_cond.Add(&entry);
+
 	scsi_async_io(request);
-	acquire_sem(request->completion_sem);
+
+	entry.Wait();
 
 	if (tmp_sg)
-		cleanup_tmp_sg(request);
+		cleanup_temp_sg(request);
 }
 
 
@@ -539,12 +540,12 @@ scsi_abort(scsi_ccb *req_to_abort)
 		return SCSI_REQ_INVALID;
 	}
 
-	ACQUIRE_BEN(&bus->mutex);
+	mutex_lock(&bus->mutex);
 
 	switch (req_to_abort->state) {
 		case SCSI_STATE_FINISHED:
 		case SCSI_STATE_SENT:
-			RELEASE_BEN(&bus->mutex);
+			mutex_unlock(&bus->mutex);
 			break;
 
 		case SCSI_STATE_QUEUED: {
@@ -557,7 +558,7 @@ scsi_abort(scsi_ccb *req_to_abort)
 
 			start_retry = scsi_can_service_bus(bus) && !was_servicable;
 
-			RELEASE_BEN(&bus->mutex);
+			mutex_unlock(&bus->mutex);
 
 			req_to_abort->subsys_status = SCSI_REQ_ABORTED;
 
@@ -570,7 +571,7 @@ scsi_abort(scsi_ccb *req_to_abort)
 				scsi_release_dma_buffer(req_to_abort);
 
 			// tell peripheral driver about
-			release_sem_etc(req_to_abort->completion_sem, 1, 0/*B_DO_NOT_RESCHEDULE*/);
+			req_to_abort->completion_cond.NotifyAll(B_CANCELED);
 
 			if (start_retry)
 				release_sem(bus->start_service);
@@ -589,7 +590,7 @@ bool
 scsi_check_exec_service(scsi_bus_info *bus)
 {
 	SHOW_FLOW0(3, "");
-	ACQUIRE_BEN(&bus->mutex);
+	mutex_lock(&bus->mutex);
 
 	if (scsi_can_service_bus(bus)) {
 		scsi_ccb *request;
@@ -623,7 +624,7 @@ scsi_check_exec_service(scsi_bus_info *bus)
 			SHOW_FLOW(1, "%" B_PRId64, device->last_sort);
 		}
 
-		RELEASE_BEN(&bus->mutex);
+		mutex_unlock(&bus->mutex);
 
 		request->state = SCSI_STATE_SENT;
 		bus->interface->scsi_io(bus->sim_cookie, request);
@@ -631,7 +632,7 @@ scsi_check_exec_service(scsi_bus_info *bus)
 		return true;
 	}
 
-	RELEASE_BEN(&bus->mutex);
+	mutex_unlock(&bus->mutex);
 
 	return false;
 }

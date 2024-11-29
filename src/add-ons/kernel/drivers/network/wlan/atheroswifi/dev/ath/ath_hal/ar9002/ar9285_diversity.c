@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2008-2010 Atheros Communications Inc.
  * Copyright (c) 2011 Adrian Chadd, Xenion Pty Ltd.
  *
@@ -22,8 +24,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar9002/ar9285_diversity.c 251655 2013-06-12 14:52:57Z adrian $
  */
 #include "opt_ah.h"
 
@@ -75,7 +75,7 @@ ar9285SetAntennaSwitch(struct ath_hal *ah, HAL_ANT_SETTING settings)
 	/* Store settings */
 	AH5212(ah)->ah_antControl = settings;
 	AH5212(ah)->ah_diversity = (settings == HAL_ANT_VARIABLE);
-	
+
 	/* XXX don't fiddle if the PHY is in sleep mode or ! chan */
 
 	/* Begin setting the relevant registers */

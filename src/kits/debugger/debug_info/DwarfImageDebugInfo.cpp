@@ -50,7 +50,6 @@
 #include "SourceFile.h"
 #include "StackFrame.h"
 #include "Statement.h"
-#include "StringUtils.h"
 #include "SymbolInfo.h"
 #include "TargetAddressRangeList.h"
 #include "Team.h"
@@ -247,7 +246,7 @@ struct DwarfImageDebugInfo::TypeNameKey {
 
 	uint32 HashValue() const
 	{
-		return StringUtils::HashValue(typeName);
+		return typeName.HashValue();
 	}
 
 	bool operator==(const TypeNameKey& other) const
@@ -648,8 +647,10 @@ DwarfImageDebugInfo::CreateFrame(Image* image,
 	target_addr_t framePointer;
 	CompilationUnit* unit = function != NULL ? function->GetCompilationUnit()
 			: NULL;
-	error = fFile->UnwindCallFrame(unit, fArchitecture->AddressSize(), entry,
-		instructionPointer, inputInterface, outputInterface, framePointer);
+	error = fFile->UnwindCallFrame(unit,
+		fArchitecture->AddressSize(), fArchitecture->IsBigEndian(),
+		entry, instructionPointer, inputInterface, outputInterface,
+		framePointer);
 
 	if (error != B_OK) {
 		TRACE_CFI("Failed to unwind call frame: %s\n", strerror(error));
@@ -837,7 +838,9 @@ DwarfImageDebugInfo::GetStatement(FunctionDebugInfo* _function,
 		if (state.isStatement) {
 			statementAddress = state.address;
 			statementLine = state.line - 1;
-			statementColumn = std::max(state.column - 1, (int32)0);
+			// discard column info until proper support is implemented
+			// statementColumn = std::max(state.column - 1, (int32)0);
+			statementColumn = 0;
 		}
 	}
 
@@ -931,7 +934,9 @@ DwarfImageDebugInfo::GetStatementAtSourceLocation(FunctionDebugInfo* _function,
 		if (state.isStatement) {
 			statementAddress = state.address;
 			statementLine = state.line - 1;
-			statementColumn = std::max(state.column - 1, (int32)0);
+			// discard column info until proper support is implemented
+			// statementColumn = std::max(state.column - 1, (int32)0);
+			statementColumn = 0;
 		}
 	}
 
@@ -1053,7 +1058,9 @@ DwarfImageDebugInfo::_AddSourceCodeInfo(CompilationUnit* unit,
 		if (state.isStatement) {
 			statementAddress = state.address;
 			statementLine = state.line - 1;
-			statementColumn = std::max(state.column - 1, (int32)0);
+			// discard column info until proper support is implemented
+			// statementColumn = std::max(state.column - 1, (int32)0);
+			statementColumn = 0;
 		}
 	}
 

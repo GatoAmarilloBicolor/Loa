@@ -75,6 +75,7 @@ count_regions(const char* imagePath, char const* buff, int phnum, int phentsize)
 			case PT_PHDR:
 				// we don't use it
 				break;
+			case PT_EH_FRAME:
 			case PT_RELRO:
 				// not implemented yet, but can be ignored
 				break;
@@ -83,6 +84,12 @@ count_regions(const char* imagePath, char const* buff, int phnum, int phentsize)
 				break;
 			case PT_TLS:
 				// will be handled at some other place
+				break;
+			case PT_ARM_UNWIND:
+				// will be handled in libgcc_s.so.1
+				break;
+			case PT_RISCV_ATTRIBUTES:
+				// TODO: check ABI compatibility attributes
 				break;
 			default:
 				FATAL("%s: Unhandled pheader type in count 0x%" B_PRIx32 "\n",
@@ -199,6 +206,7 @@ parse_program_headers(image_t* image, char* buff, int phnum, int phentsize)
 			case PT_PHDR:
 				// we don't use it
 				break;
+			case PT_EH_FRAME:
 			case PT_RELRO:
 				// not implemented yet, but can be ignored
 				break;
@@ -210,6 +218,12 @@ parse_program_headers(image_t* image, char* buff, int phnum, int phentsize)
 					= TLSBlockTemplates::Get().Register(
 						TLSBlockTemplate((void*)pheader->p_vaddr,
 							pheader->p_filesz, pheader->p_memsz));
+				break;
+			case PT_ARM_UNWIND:
+				// will be handled in libgcc_s.so.1
+				break;
+			case PT_RISCV_ATTRIBUTES:
+				// TODO: check ABI compatibility attributes
 				break;
 			default:
 				FATAL("%s: Unhandled pheader type in parse 0x%" B_PRIx32 "\n",
@@ -307,6 +321,23 @@ parse_dynamic_segment(image_t* image)
 			case DT_SONAME:
 				sonameOffset = d[i].d_un.d_val;
 				break;
+			case DT_GNU_HASH:
+			{
+				uint32* gnuhash = (uint32*)
+					(d[i].d_un.d_ptr + image->regions[0].delta);
+				const uint32 bucketCount = gnuhash[0];
+				const uint32 symIndex = gnuhash[1];
+				const uint32 maskWordsCount = gnuhash[2];
+				const uint32 bloomSize = maskWordsCount * (sizeof(elf_addr) / 4);
+
+				image->gnuhash.mask_words_count_mask = maskWordsCount - 1;
+				image->gnuhash.shift2 = gnuhash[3];
+				image->gnuhash.bucket_count = bucketCount;
+				image->gnuhash.bloom = (elf_addr*)(gnuhash + 4);
+				image->gnuhash.buckets = gnuhash + 4 + bloomSize;
+				image->gnuhash.chain0 = image->gnuhash.buckets + bucketCount - symIndex;
+				break;
+			}
 			case DT_VERSYM:
 				image->symbol_versions = (elf_versym*)
 					(d[i].d_un.d_ptr + image->regions[0].delta);
@@ -375,7 +406,6 @@ parse_dynamic_segment(image_t* image)
 			// DT_SYMENT: The size of a symbol table entry.
 			// DT_PLTREL: The type of the PLT relocation entries (DT_JMPREL).
 			// DT_BIND_NOW/DF_BIND_NOW: No lazy binding allowed.
-			// DT_RUNPATH: Library search path (supersedes DT_RPATH).
 			// DT_TEXTREL/DF_TEXTREL: Indicates whether text relocations are
 			//		required (for optimization purposes only).
 		}
@@ -414,7 +444,7 @@ parse_elf_header(elf_ehdr* eheader, int32* _pheaderSize,
 	*_pheaderSize = eheader->e_phentsize * eheader->e_phnum;
 	*_sheaderSize = eheader->e_shentsize * eheader->e_shnum;
 
-	if (*_pheaderSize <= 0 || *_sheaderSize <= 0)
+	if (*_pheaderSize <= 0)
 		return B_NOT_AN_EXECUTABLE;
 
 	return B_OK;
@@ -442,7 +472,7 @@ parse_elf32_header(Elf32_Ehdr* eheader, int32* _pheaderSize,
 	*_pheaderSize = eheader->e_phentsize * eheader->e_phnum;
 	*_sheaderSize = eheader->e_shentsize * eheader->e_shnum;
 
-	if (*_pheaderSize <= 0 || *_sheaderSize <= 0)
+	if (*_pheaderSize <= 0)
 		return B_NOT_AN_EXECUTABLE;
 
 	return B_OK;
@@ -467,7 +497,7 @@ parse_elf64_header(Elf64_Ehdr* eheader, int32* _pheaderSize,
 	*_pheaderSize = eheader->e_phentsize * eheader->e_phnum;
 	*_sheaderSize = eheader->e_shentsize * eheader->e_shnum;
 
-	if (*_pheaderSize <= 0 || *_sheaderSize <= 0)
+	if (*_pheaderSize <= 0)
 		return B_NOT_AN_EXECUTABLE;
 
 	return B_OK;
@@ -477,7 +507,7 @@ parse_elf64_header(Elf64_Ehdr* eheader, int32* _pheaderSize,
 
 
 status_t
-load_image(char const* name, image_type type, const char* rpath,
+load_image(char const* name, image_type type, const char* rpath, const char* runpath,
 	const char* requestingObjectPath, image_t** _image)
 {
 	int32 pheaderSize, sheaderSize;
@@ -509,22 +539,23 @@ load_image(char const* name, image_type type, const char* rpath,
 		if (found) {
 			atomic_add(&found->ref_count, 1);
 			*_image = found;
-			KTRACE("rld: load_container(\"%s\", type: %d, rpath: \"%s\") "
-				"already loaded", name, type, rpath);
+			KTRACE("rld: load_container(\"%s\", type: %d, %s: \"%s\") "
+				"already loaded", name, type,
+				runpath != NULL ? "runpath" : "rpath", runpath != NULL ? runpath : rpath);
 			return B_OK;
 		}
 	}
 
-	KTRACE("rld: load_container(\"%s\", type: %d, rpath: \"%s\")", name, type,
-		rpath);
+	KTRACE("rld: load_container(\"%s\", type: %d, %s: \"%s\")", name, type,
+		runpath != NULL ? "runpath" : "rpath", runpath != NULL ? runpath : rpath);
 
 	strlcpy(path, name, sizeof(path));
 
 	// find and open the file
-	fd = open_executable(path, type, rpath, get_program_path(),
+	fd = open_executable(path, type, rpath, runpath, get_program_path(),
 		requestingObjectPath, sSearchPathSubDir);
 	if (fd < 0) {
-		FATAL("Cannot open file %s: %s\n", name, strerror(fd));
+		FATAL("Cannot open file %s (needed by %s): %s\n", name, requestingObjectPath, strerror(fd));
 		KTRACE("rld: load_container(\"%s\"): failed to open file", name);
 		return fd;
 	}
@@ -639,7 +670,7 @@ load_image(char const* name, image_type type, const char* rpath,
 		#endif
 	}
 
-	set_abi_version(image->abi);
+	set_abi_api_version(image->abi, image->api_version);
 
 	// init gcc version dependent image flags
 	// symbol resolution strategy

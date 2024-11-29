@@ -18,59 +18,86 @@
 #include "Handle.h"
 
 
-class ConsoleHandle : public Handle {
+class Console : public ConsoleNode {
 	public:
-		ConsoleHandle();
+		Console();
+
+		void SetHandles(intptr_t readHandle, intptr_t writeHandle, bool takeOwnership = true);
 
 		virtual ssize_t ReadAt(void *cookie, off_t pos, void *buffer,
 			size_t bufferSize);
 		virtual ssize_t WriteAt(void *cookie, off_t pos, const void *buffer,
 			size_t bufferSize);
-};
 
-class InputConsoleHandle : public ConsoleHandle {
-	public:
-		InputConsoleHandle();
+		virtual void	ClearScreen();
+		virtual int32	Width();
+		virtual int32	Height();
+		virtual void	SetCursor(int32 x, int32 y);
+		virtual void	SetCursorVisible(bool visible);
+		virtual void	SetColors(int32 foreground, int32 background);
 
-		virtual ssize_t ReadAt(void *cookie, off_t pos, void *buffer,
-			size_t bufferSize);
-
-		void PutChar(char c);
-		void PutChars(const char *buffer, int count);
+		void PutBackChar(char c);
+		void PutBackChars(const char *buffer, int count);
 		char GetChar();
 
 	private:
-		enum { BUFFER_SIZE = 32 };
+		Handle fReadHandle, fWriteHandle;
 
-		char	fBuffer[BUFFER_SIZE];
+		enum { BUFFER_SIZE = 32 };
+		char	fReadBuffer[BUFFER_SIZE];
 		int		fStart;
 		int		fCount;
 };
 
 
-static InputConsoleHandle sInput;
-static ConsoleHandle sOutput;
+extern ConsoleNode* gConsoleNode;
+static Console sConsole;
 FILE *stdin, *stdout, *stderr;
 
 
-ConsoleHandle::ConsoleHandle()
+Console::Console()
 	:
-	Handle()
+	ConsoleNode()
 {
 }
 
 
+void
+Console::SetHandles(intptr_t readHandle, intptr_t writeHandle, bool takeOwnership)
+{
+	fReadHandle.SetHandle(readHandle, takeOwnership);
+	fWriteHandle.SetHandle(writeHandle, takeOwnership);
+}
+
+
 ssize_t
-ConsoleHandle::ReadAt(void */*cookie*/, off_t /*pos*/, void *buffer,
+Console::ReadAt(void */*cookie*/, off_t /*pos*/, void *_buffer,
 	size_t bufferSize)
 {
-	// don't seek in character devices
-	return of_read(fHandle, buffer, bufferSize);
+	char *buffer = (char*)_buffer;
+
+	// copy buffered bytes first
+	int bytesTotal = 0;
+	while (bufferSize > 0 && fCount > 0) {
+		*buffer++ = GetChar();
+		bytesTotal++;
+		bufferSize--;
+	}
+
+	// read from console
+	if (bufferSize > 0) {
+		ssize_t bytesRead = fReadHandle.ReadAt(NULL, -1, buffer, bufferSize);
+		if (bytesRead < 0)
+			return bytesRead;
+		bytesTotal += bytesRead;
+	}
+
+	return bytesTotal;
 }
 
 
 ssize_t
-ConsoleHandle::WriteAt(void */*cookie*/, off_t /*pos*/, const void *buffer,
+Console::WriteAt(void */*cookie*/, off_t /*pos*/, const void *buffer,
 	size_t bufferSize)
 {
 	const char *string = (const char *)buffer;
@@ -96,7 +123,7 @@ ConsoleHandle::WriteAt(void */*cookie*/, off_t /*pos*/, const void *buffer,
 		}
 
 		if (length > 0) {
-			of_write(fHandle, string, length);
+			fWriteHandle.WriteAt(NULL, -1, string, length);
 			string += length;
 			bufferSize -= length;
 		}
@@ -104,7 +131,7 @@ ConsoleHandle::WriteAt(void */*cookie*/, off_t /*pos*/, const void *buffer,
 		if (newLine) {
 			// this code replaces a single '\n' with '\r\n', so it
 			// bumps the string/bufferSize only a single character
-			of_write(fHandle, "\r\n", 2);
+			fWriteHandle.WriteAt(NULL, -1, "\r\n", 2);
 			string++;
 			bufferSize--;
 		}
@@ -114,72 +141,34 @@ ConsoleHandle::WriteAt(void */*cookie*/, off_t /*pos*/, const void *buffer,
 }
 
 
-//	#pragma mark -
-
-
-InputConsoleHandle::InputConsoleHandle()
-	:
-	ConsoleHandle(),
-	fStart(0),
-	fCount(0)
-{
-}
-
-
-ssize_t
-InputConsoleHandle::ReadAt(void */*cookie*/, off_t /*pos*/, void *_buffer,
-	size_t bufferSize)
-{
-	char *buffer = (char*)_buffer;
-
-	// copy buffered bytes first
-	int bytesTotal = 0;
-	while (bufferSize > 0 && fCount > 0) {
-		*buffer++ = GetChar();
-		bytesTotal++;
-		bufferSize--;
-	}
-
-	// read from console
-	if (bufferSize > 0) {
-		ssize_t bytesRead = ConsoleHandle::ReadAt(NULL, 0, buffer, bufferSize);
-		if (bytesRead < 0)
-			return bytesRead;
-		bytesTotal += bytesRead;
-	}
-
-	return bytesTotal;
-}
-
-
 void
-InputConsoleHandle::PutChar(char c)
+Console::PutBackChar(char c)
 {
 	if (fCount >= BUFFER_SIZE)
 		return;
 
 	int pos = (fStart + fCount) % BUFFER_SIZE;
-	fBuffer[pos] = c;
+	fReadBuffer[pos] = c;
 	fCount++;
 }
 
 
 void
-InputConsoleHandle::PutChars(const char *buffer, int count)
+Console::PutBackChars(const char *buffer, int count)
 {
 	for (int i = 0; i < count; i++)
-		PutChar(buffer[i]);
+		PutBackChar(buffer[i]);
 }
 
 
 char
-InputConsoleHandle::GetChar()
+Console::GetChar()
 {
 	if (fCount == 0)
 		return 0;
 
 	fCount--;
-	char c = fBuffer[fStart];
+	char c = fReadBuffer[fStart];
 	fStart = (fStart + 1) % BUFFER_SIZE;
 	return c;
 }
@@ -191,18 +180,20 @@ InputConsoleHandle::GetChar()
 status_t
 console_init(void)
 {
-	int input, output;
-	if (of_getprop(gChosen, "stdin", &input, sizeof(int)) == OF_FAILED)
+	unsigned int input, output;
+	if (of_getprop(gChosen, "stdin", &input, sizeof(input)) != sizeof(input))
 		return B_ERROR;
-	if (of_getprop(gChosen, "stdout", &output, sizeof(int)) == OF_FAILED)
+	if (of_getprop(gChosen, "stdout", &output, sizeof(output))
+			!= sizeof(output)) {
 		return B_ERROR;
+	}
 
-	sInput.SetHandle(input);
-	sOutput.SetHandle(output);
+	sConsole.SetHandles(input, output);
+	gConsoleNode = &sConsole;
 
 	// now that we're initialized, enable stdio functionality
-	stdin = (FILE *)&sInput;
-	stdout = stderr = (FILE *)&sOutput;
+	stdin = (FILE *)gConsoleNode;
+	stdout = stderr = (FILE *)gConsoleNode;
 
 	return B_OK;
 }
@@ -212,35 +203,55 @@ console_init(void)
 
 
 void
-console_clear_screen(void)
+Console::ClearScreen()
 {
+#ifdef __sparc__
+	// Send both a clear screen (for serial terminal) and a vertical form
+	// feed for on-screen console
+	Write("\014\033[2J", 5);
+#else
 	of_interpret("erase-screen", 0, 0);
+#endif
 }
 
 
 int32
-console_width(void)
+Console::Width()
 {
-	int columnCount;
+	intptr_t columnCount;
+#ifdef __sparc__
+	if (of_interpret("screen-#columns", 0, 1, &columnCount) == OF_FAILED)
+#else
 	if (of_interpret("#columns", 0, 1, &columnCount) == OF_FAILED)
+#endif
 		return 0;
 	return columnCount;
 }
 
 
 int32
-console_height(void)
+Console::Height()
 {
-	int lineCount;
+	intptr_t lineCount;
+#ifdef __sparc__
+	if (of_interpret("screen-#rows", 0, 1, &lineCount) == OF_FAILED)
+#else
 	if (of_interpret("#lines", 0, 1, &lineCount) == OF_FAILED)
+#endif
 		return 0;
 	return lineCount;
 }
 
 
 void
-console_set_cursor(int32 x, int32 y)
+Console::SetCursor(int32 x, int32 y)
 {
+#ifdef __sparc__
+	char buffer[11];
+	int len = snprintf(buffer, sizeof(buffer),
+		"\033[%" B_PRId32 ";%" B_PRId32 "H", y, x);
+	Write(buffer, len);
+#else
 	// Note: We toggle the cursor temporarily to prevent a cursor artifact at
 	// at the old location.
 	of_interpret("toggle-cursor"
@@ -248,22 +259,17 @@ console_set_cursor(int32 x, int32 y)
 		" to column#"
 		" toggle-cursor",
 		2, 0, y, x);
-
+#endif
 }
 
 
 void
-console_show_cursor(void)
+Console::SetCursorVisible(bool visible)
 {
 }
 
 
-void
-console_hide_cursor(void)
-{
-}
-
-
+#ifndef __sparc__
 static int
 translate_color(int32 color)
 {
@@ -290,11 +296,19 @@ translate_color(int32 color)
 		return color;
 	return 0;
 }
+#endif
 
 
 void
-console_set_color(int32 foreground, int32 background)
+Console::SetColors(int32 foreground, int32 background)
 {
+#ifdef __sparc__
+	// Sadly it seems we can only get inverse video, nothing else seems to work
+	if (background != 0)
+		Write("\033[7m", 4);
+	else
+		Write("\033[0m", 4);
+#else
 	// Note: Toggling the cursor doesn't seem to help. We still get cursor
 	// artifacts.
 	of_interpret("toggle-cursor"
@@ -302,6 +316,7 @@ console_set_color(int32 foreground, int32 background)
 		" to background-color"
 		" toggle-cursor",
 		2, 0, translate_color(foreground), translate_color(background));
+#endif
 }
 
 
@@ -337,7 +352,7 @@ console_wait_for_key(void)
 	char buffer[3];
 	ssize_t bytesRead;
 	do {
-		bytesRead = sInput.ReadAt(NULL, 0, buffer, 3);
+		bytesRead = sConsole.ReadAt(NULL, 0, buffer, 3);
 		if (bytesRead < 0)
 			return 0;
 	} while (bytesRead == 0);
@@ -351,7 +366,7 @@ console_wait_for_key(void)
 
 	// put back unread chars
 	if (bytesRead > 1)
-		sInput.PutChars(buffer + 1, bytesRead - 1);
+		sConsole.PutBackChars(buffer + 1, bytesRead - 1);
 
 	return buffer[0];
 }
@@ -361,7 +376,7 @@ int
 console_check_for_key(void)
 {
 	char buffer[3];
-	ssize_t bytesRead = sInput.ReadAt(NULL, 0, buffer, 3);
+	ssize_t bytesRead = sConsole.ReadAt(NULL, 0, buffer, 3);
 	if (bytesRead <= 0)
 		return 0;
 
@@ -374,7 +389,7 @@ console_check_for_key(void)
 
 	// put back unread chars
 	if (bytesRead > 1)
-		sInput.PutChars(buffer + 1, bytesRead - 1);
+		sConsole.PutBackChars(buffer + 1, bytesRead - 1);
 
 	return buffer[0];
 }

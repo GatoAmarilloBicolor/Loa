@@ -8,6 +8,7 @@
  */
 
 
+#include <algorithm>
 #include <ctype.h>
 
 #ifndef FS_SHELL
@@ -286,7 +287,7 @@ fs_walk(fs_volume* _volume, fs_vnode* _base, const char* file, ino_t* _vnodeID)
 		iso9660_inode node;
 		int initResult;
 
-		TRACE(("fs_walk - read buffer from disk at LBN %Ld into buffer "
+		TRACE(("fs_walk - read buffer from disk at LBN %lld into buffer "
 			"%p.\n", block, blockData));
 
 		// Move to the next block if necessary
@@ -303,11 +304,11 @@ fs_walk(fs_volume* _volume, fs_vnode* _base, const char* file, ino_t* _vnodeID)
 			if (initResult == B_OK) {
 				if ((node.flags & ISO_IS_ASSOCIATED_FILE) == 0
 					&& !strcmp(node.name, file)) {
-					TRACE(("fs_walk - success, found vnode at block %Ld, pos "
-						"%Ld\n", block, blockBytesRead));
+					TRACE(("fs_walk - success, found vnode at block %lld, pos "
+						"%lld\n", block, blockBytesRead));
 
 					*_vnodeID = (block << 30) + (blockBytesRead & 0xffffffff);
-					TRACE(("fs_walk - New vnode id is %Ld\n", *_vnodeID));
+					TRACE(("fs_walk - New vnode id is %lld\n", *_vnodeID));
 
 					result = get_vnode(_volume, *_vnodeID, (void**)&newNode);
 					if (result == B_OK) {
@@ -327,13 +328,13 @@ fs_walk(fs_volume* _volume, fs_vnode* _base, const char* file, ino_t* _vnodeID)
 			blockBytesRead += bytesRead;
 
 			TRACE(("fs_walk - Adding %u bytes to blockBytes read (total "
-				"%Ld/%u).\n", (unsigned)bytesRead, blockBytesRead,
+				"%lld/%u).\n", (unsigned)bytesRead, blockBytesRead,
 				(unsigned)baseNode->dataLen[FS_DATA_FORMAT]));
 		}
 		totalRead += volume->logicalBlkSize[FS_DATA_FORMAT];
 		block++;
 
-		TRACE(("fs_walk - moving to next block %Ld, total read %u\n",
+		TRACE(("fs_walk - moving to next block %lld, total read %u\n",
 			block, (unsigned)totalRead));
 		block_cache_put(volume->fBlockCache, cachedBlock);
 	}
@@ -528,16 +529,6 @@ fs_read(fs_volume* _volume, fs_vnode* _node, void* cookie, off_t pos,
 	if ((node->flags & ISO_IS_DIR) != 0)
 		return EISDIR;
 
-	uint32 fileSize = node->dataLen[FS_DATA_FORMAT];
-
-	// set/check boundaries for pos/length
-	if (pos < 0)
-		return B_BAD_VALUE;
-	if (pos >= fileSize) {
-		*_length = 0;
-		return B_OK;
-	}
-
 	return file_cache_read(node->cache, NULL, pos, buffer, _length);
 }
 
@@ -573,13 +564,12 @@ fs_read_link(fs_volume* _volume, fs_vnode* _node, char* buffer,
 		return B_BAD_VALUE;
 
 	size_t length = strlen(node->attr.slName);
-	if (length > *_bufferSize)
-		memcpy(buffer, node->attr.slName, *_bufferSize);
-	else {
-		memcpy(buffer, node->attr.slName, length);
-		*_bufferSize = length;
-	}
 
+	size_t bytesToCopy = std::min(length, *_bufferSize);
+
+	*_bufferSize = length;
+
+	memcpy(buffer, node->attr.slName, bytesToCopy);
 	return B_OK;
 }
 

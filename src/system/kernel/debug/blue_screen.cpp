@@ -10,7 +10,6 @@
 #include "blue_screen.h"
 
 #include <KernelExport.h>
-#include <frame_buffer_console.h>
 #include <console.h>
 #include <debug.h>
 #include <arch/debug_console.h>
@@ -63,7 +62,7 @@ struct screen_info {
 	int32	args[MAX_ARGS];
 } sScreen;
 
-console_module_info *sModule;
+console_module_info *sModule = NULL;
 
 
 static inline void
@@ -568,7 +567,6 @@ parse_character(char c)
 }
 
 
-#ifndef _BOOT_MODE
 static int
 set_paging(int argc, char **argv)
 {
@@ -589,32 +587,42 @@ set_paging(int argc, char **argv)
 	kprintf("paging is turned %s now.\n", sScreen.paging ? "on" : "off");
 	return 0;
 }
-#endif // !_BOOT_MODE
 
 
 //	#pragma mark -
 
 
 status_t
-blue_screen_init(void)
+blue_screen_init_early()
 {
-	extern console_module_info gFrameBufferConsoleModule;
-
 	// we can't use get_module() here, since it's too early in the boot process
-
-	if (!frame_buffer_console_available())
-		return B_ERROR;
-
+	extern console_module_info gFrameBufferConsoleModule;
 	sModule = &gFrameBufferConsoleModule;
-#ifdef _BOOT_MODE
-	sScreen.paging = false;
-#else
+
+	if (sModule->info.std_ops(B_MODULE_INIT) != B_OK) {
+		sModule = NULL;
+		return B_ERROR;
+	}
+
+	sScreen.paging = sScreen.paging_timeout = false;
+	return B_OK;
+}
+
+
+status_t
+blue_screen_init()
+{
+	if (sModule == NULL) {
+		// Early initialization must have previously failed, or never run.
+		if (blue_screen_init_early() != B_OK)
+			return B_ERROR;
+	}
+
 	sScreen.paging = !get_safemode_boolean(
 		"disable_onscreen_paging", false);
 	sScreen.paging_timeout = false;
 
 	add_debugger_command("paging", set_paging, "Enable or disable paging");
-#endif
 	return B_OK;
 }
 
@@ -665,7 +673,6 @@ blue_screen_clear_screen(void)
 }
 
 
-#ifndef _BOOT_MODE
 int
 blue_screen_try_getchar(void)
 {
@@ -678,7 +685,6 @@ blue_screen_getchar(void)
 {
 	return arch_debug_blue_screen_getchar();
 }
-#endif
 
 
 void

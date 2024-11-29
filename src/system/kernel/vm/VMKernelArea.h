@@ -30,7 +30,7 @@ public:
 	addr_t											base;
 	size_t											size;
 	union {
-		VMKernelArea* 								area;
+		VMKernelArea*								area;
 		struct {
 			addr_t									base;
 			uint32									flags;
@@ -109,7 +109,7 @@ struct VMKernelAddressRangeGetFreeListLink {
 };
 
 
-struct VMKernelArea : VMArea, AVLTreeNode {
+struct VMKernelArea final : VMArea, AVLTreeNode {
 								VMKernelArea(VMAddressSpace* addressSpace,
 									uint32 wiring, uint32 protection);
 								~VMKernelArea();

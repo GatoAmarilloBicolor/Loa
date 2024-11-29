@@ -281,7 +281,7 @@ Controller::SetTo(const PlaylistItemRef& item)
 	fSeekFrame = -1;
 	fRequestedSeekFrame = -1;
 
-	if (fItem.Get() == NULL)
+	if (!fItem.IsSet())
 		return B_BAD_VALUE;
 
 	TrackSupplier* trackSupplier = fItem->GetTrackSupplier();
@@ -703,7 +703,7 @@ Controller::TimePosition()
 status_t
 Controller::SaveState(bool reset)
 {
-	if (fItem.Get() == NULL)
+	if (!fItem.IsSet())
 		return B_OK;
 	if (reset)
 		fCurrentFrame = 0;
@@ -736,8 +736,7 @@ Controller::RestoreState()
 		bool resume = fResume == mpSettings::RESUME_ALWAYS;
 		if (fResume == mpSettings::RESUME_ASK) {
 			BString label;
-			int32 time = (int32)((float)lastFrame * TimeDuration()
-					/ (1000000 * _FrameDuration()));
+			int time = (int)((float)lastFrame * TimeDuration() / (1000000 * _FrameDuration()));
 			label.SetToFormat(B_TRANSLATE("Do you want to resume %s at %dm%ds?"),
 					item->Name().String(), time / 60, time % 60);
 			BAlert *alert = new BAlert(B_TRANSLATE("Resume?"), label,
@@ -906,7 +905,7 @@ status_t
 Controller::GetLocation(BString* location)
 {
 	// you need to hold the data lock
-	if (fItem.Get() == NULL)
+	if (!fItem.IsSet())
 		return B_NO_INIT;
 	*location = fItem->LocationURI();
 	return B_OK;
@@ -917,7 +916,7 @@ status_t
 Controller::GetName(BString* name)
 {
 	// you need to hold the data lock
-	if (fItem.Get() == NULL)
+	if (!fItem.IsSet())
 		return B_NO_INIT;
 	*name = fItem->Name();
 	return B_OK;

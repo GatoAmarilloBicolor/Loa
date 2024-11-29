@@ -63,11 +63,10 @@ namespace BPrivate {
 
 
 VirtualDirectoryWindow::VirtualDirectoryWindow(LockingList<BWindow>* windowList,
-	uint32 containerWindowFlags, window_look look, window_feel feel,
-	uint32 flags, uint32 workspace)
+	uint32 openFlags, window_look look, window_feel feel, uint32 windowFlags,
+	uint32 workspace)
 	:
-	BContainerWindow(windowList, containerWindowFlags, look, feel, flags,
-		workspace)
+	BContainerWindow(windowList, openFlags, look, feel, windowFlags, workspace)
 {
 }
 
@@ -134,32 +133,6 @@ void
 VirtualDirectoryWindow::AddWindowMenu(BMenu* menu)
 {
 	BMenuItem* item;
-	BMessage* message;
-
-	BMenu* listViewMenu = new BMenu(B_TRANSLATE("List view"));
-
-	message = new BMessage(kListMode);
-	message->AddInt32("icon_size", B_MINI_ICON);
-	item = new BMenuItem(listViewMenu, message);
-	item->SetShortcut('3', B_COMMAND_KEY);
-	item->SetTarget(PoseView());
-	menu->AddItem(item);
-
-	message = new BMessage(kListMode);
-	message->AddInt32("icon_size", B_MINI_ICON);
-	item = new BMenuItem(B_TRANSLATE("Mini"), message);
-	item->SetTarget(PoseView());
-	listViewMenu->AddItem(item);
-
-	message = new BMessage(kListMode);
-	message->AddInt32("icon_size", B_LARGE_ICON);
-	item = new BMenuItem(B_TRANSLATE("Large"), message);
-	item->SetTarget(PoseView());
-	listViewMenu->AddItem(item);
-
-	listViewMenu->SetTargetForItems(PoseView());
-
-	menu->AddSeparatorItem();
 
 	item = new BMenuItem(B_TRANSLATE("Resize to fit"),
 		new BMessage(kResizeToFit), 'Y');
@@ -173,7 +146,7 @@ VirtualDirectoryWindow::AddWindowMenu(BMenu* menu)
 
 	item = new BMenuItem(B_TRANSLATE("Select all"),
 		new BMessage(B_SELECT_ALL), 'A');
-	item->SetTarget(PoseView());
+	item->SetTarget(this);
 	menu->AddItem(item);
 
 	item = new BMenuItem(B_TRANSLATE("Invert selection"),

@@ -24,6 +24,13 @@
 #include <vesa_info.h>
 
 #include <edid.h>
+#else
+#define mutex_lock(...)
+#define mutex_unlock(...)
+#undef arch_cpu_enable_user_access
+#undef arch_cpu_disable_user_access
+#define arch_cpu_enable_user_access()
+#define arch_cpu_disable_user_access()
 #endif
 
 #include "font.h"
@@ -52,6 +59,7 @@ struct console_info {
 	int32	rows;
 	int32	cursor_x;
 	int32	cursor_y;
+	FramebufferFont* font;
 };
 
 // Palette is (white and black are exchanged):
@@ -120,8 +128,19 @@ get_palette_entry(uint8 index)
 }
 
 
+static uint16
+get_font_data(uint8 glyph, int y)
+{
+	if (sConsole.font->glyphWidth > 8) {
+		uint16* data = (uint16*)sConsole.font->data;
+		return data[sConsole.font->glyphHeight * glyph + y];
+	} else
+		return sConsole.font->data[sConsole.font->glyphHeight * glyph + y];
+}
+
+
 static void
-render_glyph(int32 x, int32 y, uint8 glyph, uint8 attr)
+render_glyph(int32 column, int32 row, uint8 glyph, uint8 attr)
 {
 	// we're ASCII only
 	if (glyph > 127)
@@ -129,15 +148,15 @@ render_glyph(int32 x, int32 y, uint8 glyph, uint8 attr)
 
 	if (sConsole.depth >= 8) {
 		uint8* base = (uint8*)(sConsole.frame_buffer
-			+ sConsole.bytes_per_row * y * CHAR_HEIGHT
-			+ x * CHAR_WIDTH * sConsole.bytes_per_pixel);
+			+ sConsole.bytes_per_row * row * sConsole.font->glyphHeight
+			+ column * sConsole.font->glyphWidth * sConsole.bytes_per_pixel);
 		uint8* color = get_palette_entry(foreground_color(attr));
 		uint8* backgroundColor = get_palette_entry(background_color(attr));
 
-		set_ac();
-		for (y = 0; y < CHAR_HEIGHT; y++) {
-			uint8 bits = FONT[CHAR_HEIGHT * glyph + y];
-			for (x = 0; x < CHAR_WIDTH; x++) {
+		arch_cpu_enable_user_access();
+		for (int y = 0; y < sConsole.font->glyphHeight; y++) {
+			uint16_t bits = get_font_data(glyph, y);
+			for (int x = 0; x < sConsole.font->glyphWidth; x++) {
 				for (int32 i = 0; i < sConsole.bytes_per_pixel; i++) {
 					if (bits & 1)
 						base[x * sConsole.bytes_per_pixel + i] = color[i];
@@ -151,23 +170,23 @@ render_glyph(int32 x, int32 y, uint8 glyph, uint8 attr)
 
 			base += sConsole.bytes_per_row;
 		}
-		clear_ac();
-
+		arch_cpu_disable_user_access();
 	} else {
 		// VGA mode will be treated as monochrome
 		// (ie. only the first plane will be used)
 
 		uint8* base = (uint8*)(sConsole.frame_buffer
-			+ sConsole.bytes_per_row * y * CHAR_HEIGHT + x * CHAR_WIDTH / 8);
-		uint8 baseOffset =  (x * CHAR_WIDTH) & 0x7;
+			+ sConsole.bytes_per_row * row * sConsole.font->glyphHeight
+			+ column * sConsole.font->glyphWidth / 8);
+		uint8 baseOffset =  (column * sConsole.font->glyphWidth) & 0x7;
 
-		set_ac();
-		for (y = 0; y < CHAR_HEIGHT; y++) {
-			uint8 bits = FONT[CHAR_HEIGHT * glyph + y];
+		arch_cpu_enable_user_access();
+		for (int y = 0; y < sConsole.font->glyphHeight; y++) {
+			uint16_t bits = get_font_data(glyph, y);
 			uint8 offset = baseOffset;
 			uint8 mask = 1 << (7 - baseOffset);
 
-			for (x = 0; x < CHAR_WIDTH; x++) {
+			for (int x = 0; x < sConsole.font->glyphWidth; x++) {
 				if (mask == 0)
 					mask = 128;
 
@@ -184,7 +203,7 @@ render_glyph(int32 x, int32 y, uint8 glyph, uint8 attr)
 
 			base += sConsole.bytes_per_row;
 		}
-		clear_ac();
+		arch_cpu_disable_user_access();
 	}
 }
 
@@ -195,10 +214,10 @@ draw_cursor(int32 x, int32 y)
 	if (x < 0 || y < 0)
 		return;
 
-	x *= CHAR_WIDTH * sConsole.bytes_per_pixel;
-	y *= CHAR_HEIGHT;
-	int32 endX = x + CHAR_WIDTH * sConsole.bytes_per_pixel;
-	int32 endY = y + CHAR_HEIGHT;
+	x *= sConsole.font->glyphWidth * sConsole.bytes_per_pixel;
+	y *= sConsole.font->glyphHeight;
+	int32 endX = x + sConsole.font->glyphWidth * sConsole.bytes_per_pixel;
+	int32 endY = y + sConsole.font->glyphHeight;
 	uint8* base = (uint8*)(sConsole.frame_buffer + y * sConsole.bytes_per_row);
 
 	if (sConsole.depth < 8) {
@@ -206,14 +225,14 @@ draw_cursor(int32 x, int32 y)
 		endY /= 8;
 	}
 
-	set_ac();
+	arch_cpu_enable_user_access();
 	for (; y < endY; y++) {
 		for (int32 x2 = x; x2 < endX; x2++)
 			base[x2] = ~base[x2];
 
 		base += sConsole.bytes_per_row;
 	}
-	clear_ac();
+	arch_cpu_disable_user_access();
 }
 
 
@@ -283,29 +302,29 @@ console_blit(int32 srcx, int32 srcy, int32 width, int32 height, int32 destx,
 	if (!frame_buffer_console_available())
 		return;
 
-	height *= CHAR_HEIGHT;
-	srcy *= CHAR_HEIGHT;
-	desty *= CHAR_HEIGHT;
+	height *= sConsole.font->glyphHeight;
+	srcy *= sConsole.font->glyphHeight;
+	desty *= sConsole.font->glyphHeight;
 
 	if (sConsole.depth >= 8) {
-		width *= CHAR_WIDTH * sConsole.bytes_per_pixel;
-		srcx *= CHAR_WIDTH * sConsole.bytes_per_pixel;
-		destx *= CHAR_WIDTH * sConsole.bytes_per_pixel;
+		width *= sConsole.font->glyphWidth * sConsole.bytes_per_pixel;
+		srcx *= sConsole.font->glyphWidth * sConsole.bytes_per_pixel;
+		destx *= sConsole.font->glyphWidth * sConsole.bytes_per_pixel;
 	} else {
 		// monochrome mode
-		width = width * CHAR_WIDTH / 8;
-		srcx = srcx * CHAR_WIDTH / 8;
-		destx = destx * CHAR_WIDTH / 8;
+		width = width * sConsole.font->glyphWidth / 8;
+		srcx = srcx * sConsole.font->glyphWidth / 8;
+		destx = destx * sConsole.font->glyphWidth / 8;
 	}
 
-	set_ac();
+	arch_cpu_enable_user_access();
 	for (int32 y = 0; y < height; y++) {
 		memmove((void*)(sConsole.frame_buffer + (desty + y)
 				* sConsole.bytes_per_row + destx),
 			(void*)(sConsole.frame_buffer + (srcy + y) * sConsole.bytes_per_row
 				+ srcx), width);
 	}
-	clear_ac();
+	arch_cpu_disable_user_access();
 }
 
 
@@ -315,7 +334,7 @@ console_clear(uint8 attr)
 	if (!frame_buffer_console_available())
 		return;
 
-	set_ac();
+	arch_cpu_enable_user_access();
 	switch (sConsole.bytes_per_pixel) {
 		case 1:
 			if (sConsole.depth >= 8) {
@@ -344,8 +363,8 @@ console_clear(uint8 attr)
 			break;
 		}
 	}
+	arch_cpu_disable_user_access();
 
-	clear_ac();
 	sConsole.cursor_x = -1;
 	sConsole.cursor_y = -1;
 }
@@ -401,15 +420,20 @@ frame_buffer_update(addr_t baseAddress, int32 width, int32 height, int32 depth,
 
 	mutex_lock(&sConsole.lock);
 
+	if (width <= 1920 || height <= 1080) {
+		sConsole.font = &smallFont;
+	} else {
+		sConsole.font = &bigFont;
+	}
+
 	sConsole.frame_buffer = baseAddress;
 	sConsole.width = width;
 	sConsole.height = height;
 	sConsole.depth = depth;
 	sConsole.bytes_per_pixel = (depth + 7) / 8;
 	sConsole.bytes_per_row = bytesPerRow;
-	sConsole.columns = sConsole.width / CHAR_WIDTH;
-	sConsole.rows = sConsole.height / CHAR_HEIGHT;
-
+	sConsole.columns = sConsole.width / sConsole.font->glyphWidth;
+	sConsole.rows = sConsole.height / sConsole.font->glyphHeight;
 	// initially, the cursor is hidden
 	sConsole.cursor_x = -1;
 	sConsole.cursor_y = -1;
@@ -426,16 +450,35 @@ frame_buffer_update(addr_t baseAddress, int32 width, int32 height, int32 depth,
 status_t
 frame_buffer_console_init(kernel_args* args)
 {
+	mutex_init(&sConsole.lock, "console_lock");
+
 	if (!args->frame_buffer.enabled)
 		return B_OK;
 
-	mutex_init(&sConsole.lock, "console_lock");
+#if KERNEL_PMAP_BASE
+	const addr_t frameBuffer = (KERNEL_PMAP_BASE
+		+ args->frame_buffer.physical_buffer.start);
+	frame_buffer_update((addr_t)frameBuffer, args->frame_buffer.width,
+		args->frame_buffer.height, args->frame_buffer.depth,
+		args->frame_buffer.bytes_per_row);
+	return B_OK;
+#else
+	return B_NO_INIT;
+#endif
+}
+
+
+status_t
+frame_buffer_console_init_post_vm(kernel_args* args)
+{
+	if (!args->frame_buffer.enabled)
+		return B_OK;
 
 	void* frameBuffer;
-	sConsole.area = map_physical_memory("vesa frame buffer",
+	sConsole.area = map_physical_memory("frame buffer",
 		args->frame_buffer.physical_buffer.start,
 		args->frame_buffer.physical_buffer.size, B_ANY_KERNEL_ADDRESS,
-		B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA | B_USER_CLONEABLE_AREA,
+		B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA | B_CLONEABLE_AREA,
 		&frameBuffer);
 	if (sConsole.area < 0)
 		return sConsole.area;
@@ -483,7 +526,7 @@ frame_buffer_console_init_post_modules(kernel_args* args)
 	// try to set frame buffer memory to write combined
 
 	return vm_set_area_memory_type(sConsole.area,
-		args->frame_buffer.physical_buffer.start, B_MTR_WC);
+		args->frame_buffer.physical_buffer.start, B_WRITE_COMBINING_MEMORY);
 }
 
 

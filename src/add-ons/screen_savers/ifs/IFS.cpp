@@ -72,7 +72,7 @@ static int i2;
 unsigned int
 ya_random(void)
 {
-	register int ret = a[i1] + a[i2];
+	int ret = a[i1] + a[i2];
 	a[i1] = ret;
 	if (++i1 >= VECTOR_SIZE)
 		i1 = 0;
@@ -103,7 +103,7 @@ ya_rand_init(unsigned int seed)
 	}
 
 	i1 = a[0] % VECTOR_SIZE;
-	i2 = (i1 + 024) % VECTOR_SIZE;
+	i2 = (i1 + 24) % VECTOR_SIZE;
 }
 
 

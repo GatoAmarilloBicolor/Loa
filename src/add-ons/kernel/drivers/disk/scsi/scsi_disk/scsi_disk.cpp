@@ -1,7 +1,8 @@
 /*
- * Copyright 2008-2013, Axel Dörfler, axeld@pinc-software.de.
- * Copyright 2002/03, Thomas Kurschel. All rights reserved.
- * Distributed under the terms of the MIT License.
+ * Copyright 2021 David Sebek, dasebek@gmail.com
+ * Copyright 2008-2013 Axel Dörfler, axeld@pinc-software.de
+ * Copyright 2002/03 Thomas Kurschel
+ * All rights reserved. Distributed under the terms of the MIT License.
  */
 
 
@@ -98,6 +99,7 @@ get_geometry(das_handle* handle, device_geometry* geometry)
 		return status;
 
 	devfs_compute_geometry_size(geometry, info->capacity, info->block_size);
+	geometry->bytes_per_physical_sector = info->physical_block_size;
 
 	geometry->device_type = B_DISK;
 	geometry->removable = info->removable;
@@ -111,10 +113,11 @@ get_geometry(das_handle* handle, device_geometry* geometry)
 	geometry->write_once = false;
 
 	TRACE("scsi_disk: get_geometry(): %" B_PRId32 ", %" B_PRId32 ", %" B_PRId32
-		", %" B_PRId32 ", %d, %d, %d, %d\n", geometry->bytes_per_sector,
+		", %" B_PRId32 ", %d, %d, %d, %d, %" B_PRId32 "\n", geometry->bytes_per_sector,
 		geometry->sectors_per_track, geometry->cylinder_count,
 		geometry->head_count, geometry->device_type,
-		geometry->removable, geometry->read_only, geometry->write_once);
+		geometry->removable, geometry->read_only, geometry->write_once,
+		geometry->bytes_per_physical_sector);
 
 	return B_OK;
 }
@@ -156,44 +159,63 @@ synchronize_cache(das_driver_info *device)
 }
 
 
-#if 0
 static status_t
 trim_device(das_driver_info* device, fs_trim_data* trimData)
 {
 	TRACE("trim_device()\n");
 
+	trimData->trimmed_size = 0;
+
 	scsi_ccb* request = device->scsi->alloc_ccb(device->scsi_device);
 	if (request == NULL)
 		return B_NO_MEMORY;
 
-	uint64 trimmedSize = 0;
+	scsi_block_range* blockRanges = (scsi_block_range*)
+		malloc(trimData->range_count * sizeof(*blockRanges));
+	if (blockRanges == NULL)
+		return B_NO_MEMORY;
+
+	MemoryDeleter deleter(blockRanges);
+
 	for (uint32 i = 0; i < trimData->range_count; i++) {
-		trimmedSize += trimData->ranges[i].size;
+		uint64 startBytes = trimData->ranges[i].offset;
+		uint64 sizeBytes = trimData->ranges[i].size;
+		uint32 blockSize = device->block_size;
+
+		// Align to a block boundary so we don't discard blocks
+		// that could also contain some other data
+		uint64 blockOffset = startBytes % blockSize;
+		if (blockOffset == 0) {
+			blockRanges[i].lba = startBytes / blockSize;
+			blockRanges[i].size = sizeBytes / blockSize;
+		} else {
+			blockRanges[i].lba = startBytes / blockSize + 1;
+			blockRanges[i].size = (sizeBytes - (blockSize - blockOffset))
+				/ blockSize;
+		}
 	}
+
+	// Check ranges against device capacity and make them fit
+	for (uint32 i = 0; i < trimData->range_count; i++) {
+		if (blockRanges[i].lba >= device->capacity) {
+			dprintf("trim_device(): range offset (LBA) %" B_PRIu64
+				" exceeds device capacity %" B_PRIu64 "\n",
+				blockRanges[i].lba, device->capacity);
+			return B_BAD_VALUE;
+		}
+		uint64 maxSize = device->capacity - blockRanges[i].lba;
+		blockRanges[i].size = min_c(blockRanges[i].size, maxSize);
+	}
+
+	uint64 trimmedBlocks;
 	status_t status = sSCSIPeripheral->trim_device(device->scsi_periph_device,
-		request, (scsi_block_range*)&trimData->ranges[0],
-		trimData->range_count);
+		request, blockRanges, trimData->range_count, &trimmedBlocks);
 
 	device->scsi->free_ccb(request);
-	if (status == B_OK)
-		trimData->trimmed_size = trimmedSize;
+	// Some blocks may have been trimmed even if trim_device returns a failure
+	trimData->trimmed_size = trimmedBlocks * device->block_size;
 
 	return status;
-}
-#endif
-
-
-static int
-log2(uint32 x)
-{
-	int y;
-
-	for (y = 31; y >= 0; --y) {
-		if (x == ((uint32)1 << y))
-			break;
-	}
-
-	return y;
 }
 
 
@@ -290,56 +312,6 @@ das_free(void* cookie)
 
 
 static status_t
-das_read(void* cookie, off_t pos, void* buffer, size_t* _length)
-{
-	das_handle* handle = (das_handle*)cookie;
-	size_t length = *_length;
-
-	IORequest request;
-	status_t status = request.Init(pos, (addr_t)buffer, length, false, 0);
-	if (status != B_OK)
-		return status;
-
-	status = handle->info->io_scheduler->ScheduleRequest(&request);
-	if (status != B_OK)
-		return status;
-
-	status = request.Wait(0, 0);
-	if (status == B_OK)
-		*_length = length;
-	else
-		dprintf("das_read(): request.Wait() returned: %s\n", strerror(status));
-
-	return status;
-}
-
-
-static status_t
-das_write(void* cookie, off_t pos, const void* buffer, size_t* _length)
-{
-	das_handle* handle = (das_handle*)cookie;
-	size_t length = *_length;
-
-	IORequest request;
-	status_t status = request.Init(pos, (addr_t)buffer, length, true, 0);
-	if (status != B_OK)
-		return status;
-
-	status = handle->info->io_scheduler->ScheduleRequest(&request);
-	if (status != B_OK)
-		return status;
-
-	status = request.Wait(0, 0);
-	if (status == B_OK)
-		*_length = length;
-	else
-		dprintf("das_write(): request.Wait() returned: %s\n", strerror(status));
-
-	return status;
-}
-
-
-static status_t
 das_io(void *cookie, io_request *request)
 {
 	das_handle* handle = (das_handle*)cookie;
@@ -369,7 +341,7 @@ das_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 
 		case B_GET_GEOMETRY:
 		{
-			if (buffer == NULL /*|| length != sizeof(device_geometry)*/)
+			if (buffer == NULL || length > sizeof(device_geometry))
 				return B_BAD_VALUE;
 
 		 	device_geometry geometry;
@@ -377,7 +349,7 @@ das_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 			if (status != B_OK)
 				return status;
 
-			return user_memcpy(buffer, &geometry, sizeof(device_geometry));
+			return user_memcpy(buffer, &geometry, length);
 		}
 
 		case B_GET_ICON_NAME:
@@ -415,23 +387,13 @@ das_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 		case B_FLUSH_DRIVE_CACHE:
 			return synchronize_cache(info);
 
-#if 0
 		case B_TRIM_DEVICE:
 		{
-			fs_trim_data* trimData;
-			MemoryDeleter deleter;
-			status_t status = get_trim_data_from_user(buffer, length, deleter,
-				trimData);
-			if (status != B_OK)
-				return status;
-
-			status = trim_device(info, trimData);
-			if (status != B_OK)
-				return status;
-
-			return copy_trim_data_to_user(buffer, trimData);
+			// We know the buffer is kernel-side because it has been
+			// preprocessed in devfs
+			ASSERT(IS_KERNEL_ADDRESS(buffer));
+			return trim_device(info, (fs_trim_data*)buffer);
 		}
-#endif
 
 		default:
 			return sSCSIPeripheral->ioctl(handle->scsi_periph_handle, op,
@@ -444,16 +406,10 @@ das_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 
 
 static void
-das_set_capacity(das_driver_info* info, uint64 capacity, uint32 blockSize)
+das_set_capacity(das_driver_info* info, uint64 capacity, uint32 blockSize, uint32 physicalBlockSize)
 {
 	TRACE("das_set_capacity(device = %p, capacity = %" B_PRIu64
 		", blockSize = %" B_PRIu32 ")\n", info, capacity, blockSize);
-
-	// get log2, if possible
-	uint32 blockShift = log2(blockSize);
-
-	if ((1UL << blockShift) != blockSize)
-		blockShift = 0;
 
 	info->capacity = capacity;
 
@@ -484,6 +440,7 @@ das_set_capacity(das_driver_info* info, uint64 capacity, uint32 blockSize)
 	}
 
 	info->block_size = blockSize;
+	info->physical_block_size = physicalBlockSize;
 }
 
 
@@ -497,7 +454,7 @@ das_media_changed(das_driver_info *device, scsi_ccb *request)
 
 
 scsi_periph_callbacks callbacks = {
-	(void (*)(periph_device_cookie, uint64, uint32))das_set_capacity,
+	(void (*)(periph_device_cookie, uint64, uint32, uint32))das_set_capacity,
 	(void (*)(periph_device_cookie, scsi_ccb *))das_media_changed
 };
 
@@ -541,7 +498,7 @@ das_register_device(device_node *node)
 	// get inquiry data
 	if (sDeviceManager->get_attr_raw(node, SCSI_DEVICE_INQUIRY_ITEM,
 			(const void **)&deviceInquiry, &inquiryLength, true) != B_OK
-		|| inquiryLength < sizeof(deviceInquiry))
+		|| inquiryLength < sizeof(scsi_res_inquiry))
 		return B_ERROR;
 
 	// get block limit of underlying hardware to lower it (if necessary)
@@ -556,10 +513,11 @@ das_register_device(device_node *node)
 
 	// ready to register
 	device_attr attrs[] = {
+		{ B_DEVICE_PRETTY_NAME, B_STRING_TYPE, { .string = "SCSI Disk" }},
 		// tell block_io whether the device is removable
-		{"removable", B_UINT8_TYPE, {ui8: deviceInquiry->removable_medium}},
+		{"removable", B_UINT8_TYPE, {.ui8 = deviceInquiry->removable_medium}},
 		// impose own max block restriction
-		{B_DMA_MAX_TRANSFER_BLOCKS, B_UINT32_TYPE, {ui32: maxBlocks}},
+		{B_DMA_MAX_TRANSFER_BLOCKS, B_UINT32_TYPE, {.ui32 = maxBlocks}},
 		{ NULL }
 	};
 
@@ -676,8 +634,8 @@ struct device_module_info sSCSIDiskDevice = {
 	das_open,
 	das_close,
 	das_free,
-	das_read,
-	das_write,
+	NULL,	// read
+	NULL,	// write
 	das_io,
 	das_ioctl,
 

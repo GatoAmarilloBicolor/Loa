@@ -13,18 +13,21 @@
 //	default setting; BFS is now primarily a little endian file system
 #	define BFS_LITTLE_ENDIAN_ONLY
 #endif
+#if defined(BFS_LITTLE_ENDIAN_ONLY) && defined(BFS_BIG_ENDIAN_ONLY)
+#	error Building BFS with both big and little endian is not supported.
+#endif
 
 
 #if defined(BFS_LITTLE_ENDIAN_ONLY) && B_HOST_IS_LENDIAN \
 	|| defined(BFS_BIG_ENDIAN_ONLY) && B_HOST_IS_BENDIAN
 		/* host is BFS endian */
 #	define BFS_NATIVE_ENDIAN
-#	define BFS_ENDIAN_TO_HOST_INT16(value) value
-#	define BFS_ENDIAN_TO_HOST_INT32(value) value
-#	define BFS_ENDIAN_TO_HOST_INT64(value) value
-#	define HOST_ENDIAN_TO_BFS_INT16(value) value
-#	define HOST_ENDIAN_TO_BFS_INT32(value) value
-#	define HOST_ENDIAN_TO_BFS_INT64(value) value
+#	define BFS_ENDIAN_TO_HOST_INT16(value) (value)
+#	define BFS_ENDIAN_TO_HOST_INT32(value) (value)
+#	define BFS_ENDIAN_TO_HOST_INT64(value) (value)
+#	define HOST_ENDIAN_TO_BFS_INT16(value) (value)
+#	define HOST_ENDIAN_TO_BFS_INT32(value) (value)
+#	define HOST_ENDIAN_TO_BFS_INT64(value) (value)
 #elif defined(BFS_LITTLE_ENDIAN_ONLY) && B_HOST_IS_BENDIAN \
 	|| defined(BFS_BIG_ENDIAN_ONLY) && B_HOST_IS_LENDIAN
 		/* host is big endian, BFS is little endian or vice versa */

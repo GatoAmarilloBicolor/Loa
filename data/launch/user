@@ -1,3 +1,8 @@
+service x-vnd.Haiku-app_server {
+	env /system/boot/SetupEnvironment
+	launch /system/servers/app_server
+}
+
 target desktop {
 	env /system/boot/SetupEnvironment
 
@@ -10,6 +15,14 @@ target desktop {
 	service x-vnd.Be-TSKB {
 		launch /system/Deskbar
 		on initial_volumes_mounted
+	}
+
+	job x-vnd.Haiku-LaunchBox {
+		launch /system/apps/LaunchBox
+		if setting ~/config/settings/LaunchBox/main_settings autostart
+		on initial_volumes_mounted
+		legacy
+		no_safemode
 	}
 
 	service x-vnd.Be-POST {
@@ -28,7 +41,9 @@ target desktop {
 	}
 
 	job update-time {
-		launch /system/preferences/Time "" --update
+		launch /system/preferences/Time --update
+		if setting ~/config/settings/networktime\ settings "synchronize at boot"
+		on network_available
 	}
 
 	job first-login {

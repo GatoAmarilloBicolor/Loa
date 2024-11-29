@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * All rights reserved.
  *
@@ -28,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: releng/11.1/sys/dev/ath/if_ath_debug.c 267992 2014-06-28 03:56:17Z hselasky $");
-
 #include "opt_inet.h"
 #include "opt_ath.h"
 #include "opt_wlan.h"

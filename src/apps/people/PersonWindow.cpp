@@ -1,5 +1,5 @@
 /*
- * Copyright 2005-2010, Haiku, Inc. All rights reserved.
+ * Copyright 2005-2023, Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT license.
  *
  * Authors:
@@ -29,6 +29,8 @@
 #include <NodeInfo.h>
 #include <NodeMonitor.h>
 #include <Path.h>
+#include <Screen.h>
+#include <ScrollView.h>
 #include <String.h>
 #include <TextView.h>
 #include <Volume.h>
@@ -107,9 +109,14 @@ PersonWindow::PersonWindow(BRect frame, const char* title,
 
 	fView = new PersonView("PeopleView", categoryAttribute, fRef);
 
+	BScrollView* scrollView = new BScrollView("PeopleScrollView", fView, 0,
+		false, true, B_NO_BORDER);
+	scrollView->SetExplicitMinSize(BSize(scrollView->MinSize().width, 0));
+
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
+		.SetInsets(0, 0, -1, 0)
 		.Add(menuBar)
-		.Add(fView);
+		.Add(scrollView);
 
 	fRevert->SetTarget(fView);
 	selectAllItem->SetTarget(fView);
@@ -160,12 +167,6 @@ PersonWindow::MenusBeginning()
 void
 PersonWindow::MessageReceived(BMessage* msg)
 {
-	char			str[256];
-	BDirectory		directory;
-	BEntry			entry;
-	BFile			file;
-	BNodeInfo		*node;
-
 	switch (msg->what) {
 		case M_SAVE:
 			if (!fRef) {
@@ -199,23 +200,27 @@ PersonWindow::MessageReceived(BMessage* msg)
 			if (msg->FindRef("directory", &dir) == B_OK) {
 				const char* name = NULL;
 				msg->FindString("name", &name);
+
+				BDirectory directory;
 				directory.SetTo(&dir);
 				if (directory.InitCheck() == B_NO_ERROR) {
+					BFile file;
 					directory.CreateFile(name, &file);
 					if (file.InitCheck() == B_NO_ERROR) {
-						node = new BNodeInfo(&file);
+						BNodeInfo* node = new BNodeInfo(&file);
 						node->SetType("application/x-person");
 						delete node;
 
+						BEntry entry;
 						directory.FindEntry(name, &entry);
 						entry.GetRef(&dir);
 						_SetToRef(new entry_ref(dir));
 						SetTitle(fRef->name);
 						fView->CreateFile(fRef);
-					}
-					else {
-						sprintf(str, B_TRANSLATE("Could not create %s."), name);
-						BAlert* alert = new BAlert("", str, B_TRANSLATE("Sorry"));
+					} else {
+						BString str;
+						str.SetToFormat(B_TRANSLATE("Could not create %s."), name);
+						BAlert* alert = new BAlert("", str.String(), B_TRANSLATE("Sorry"));
 						alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 						alert->Go();
 					}
@@ -331,6 +336,9 @@ PersonWindow::QuitRequested()
 void
 PersonWindow::Show()
 {
+	BRect screenFrame = BScreen(this).Frame();
+	if (Frame().bottom > screenFrame.bottom)
+		ResizeBy(0, screenFrame.bottom - Frame().bottom - 10);
 	fView->MakeFocus();
 	BWindow::Show();
 }
@@ -340,6 +348,21 @@ void
 PersonWindow::AddAttribute(const char* label, const char* attribute)
 {
 	fView->AddAttribute(label, attribute);
+}
+
+
+void
+PersonWindow::SetInitialValues(BMessage* message)
+{
+	char* attribute;
+	uint32 type;
+	int32 count;
+
+	for (int32 i = 0; message->GetInfo(B_STRING_TYPE, i, &attribute, &type, &count) == B_OK; i++) {
+		BString text = "";
+		if (message->FindString(attribute, &text) == B_OK)
+			fView->SetAttribute(attribute, text.String(), true);
+	}
 }
 
 

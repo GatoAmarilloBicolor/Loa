@@ -6,6 +6,7 @@
 #define _TIME_H_
 
 
+#include <locale_t.h>
 #include <sys/types.h>
 
 
@@ -25,6 +26,7 @@ typedef __haiku_int64 time_t;
 
 #define CLOCKS_PER_SEC	1000000
 #define CLK_TCK			CLOCKS_PER_SEC
+#define TIME_UTC		1
 
 #define MAX_TIMESTR		70
 	/* maximum length of a string returned by asctime(), and ctime() */
@@ -91,6 +93,8 @@ extern struct tm	*localtime_r(const time_t *timer, struct tm *tm);
 extern int			nanosleep(const struct timespec *, struct timespec *);
 extern size_t		strftime(char *buffer, size_t maxSize, const char *format,
 						const struct tm *tm);
+extern size_t		strftime_l(char *buffer, size_t maxSize, const char *format,
+						const struct tm *tm, locale_t locale);
 extern char 		*strptime(const char *buf, const char *format, struct tm *tm);
 
 /* clock functions */
@@ -109,6 +113,9 @@ int		timer_gettime(timer_t timerID, struct itimerspec* value);
 int		timer_settime(timer_t timerID, int flags,
 			const struct itimerspec* value, struct itimerspec* oldValue);
 int		timer_getoverrun(timer_t timerID);
+
+/* C11 timespec */
+int		timespec_get(struct timespec *ts, int base);
 
 /* special timezone support */
 extern void tzset(void);

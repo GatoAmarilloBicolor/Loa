@@ -38,12 +38,13 @@
 
 #include "Transformable.h"
 
-
 #define obj_new(type, n)		((type *)malloc ((n) * sizeof(type)))
-#define obj_renew(p, type, n)	((type *)realloc (p, (n) * sizeof(type)))
+#define obj_renew(p, type, n)	((type *)realloc ((void *)p, (n) * sizeof(type)))
 #define obj_free				free
 
 #define ALLOC_CHUNKS 20
+
+_USING_ICON_NAMESPACE
 
 
 bool
@@ -145,7 +146,7 @@ VectorPath::VectorPath(BMessage* archive)
 	if (archive->GetInfo("point", &typeFound, &countFound) >= B_OK
 		&& typeFound == B_POINT_TYPE
 		&& _SetPointCount(countFound)) {
-		memset(fPath, 0, fAllocCount * sizeof(control_point));
+		memset((void*)fPath, 0, fAllocCount * sizeof(control_point));
 
 		BPoint point;
 		BPoint pointIn;
@@ -303,7 +304,7 @@ VectorPath::operator=(const VectorPath& from)
 	_SetPointCount(from.fPointCount);
 	fClosed = from.fClosed;
 	if (fPath) {
-		memcpy(fPath, from.fPath, fPointCount * sizeof(control_point));
+		memcpy((void*)fPath, from.fPath, fPointCount * sizeof(control_point));
 		fCachedBounds = from.fCachedBounds;
 	} else {
 		fprintf(stderr, "VectorPath() -> allocation failed in operator=!\n");
@@ -322,7 +323,7 @@ VectorPath::operator==(const VectorPath& other) const
 {
 	if (fClosed != other.fClosed)
 		return false;
-	
+
 	if (fPointCount != other.fPointCount)
 		return false;
 
@@ -1073,7 +1074,7 @@ VectorPath::_SetPointCount(int32 count)
 			fPath = obj_new(control_point, fAllocCount);
 
 		if (fPath != NULL) {
-			memset(fPath + fPointCount, 0,
+			memset((void*)(fPath + fPointCount), 0,
 				(fAllocCount - fPointCount) * sizeof(control_point));
 		}
 	}

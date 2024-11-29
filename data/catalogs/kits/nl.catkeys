@@ -1,42 +1,39 @@
-1	dutch; flemish	x-vnd.Haiku-libbe	3337473349
+1	dutch; flemish	x-vnd.Haiku-libbe	1337497439
+All Rights Reserved.	AboutWindow		Alle rechten voorbehouden.
+gold master	AboutWindow		gold master
+Undo	TextView		Ongedaan maken
+OK	PrintJob		OK
+OK	Dragger		OK
 gamma	AboutWindow		gamma
-beta	AboutWindow		beta
-%3.2f GiB	StringForSize		%3.2f GiB
-Written by:	AboutWindow		Door:
+development	AboutWindow		in ontwikkeling
+Print Server is not responding.	PrintJob		Print Server antwoordt niet.
 About %app%	AboutMenuItem		Over %app%
+Warning	Dragger		Waarschuwing
+Green:	ColorControl		Groen:
+Redo	TextView		Opnieuw
+No pages to print!	PrintJob		Geen pagina's om af te drukken!
+beta	AboutWindow		beta
+OK	ZombieReplicantView		OK
 Cut	TextView		Knippen
+Default	Default decorator about box		Standaard
+Can't delete this replicant from its original application. Life goes on.	Dragger		De replica van de originele applicatie kan niet verwijderd worden. Het leven gaat voort.
+Error	ZombieReplicantView		Fout
+Paste	TextView		Plakken
+OK	AboutWindow		OK
+Special Thanks:	AboutWindow		Speciale dank aan:
+Default Haiku window decorator.	Default decorator about box		Standaard Haiku venster decoratie.
+Remove replicant	Dragger		Replica verwijderen
 Version	AboutWindow		Versie
-Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Kan de replica voor \"%description\" niet maken.\n%error
+Red:	ColorControl		Rood:
+<empty>	Menu		<leeg>
 Copy	TextView		Kopiëren
-%3.2f KiB	StringForSize		%3.2f KiB
+Select all	TextView		Alles selecteren
 alpha	AboutWindow		alpha
 Error	PrintJob		Fout
-All Rights Reserved.	AboutWindow		Alle rechten voorbehouden.
-{0, plural, one{# byte} other{# bytes}}	StringForSize		{0, plural, one{# byte} other{# bytes}}
-About %app%	AboutWindow		Over %app%
-No pages to print!	PrintJob		Geen pagina's om af te drukken!
-OK	Dragger		OK
-OK	PrintJob		OK
-Green:	ColorControl		Groen:
-Version history:	AboutWindow		Versiegeschiedenis:
-Remove replicant	Dragger		Replica verwijderen
-Select all	TextView		Alles selecteren
-OK	AboutWindow		OK
-OK	ZombieReplicantView		OK
-Print Server is not responding.	PrintJob		Print Server antwoordt niet.
-Paste	TextView		Plakken
-Special Thanks:	AboutWindow		Speciale dank aan:
-%.2f TiB	StringForSize		%.2f TiB
-Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		De applicatie voor de replica kan niet gelocaliseerd worden. Er is geen applicatiehandtekening gegeven.\n%error
-Redo	TextView		Opnieuw
-<empty>	Menu		<leeg>
-Warning	Dragger		Waarschuwing
-Undo	TextView		Ongedaan maken
-Red:	ColorControl		Rood:
-%3.2f MiB	StringForSize		%3.2f MiB
 About %app…	Dragger		Over %app...
-development	AboutWindow		in ontwikkeling
-Error	ZombieReplicantView		Fout
+About %app%	AboutWindow		Over %app%
+Version history:	AboutWindow		Versiegeschiedenis:
+Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		De applicatie voor de replica kan niet gelocaliseerd worden. Er is geen applicatiehandtekening gegeven.\n%error
 Blue:	ColorControl		Blauw:
-gold master	AboutWindow		gold master
-Can't delete this replicant from its original application. Life goes on.	Dragger		De replica van de originele applicatie kan niet verwijderd worden. Het leven gaat voort.
+Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Kan de replica voor \"%description\" niet maken.\n%error
+Written by:	AboutWindow		Door:

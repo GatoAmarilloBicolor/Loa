@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5212/ar5212phy.h 239801 2012-08-29 03:58:13Z adrian $
  */
 #ifndef _DEV_ATH_AR5212PHY_H_
 #define _DEV_ATH_AR5212PHY_H_
@@ -75,7 +75,6 @@
 #define AR_PHY_TSTDAC_CONST_Q	0x0003FE00
 #define AR_PHY_TSTDAC_CONST_Q_S	9
 #define AR_PHY_TSTDAC_CONST_I	0x000001FF
-
 
 #define	AR_PHY_SETTLING		0x9844
 #define AR_PHY_SETTLING_AGC 0x0000007F

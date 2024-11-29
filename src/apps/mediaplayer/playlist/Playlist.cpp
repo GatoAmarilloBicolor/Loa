@@ -417,7 +417,8 @@ Playlist::RemoveListener(Listener* listener)
 
 
 void
-Playlist::AppendItems(const BMessage* refsReceivedMessage, int32 appendIndex)
+Playlist::AppendItems(const BMessage* refsReceivedMessage, int32 appendIndex,
+	bool sortItems)
 {
 	// the playlist is replaced by the refs in the message
 	// or the refs are appended at the appendIndex
@@ -434,7 +435,7 @@ Playlist::AppendItems(const BMessage* refsReceivedMessage, int32 appendIndex)
 
 	Playlist temporaryPlaylist;
 	Playlist* playlist = add ? &temporaryPlaylist : this;
-	bool sortPlaylist = true;
+	bool hasSavedPlaylist = false;
 
 	// TODO: This is not very fair, we should abstract from
 	// entry ref representation and support more URLs.
@@ -456,19 +457,25 @@ Playlist::AppendItems(const BMessage* refsReceivedMessage, int32 appendIndex)
 			AppendPlaylistToPlaylist(ref, &subPlaylist);
 			// Do not sort the whole playlist anymore, as that
 			// will screw up the ordering in the saved playlist.
-			sortPlaylist = false;
+			hasSavedPlaylist = true;
 		} else {
 			if (_IsQuery(type))
 				AppendQueryToPlaylist(ref, &subPlaylist);
 			else {
-				if (!_ExtraMediaExists(this, ref)) {
-					AppendToPlaylistRecursive(ref, &subPlaylist);
+				PlaylistFileReader* reader = PlaylistFileReader::GenerateReader(ref);
+				if (reader != NULL) {
+					reader->AppendToPlaylist(ref, &subPlaylist);
+					delete reader;
+				} else {
+					if (!_ExtraMediaExists(this, ref)) {
+						AppendToPlaylistRecursive(ref, &subPlaylist);
+					}
 				}
 			}
 
 			// At least sort this subsection of the playlist
 			// if the whole playlist is not sorted anymore.
-			if (!sortPlaylist)
+			if (sortItems && hasSavedPlaylist)
 				subPlaylist.Sort();
 		}
 
@@ -481,7 +488,8 @@ Playlist::AppendItems(const BMessage* refsReceivedMessage, int32 appendIndex)
 		AdoptPlaylist(subPlaylist, subAppendIndex);
 		subAppendIndex += subPlaylistCount;
 	}
-	if (sortPlaylist)
+
+	if (sortItems)
 		playlist->Sort();
 
 	if (add)
@@ -620,7 +628,7 @@ Playlist::ExtraMediaExists(Playlist* playlist, PlaylistItem* item)
 Playlist::_ExtraMediaExists(Playlist* playlist, const entry_ref& ref)
 {
 	BString exceptExtension = _GetExceptExtension(BPath(&ref).Path());
-	
+
 	for (int32 i = 0; i < playlist->CountItems(); i++) {
 		FilePlaylistItem* compare = dynamic_cast<FilePlaylistItem*>(playlist->ItemAt(i));
 		if (compare == NULL)
@@ -753,7 +761,7 @@ Playlist::_BindExtraMedia(PlaylistItem* item)
 	FilePlaylistItem* fileItem = dynamic_cast<FilePlaylistItem*>(item);
 	if (!fileItem)
 		return;
-	
+
 	// If the media file is foo.mp3, _BindExtraMedia() searches foo.avi.
 	BPath mediaFilePath(&fileItem->Ref());
 	BString mediaFilePathString = mediaFilePath.Path();
@@ -762,7 +770,7 @@ Playlist::_BindExtraMedia(PlaylistItem* item)
 	BDirectory dir(dirPath.Path());
 	if (dir.InitCheck() != B_OK)
 		return;
-	
+
 	BEntry entry;
 	BString entryPathString;
 	while (dir.GetNextEntry(&entry, true) == B_OK) {

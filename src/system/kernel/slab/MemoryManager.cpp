@@ -445,6 +445,16 @@ MemoryManager::Init(kernel_args* args)
 	sFreeAreas = NULL;
 	sFreeAreaCount = 0;
 	sMaintenanceNeeded = false;
+
+#if USE_DEBUG_HEAP_FOR_MALLOC || USE_GUARDED_HEAP_FOR_MALLOC
+	// Allocate one area immediately. Otherwise, we might try to allocate before
+	// post-area initialization but after page initialization, during which time
+	// we can't actually reserve pages.
+	MutexLocker locker(sLock);
+	Area* area = NULL;
+	_AllocateArea(0, area);
+	_AddArea(area);
+#endif
 }
 
 
@@ -696,6 +706,11 @@ MemoryManager::FreeRawOrReturnCache(void* pages, uint32 flags)
 		flags);
 
 	T(FreeRawOrReturnCache(pages, flags));
+
+	if ((flags & CACHE_DONT_LOCK_KERNEL_SPACE) != 0) {
+		panic("cannot proceed without locking kernel space!");
+		return NULL;
+	}
 
 	// get the area
 	addr_t areaBase = _AreaBaseAddressForAddress((addr_t)pages);
@@ -956,8 +971,8 @@ MemoryManager::_AllocateChunks(size_t chunkSize, uint32 chunkCount,
 		_AddArea(_PopFreeArea());
 		_RequestMaintenance();
 
-		_GetChunks(metaChunkList, chunkSize, chunkCount, _metaChunk, _chunk);
-		return B_OK;
+		return _GetChunks(metaChunkList, chunkSize, chunkCount, _metaChunk,
+			_chunk) ? B_OK : B_NO_MEMORY;
 	}
 
 	if ((flags & CACHE_DONT_LOCK_KERNEL_SPACE) != 0) {
@@ -978,12 +993,7 @@ MemoryManager::_AllocateChunks(size_t chunkSize, uint32 chunkCount,
 		} else
 			break;
 
-		ConditionVariableEntry entry;
-		allocationEntry->condition.Add(&entry);
-
-		mutex_unlock(&sLock);
-		entry.Wait();
-		mutex_lock(&sLock);
+		allocationEntry->condition.Wait(&sLock);
 
 		if (_GetChunks(metaChunkList, chunkSize, chunkCount, _metaChunk,
 				_chunk)) {
@@ -1018,8 +1028,8 @@ MemoryManager::_AllocateChunks(size_t chunkSize, uint32 chunkCount,
 	}
 
 	_AddArea(area);
-	_GetChunks(metaChunkList, chunkSize, chunkCount, _metaChunk, _chunk);
-	return B_OK;
+	return _GetChunks(metaChunkList, chunkSize, chunkCount, _metaChunk,
+		_chunk) ? B_OK : B_NO_MEMORY;
 }
 
 
@@ -1324,7 +1334,7 @@ MemoryManager::_AllocateArea(uint32 flags, Area*& _area)
 		pagesNeededToMap = translationMap->MaxPagesNeededToMap(
 			(addr_t)area, (addr_t)areaBase + SLAB_AREA_SIZE - 1);
 
-		vmArea = VMAreaHash::Lookup(areaID);
+		vmArea = VMAreas::Lookup(areaID);
 		status_t error = _MapChunk(vmArea, (addr_t)area, kAreaAdminSize,
 			pagesNeededToMap, flags);
 		if (error != B_OK) {
@@ -1607,7 +1617,7 @@ MemoryManager::_ConvertEarlyArea(Area* area)
 	if (areaID < 0)
 		panic("out of memory");
 
-	area->vmArea = VMAreaHash::Lookup(areaID);
+	area->vmArea = VMAreas::Lookup(areaID);
 }
 
 

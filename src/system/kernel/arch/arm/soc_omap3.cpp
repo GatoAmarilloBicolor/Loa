@@ -1,3 +1,5 @@
+#include <vm/vm.h>
+
 #include "soc_omap3.h"
 
 enum {
@@ -25,7 +27,7 @@ enum {
 
 
 void
-OMAP3InterruptController::EnableInterrupt(int irq)
+OMAP3InterruptController::EnableInterrupt(int32 irq)
 {
 	uint32 bit = irq % 32, bank = irq / 32;
 	fRegBase[INTCPS_MIR_CLEARn + (8 * bank)] = 1 << bit;
@@ -33,7 +35,7 @@ OMAP3InterruptController::EnableInterrupt(int irq)
 
 
 void
-OMAP3InterruptController::DisableInterrupt(int irq)
+OMAP3InterruptController::DisableInterrupt(int32 irq)
 {
 	uint32 bit = irq % 32, bank = irq / 32;
 	fRegBase[INTCPS_MIR_SETn + (8 * bank)] = 1 << bit;
@@ -77,7 +79,7 @@ OMAP3InterruptController::SoftReset()
 {
 	uint32 tmp = fRegBase[INTCPS_REVISION] & 0xff;
 
-	dprintf("OMAP: INTC found at 0x%p (rev %ld.%ld)\n",
+	dprintf("OMAP: INTC found at 0x%p (rev %" B_PRIu32 ".%" B_PRIu32 ")\n",
 		fRegBase, tmp >> 4, tmp & 0xf);
 
 	tmp = fRegBase[INTCPS_SYSCONFIG];
@@ -92,11 +94,12 @@ OMAP3InterruptController::SoftReset()
 }
 
 
-OMAP3InterruptController::OMAP3InterruptController(fdt_module_info *fdt, fdt_device_node node)
-	: InterruptController(fdt, node),
-	fNumPending(3)
+OMAP3InterruptController::OMAP3InterruptController(uint32_t reg_base)
+	: fNumPending(3)
 {
-	fRegArea = fFDT->map_reg_range(node, 0, (void**)&fRegBase);
+	fRegArea = vm_map_physical_memory(B_SYSTEM_TEAM, "intc-omap3", (void**)&fRegBase,
+		B_ANY_KERNEL_ADDRESS, B_PAGE_SIZE, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
+		reg_base, false);
 	if (fRegArea < 0)
 		panic("OMAP3InterruptController: cannot map registers!");
 
@@ -181,20 +184,22 @@ OMAP3Timer::Clear()
 }
 
 
-OMAP3Timer::OMAP3Timer(fdt_module_info *fdtModule, fdt_device_node node)
-	: HardwareTimer(fdtModule, node),
-	fSystemTime(0)
+OMAP3Timer::OMAP3Timer(uint32_t reg_base, uint32_t interrupt)
+	: fSystemTime(0)
 {
-	fRegArea = fFDT->map_reg_range(node, 0, (void**)&fRegBase);
+	fRegArea = vm_map_physical_memory(B_SYSTEM_TEAM, "timer-omap3", (void**)&fRegBase,
+		B_ANY_KERNEL_ADDRESS, B_PAGE_SIZE, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
+		reg_base, false);
 	if (fRegArea < 0)
 		panic("Cannot map OMAP3Timer registers!");
 
-	fInterrupt = fFDT->get_interrupt(node, 0);
+	fInterrupt = interrupt;
 	if (fInterrupt < 0)
 		panic("Cannot get OMAP3Timer interrupt!");
 
 	uint32 rev = fRegBase[TIDR];
-	dprintf("OMAP: Found timer @ 0x%p, IRQ %d (rev %ld.%ld)\n", fRegBase, fInterrupt, (rev >> 4) & 0xf, rev & 0xf);
+	dprintf("OMAP: Found timer @ 0x%p, IRQ %d (rev %" B_PRIu32 ".%" B_PRIu32 ")\n",
+		fRegBase, fInterrupt, (rev >> 4) & 0xf, rev & 0xf);
 
 	// Let the timer run (so we can use it as clocksource)
 	fRegBase[TCLR] |= 1;

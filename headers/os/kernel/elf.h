@@ -1,13 +1,14 @@
 /*
- * Copyright 2002-2016 Haiku, Inc. All rights reserved.
+ * Copyright 2002-2019 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  */
 #ifndef _ELF_H
 #define _ELF_H
 
 
-#include <SupportDefs.h>
+#include <BeBuild.h>
 #include <ByteOrder.h>
+#include <SupportDefs.h>
 
 
 typedef uint32 Elf32_Addr;
@@ -27,6 +28,16 @@ typedef uint64 Elf64_Xword;
 typedef int64 Elf64_Sxword;
 
 typedef Elf64_Half Elf64_Versym;
+
+#if B_HAIKU_32_BIT
+	#define Elf_Addr Elf32_Addr
+	#define Elf_Phdr Elf32_Phdr
+	#define Elf_Half Elf32_Half
+#elif B_HAIKU_64_BIT
+	#define Elf_Addr Elf64_Addr
+	#define Elf_Phdr Elf64_Phdr
+	#define Elf_Half Elf64_Half
+#endif
 
 
 /*** ELF header ***/
@@ -92,6 +103,12 @@ typedef struct {
 #define ELFMAG3		'F'
 #define ELFMAG		"\x7f""ELF"
 #define SELFMAG		4
+
+/* e_ident */
+#define IS_ELF(ehdr)    ((ehdr).e_ident[EI_MAG0] == ELFMAG0 && \
+	(ehdr).e_ident[EI_MAG1] == ELFMAG1 && \
+	(ehdr).e_ident[EI_MAG2] == ELFMAG2 && \
+	(ehdr).e_ident[EI_MAG3] == ELFMAG3)
 
 /* e_type (Object file type) */
 #define ET_NONE			0 /* No file type */
@@ -197,6 +214,9 @@ typedef struct {
 #define EM_RISCV		243 /* RISC-V */
 #define EM_BPF			247 /* Linux kernel bpf virtual machine */
 
+#define EM_ALPHA        0x9026 /* Digital Alpha (nonstandard, but the value
+								  everyone uses) */
+
 /* architecture class (EI_CLASS) */
 #define ELFCLASSNONE	0
 #define ELFCLASS32		1
@@ -261,6 +281,8 @@ typedef struct {
 #define SHT_REL			9
 #define SHT_SHLIB		10
 #define SHT_DYNSYM		11
+#define SHT_INIT_ARRAY	14
+#define SHT_FINI_ARRAY	15
 
 #define SHT_GNU_verdef	0x6ffffffd    /* version definition section */
 #define SHT_GNU_verneed	0x6ffffffe    /* version needs section */
@@ -322,11 +344,13 @@ typedef struct {
 #define PT_SHLIB		5
 #define PT_PHDR			6
 #define PT_TLS			7
+#define PT_EH_FRAME		0x6474e550
 #define PT_STACK		0x6474e551
 #define PT_RELRO		0x6474e552
 
 #define PT_LOPROC		0x70000000
 #define PT_ARM_UNWIND	0x70000001
+#define PT_RISCV_ATTRIBUTES	0x70000003
 #define PT_HIPROC		0x7fffffff
 
 /* program header segment flags */
@@ -397,6 +421,22 @@ typedef struct {
 
 /* special symbol indices */
 #define STN_UNDEF 0
+
+/* relocation types */
+
+#define R_386_NONE		0
+#define R_386_32		1	/* add symbol value */
+#define R_386_PC32		2	/* add PC relative symbol value */
+#define R_386_GOT32		3	/* add PC relative GOT offset */
+#define R_386_PLT32		4	/* add PC relative PLT offset */
+#define R_386_COPY		5	/* copy data from shared object */
+#define R_386_GLOB_DAT	6	/* set GOT entry to data address */
+#define R_386_JMP_SLOT	7	/* set GOT entry to code address */
+#define R_386_RELATIVE	8	/* add load address of shared object */
+#define R_386_GOTOFF	9	/* add GOT relative symbol address */
+#define R_386_GOTPC		10	/* add PC relative GOT table address */
+#define R_386_TLS_DTPMOD32	35
+#define R_386_TLS_DTPOFF32	36
 
 
 /* relocation table entry */
@@ -503,6 +543,8 @@ typedef struct {
 #define DT_ENCODING			32
 #define DT_PREINIT_ARRAY	32	/* preinitialization array */
 #define DT_PREINIT_ARRAYSZ	33	/* preinitialization array size */
+
+#define	DT_GNU_HASH		0x6ffffef5	/* GNU-style hash table */
 
 #define DT_VERSYM       0x6ffffff0	/* symbol version table */
 #define DT_VERDEF		0x6ffffffc	/* version definition table */

@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2024, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -251,9 +251,10 @@ AcpiDsDumpMethodStack (
 
     ACPI_FUNCTION_TRACE (DsDumpMethodStack);
 
+
     /* Ignore control codes, they are not errors */
 
-    if ((Status & AE_CODE_MASK) == AE_CODE_CONTROL)
+    if (ACPI_CNTL_EXCEPTION (Status))
     {
         return_VOID;
     }
@@ -320,8 +321,13 @@ AcpiDsDumpMethodStack (
                 Op->Common.Next = NULL;
 
 #ifdef ACPI_DISASSEMBLER
-                AcpiOsPrintf ("Failed at ");
-                AcpiDmDisassemble (NextWalkState, Op, ACPI_UINT32_MAX);
+                if (WalkState->MethodNode != AcpiGbl_RootNode)
+                {
+                    /* More verbose if not module-level code */
+
+                    AcpiOsPrintf ("Failed at ");
+                    AcpiDmDisassemble (NextWalkState, Op, ACPI_UINT32_MAX);
+                }
 #endif
                 Op->Common.Next = Next;
             }

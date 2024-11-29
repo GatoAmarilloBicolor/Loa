@@ -34,6 +34,7 @@
 
 #include <AutoDeleter.h>
 #include <util/AutoLock.h>
+#include <util/ThreadAutoLock.h>
 
 #include "BreakpointManager.h"
 
@@ -62,6 +63,8 @@ static timer sProfilingTimers[SMP_MAX_CPUS];
 
 static void schedule_profiling_timer(Thread* thread, bigtime_t interval);
 static int32 profiling_event(timer* unused);
+static void profiling_flush(void*);
+
 static status_t ensure_debugger_installed();
 static void get_team_debug_info(team_debug_info &teamDebugInfo);
 
@@ -306,8 +309,9 @@ init_thread_debug_info(struct thread_debug_info *info)
 		info->ignore_signals = 0;
 		info->ignore_signals_once = 0;
 		info->profile.sample_area = -1;
+		info->profile.interval = 0;
 		info->profile.samples = NULL;
-		info->profile.buffer_full = false;
+		info->profile.flush_needed = false;
 		info->profile.installed_timer = NULL;
 	}
 }
@@ -323,6 +327,7 @@ clear_thread_debug_info(struct thread_debug_info *info, bool dying)
 		// cancel profiling timer
 		if (info->profile.installed_timer != NULL) {
 			cancel_timer(info->profile.installed_timer);
+			info->profile.installed_timer->hook = NULL;
 			info->profile.installed_timer = NULL;
 		}
 
@@ -333,8 +338,9 @@ clear_thread_debug_info(struct thread_debug_info *info, bool dying)
 		info->ignore_signals = 0;
 		info->ignore_signals_once = 0;
 		info->profile.sample_area = -1;
+		info->profile.interval = 0;
 		info->profile.samples = NULL;
-		info->profile.buffer_full = false;
+		info->profile.flush_needed = false;
 	}
 }
 
@@ -754,7 +760,6 @@ thread_hit_debug_event_internal(debug_debugger_message event,
 		atomic_and(&thread->debug_info.flags, ~B_THREAD_DEBUG_STOPPED);
 
 		update_thread_user_debug_flag(thread);
-
 	} else {
 		// the debugger is gone: cleanup our info completely
 		threadDebugInfo = thread->debug_info;
@@ -792,6 +797,7 @@ thread_hit_debug_event(debug_debugger_message event, const void *message,
 	// TODO: Maybe better use ref-counting and a flag in the breakpoint manager.
 	Team* team = thread_get_current_thread()->team;
 	ConditionVariable debugChangeCondition;
+	debugChangeCondition.Init(team, "debug change condition");
 	prepare_debugger_change(team, debugChangeCondition);
 
 	if (team->debug_info.breakpoint_manager != NULL) {
@@ -816,7 +822,8 @@ thread_hit_serious_debug_event(debug_debugger_message event,
 	if (error != B_OK) {
 		Thread *thread = thread_get_current_thread();
 		dprintf("thread_hit_serious_debug_event(): Failed to install debugger: "
-			"thread: %" B_PRId32 ": %s\n", thread->id, strerror(error));
+			"thread: %" B_PRId32 " (%s): %s\n", thread->id, thread->name,
+			strerror(error));
 		return error;
 	}
 
@@ -836,29 +843,33 @@ user_debug_pre_syscall(uint32 syscall, void *args)
 
 	// check whether pre-syscall tracing is enabled for team or thread
 	int32 threadDebugFlags = atomic_get(&thread->debug_info.flags);
-	if (!(teamDebugFlags & B_TEAM_DEBUG_PRE_SYSCALL)
-			&& !(threadDebugFlags & B_THREAD_DEBUG_PRE_SYSCALL)) {
-		return;
+	if ((teamDebugFlags & B_TEAM_DEBUG_PRE_SYSCALL)
+			|| (threadDebugFlags & B_THREAD_DEBUG_PRE_SYSCALL)) {
+		// prepare the message
+		debug_pre_syscall message;
+		message.syscall = syscall;
+
+		// copy the syscall args
+		if (syscall < (uint32)kSyscallCount) {
+			if (kSyscallInfos[syscall].parameter_size > 0)
+				memcpy(message.args, args, kSyscallInfos[syscall].parameter_size);
+		}
+
+		thread_hit_debug_event(B_DEBUGGER_MESSAGE_PRE_SYSCALL, &message,
+			sizeof(message), true);
 	}
 
-	// prepare the message
-	debug_pre_syscall message;
-	message.syscall = syscall;
-
-	// copy the syscall args
-	if (syscall < (uint32)kSyscallCount) {
-		if (kSyscallInfos[syscall].parameter_size > 0)
-			memcpy(message.args, args, kSyscallInfos[syscall].parameter_size);
+	if ((teamDebugFlags & B_TEAM_DEBUG_POST_SYSCALL)
+			|| (threadDebugFlags & B_THREAD_DEBUG_POST_SYSCALL)) {
+		// The syscall_start_time storage is shared with the profiler's interval.
+		if (thread->debug_info.profile.samples == NULL)
+			thread->debug_info.profile.syscall_start_time = system_time();
 	}
-
-	thread_hit_debug_event(B_DEBUGGER_MESSAGE_PRE_SYSCALL, &message,
-		sizeof(message), true);
 }
 
 
 void
-user_debug_post_syscall(uint32 syscall, void *args, uint64 returnValue,
-	bigtime_t startTime)
+user_debug_post_syscall(uint32 syscall, void *args, uint64 returnValue)
 {
 	// check whether a debugger is installed
 	Thread *thread = thread_get_current_thread();
@@ -866,11 +877,21 @@ user_debug_post_syscall(uint32 syscall, void *args, uint64 returnValue,
 	if (!(teamDebugFlags & B_TEAM_DEBUG_DEBUGGER_INSTALLED))
 		return;
 
+	// check if we need to flush the profiling buffer
+	if (thread->debug_info.profile.flush_needed)
+		profiling_flush(NULL);
+
 	// check whether post-syscall tracing is enabled for team or thread
 	int32 threadDebugFlags = atomic_get(&thread->debug_info.flags);
 	if (!(teamDebugFlags & B_TEAM_DEBUG_POST_SYSCALL)
 			&& !(threadDebugFlags & B_THREAD_DEBUG_POST_SYSCALL)) {
 		return;
+	}
+
+	bigtime_t startTime = 0;
+	if (thread->debug_info.profile.samples == NULL) {
+		startTime = thread->debug_info.profile.syscall_start_time;
+		thread->debug_info.profile.syscall_start_time = 0;
 	}
 
 	// prepare the message
@@ -894,7 +915,7 @@ user_debug_post_syscall(uint32 syscall, void *args, uint64 returnValue,
 /**	\brief To be called when an unhandled processor exception (error/fault)
  *		   occurred.
  *	\param exception The debug_why_stopped value identifying the kind of fault.
- *	\param singal The signal corresponding to the exception.
+ *	\param signal The signal corresponding to the exception.
  *	\return \c true, if the caller shall continue normally, i.e. usually send
  *			a deadly signal. \c false, if the debugger insists to continue the
  *			program (e.g. because it has solved the removed the cause of the
@@ -925,7 +946,8 @@ user_debug_exception_occurred(debug_exception_type exception, int signal)
 
 
 bool
-user_debug_handle_signal(int signal, struct sigaction *handler, bool deadly)
+user_debug_handle_signal(int signal, struct sigaction *handler, siginfo_t *info,
+	bool deadly)
 {
 	// check, if a debugger is installed and is interested in signals
 	Thread *thread = thread_get_current_thread();
@@ -939,6 +961,7 @@ user_debug_handle_signal(int signal, struct sigaction *handler, bool deadly)
 	debug_signal_received message;
 	message.signal = signal;
 	message.handler = *handler;
+	message.info = *info;
 	message.deadly = deadly;
 
 	status_t result = thread_hit_debug_event(B_DEBUGGER_MESSAGE_SIGNAL_RECEIVED,
@@ -995,7 +1018,8 @@ user_debug_team_created(team_id teamID)
 
 
 void
-user_debug_team_deleted(team_id teamID, port_id debuggerPort)
+user_debug_team_deleted(team_id teamID, port_id debuggerPort, status_t status, int signal,
+	team_usage_info* usageInfo)
 {
 	if (debuggerPort >= 0) {
 		TRACE(("user_debug_team_deleted(team: %" B_PRId32 ", debugger port: "
@@ -1005,6 +1029,9 @@ user_debug_team_deleted(team_id teamID, port_id debuggerPort)
 		message.origin.thread = -1;
 		message.origin.team = teamID;
 		message.origin.nub_port = -1;
+		message.status = status;
+		message.signal = signal;
+		message.usage = *usageInfo;
 		write_port_etc(debuggerPort, B_DEBUGGER_MESSAGE_TEAM_DELETED, &message,
 			sizeof(message), B_RELATIVE_TIMEOUT, 0);
 	}
@@ -1070,7 +1097,7 @@ user_debug_thread_created(thread_id threadID)
 
 
 void
-user_debug_thread_deleted(team_id teamID, thread_id threadID)
+user_debug_thread_deleted(team_id teamID, thread_id threadID, status_t status)
 {
 	// Things are a bit complicated here, since this thread no longer belongs to
 	// the debugged team (but to the kernel). So we can't use debugger_write().
@@ -1116,6 +1143,7 @@ user_debug_thread_deleted(team_id teamID, thread_id threadID)
 		message.origin.thread = threadID;
 		message.origin.team = teamID;
 		message.origin.nub_port = -1;
+		message.status = status;
 
 		write_port_etc(debuggerPort, B_DEBUGGER_MESSAGE_THREAD_DELETED,
 			&message, sizeof(message), B_KILL_CAN_INTERRUPT, 0);
@@ -1166,7 +1194,11 @@ user_debug_thread_exiting(Thread* thread)
 	int32 imageEvent = threadDebugInfo.profile.image_event;
 	threadDebugInfo.profile.sample_area = -1;
 	threadDebugInfo.profile.samples = NULL;
-	threadDebugInfo.profile.buffer_full = false;
+	threadDebugInfo.profile.flush_needed = false;
+	bigtime_t lastCPUTime; {
+		SpinLocker threadTimeLocker(thread->time_lock);
+		lastCPUTime = thread->CPUTime(false);
+	}
 
 	atomic_or(&threadDebugInfo.flags, B_THREAD_DEBUG_DYING);
 
@@ -1184,6 +1216,7 @@ user_debug_thread_exiting(Thread* thread)
 	message.variable_stack_depth = variableStackDepth;
 	message.image_event = imageEvent;
 	message.stopped = true;
+	message.last_cpu_time = lastCPUTime;
 	debugger_write(debuggerPort, B_DEBUGGER_MESSAGE_PROFILER_UPDATE,
 		&message, sizeof(message), false);
 
@@ -1290,19 +1323,31 @@ static void
 schedule_profiling_timer(Thread* thread, bigtime_t interval)
 {
 	struct timer* timer = &sProfilingTimers[thread->cpu->cpu_num];
+	// Use the "hook" field to sanity-check that this timer is not scheduled.
+	ASSERT(timer->hook == NULL);
 	thread->debug_info.profile.installed_timer = timer;
 	thread->debug_info.profile.timer_end = system_time() + interval;
 	add_timer(timer, &profiling_event, interval, B_ONE_SHOT_RELATIVE_TIMER);
 }
 
 
+/*!	Returns the time remaining for the current profiling timer.
+	The caller must hold the thread's debug info lock.
+	\param thread The current thread.
+*/
+static bigtime_t
+profiling_timer_left(Thread* thread)
+{
+	return thread->debug_info.profile.timer_end - system_time();
+}
+
+
 /*!	Samples the current thread's instruction pointer/stack trace.
 	The caller must hold the current thread's debug info lock.
-	\param flushBuffer Return parameter: Set to \c true when the sampling
-		buffer must be flushed.
+	\returns Whether the profiling timer should be rescheduled.
 */
 static bool
-profiling_do_sample(bool& flushBuffer)
+profiling_do_sample()
 {
 	Thread* thread = thread_get_current_thread();
 	thread_debug_info& debugInfo = thread->debug_info;
@@ -1331,14 +1376,10 @@ profiling_do_sample(bool& flushBuffer)
 		}
 
 		if (debugInfo.profile.last_image_event < imageEvent
-			|| debugInfo.profile.flush_threshold - sampleCount < stackDepth) {
-			if (!IS_KERNEL_ADDRESS(arch_debug_get_interrupt_pc(NULL))) {
-				flushBuffer = true;
-				return true;
-			}
+				|| debugInfo.profile.flush_threshold - sampleCount < stackDepth) {
+			debugInfo.profile.flush_needed = true;
 
-			// We can't flush the buffer now, since we interrupted a kernel
-			// function. If the buffer is not full yet, we add the samples,
+			// If the buffer is not full yet, we add the samples,
 			// otherwise we have to drop them.
 			if (maxSamples - sampleCount < stackDepth) {
 				debugInfo.profile.dropped_ticks++;
@@ -1352,19 +1393,26 @@ profiling_do_sample(bool& flushBuffer)
 	}
 
 	// get the samples
+	uint32 flags = STACK_TRACE_USER;
+	int32 skipIFrames = 0;
+	if (debugInfo.profile.profile_kernel) {
+		flags |= STACK_TRACE_KERNEL;
+		skipIFrames = 1;
+	}
+
 	addr_t* returnAddresses = debugInfo.profile.samples
 		+ debugInfo.profile.sample_count;
 	if (debugInfo.profile.variable_stack_depth) {
 		// variable sample count per hit
 		*returnAddresses = arch_debug_get_stack_trace(returnAddresses + 1,
-			stackDepth - 1, 1, 0, STACK_TRACE_KERNEL | STACK_TRACE_USER);
+			stackDepth - 1, skipIFrames, 0, flags);
 
 		debugInfo.profile.sample_count += *returnAddresses + 1;
 	} else {
 		// fixed sample count per hit
-		if (stackDepth > 1) {
+		if (stackDepth > 1 || !debugInfo.profile.profile_kernel) {
 			int32 count = arch_debug_get_stack_trace(returnAddresses,
-				stackDepth, 1, 0, STACK_TRACE_KERNEL | STACK_TRACE_USER);
+				stackDepth, skipIFrames, 0, flags);
 
 			for (int32 i = count; i < stackDepth; i++)
 				returnAddresses[i] = 0;
@@ -1379,11 +1427,13 @@ profiling_do_sample(bool& flushBuffer)
 
 
 static void
-profiling_buffer_full(void*)
+profiling_flush(void*)
 {
-	// It is undefined whether the function is called with interrupts enabled
-	// or disabled. We are allowed to enable interrupts, though. First make
-	// sure interrupts are disabled.
+	// This function may be called as a post_interrupt_callback. When it is,
+	// it is undefined whether the function is called with interrupts enabled
+	// or disabled. (When called elsewhere, interrupts will always be enabled.)
+	// We are allowed to enable interrupts, though. First make sure interrupts
+	// are disabled.
 	disable_interrupts();
 
 	Thread* thread = thread_get_current_thread();
@@ -1391,16 +1441,27 @@ profiling_buffer_full(void*)
 
 	SpinLocker threadDebugInfoLocker(debugInfo.lock);
 
-	if (debugInfo.profile.samples != NULL && debugInfo.profile.buffer_full) {
+	if (debugInfo.profile.samples != NULL && debugInfo.profile.flush_needed) {
 		int32 sampleCount = debugInfo.profile.sample_count;
 		int32 droppedTicks = debugInfo.profile.dropped_ticks;
 		int32 stackDepth = debugInfo.profile.stack_depth;
 		bool variableStackDepth = debugInfo.profile.variable_stack_depth;
 		int32 imageEvent = debugInfo.profile.image_event;
 
+		// prevent the timer from running until after we flush
+		bigtime_t interval = debugInfo.profile.interval;
+		if (debugInfo.profile.installed_timer != NULL) {
+			interval = max_c(profiling_timer_left(thread), 0);
+			cancel_timer(debugInfo.profile.installed_timer);
+			debugInfo.profile.installed_timer->hook = NULL;
+			debugInfo.profile.installed_timer = NULL;
+		}
+		debugInfo.profile.interval_left = -1;
+
 		// notify the debugger
 		debugInfo.profile.sample_count = 0;
 		debugInfo.profile.dropped_ticks = 0;
+		debugInfo.profile.flush_needed = false;
 
 		threadDebugInfoLocker.Unlock();
 		enable_interrupts();
@@ -1419,13 +1480,8 @@ profiling_buffer_full(void*)
 
 		disable_interrupts();
 		threadDebugInfoLocker.Lock();
-
-		// do the sampling and reschedule timer, if still profiling this thread
-		bool flushBuffer;
-		if (profiling_do_sample(flushBuffer)) {
-			debugInfo.profile.buffer_full = false;
-			schedule_profiling_timer(thread, debugInfo.profile.interval);
-		}
+		if (debugInfo.profile.samples != NULL)
+			schedule_profiling_timer(thread, interval);
 	}
 
 	threadDebugInfoLocker.Unlock();
@@ -1443,21 +1499,25 @@ profiling_event(timer* /*unused*/)
 	thread_debug_info& debugInfo = thread->debug_info;
 
 	SpinLocker threadDebugInfoLocker(debugInfo.lock);
+	debugInfo.profile.installed_timer->hook = NULL;
+	debugInfo.profile.installed_timer = NULL;
 
-	bool flushBuffer = false;
-	if (profiling_do_sample(flushBuffer)) {
-		if (flushBuffer) {
-			// The sample buffer needs to be flushed; we'll have to notify the
-			// debugger. We can't do that right here. Instead we set a post
-			// interrupt callback doing that for us, and don't reschedule the
-			// timer yet.
-			thread->post_interrupt_callback = profiling_buffer_full;
-			debugInfo.profile.installed_timer = NULL;
-			debugInfo.profile.buffer_full = true;
+	if (profiling_do_sample()) {
+		// Check if the sample buffer needs to be flushed. We can't do it here,
+		// since we're in an interrupt handler, and we can't set the callback
+		// if we interrupted a kernel function, since the callback will pause
+		// this thread. (The post_syscall hook will do the flush in that case.)
+		if (debugInfo.profile.flush_needed
+				&& !IS_KERNEL_ADDRESS(arch_debug_get_interrupt_pc(NULL))) {
+			thread->post_interrupt_callback = profiling_flush;
+
+			// We don't reschedule the timer here because profiling_flush() will
+			// lead to the thread being descheduled until we are told to continue.
+			// The timer will be rescheduled after the flush concludes.
+			debugInfo.profile.interval_left = -1;
 		} else
 			schedule_profiling_timer(thread, debugInfo.profile.interval);
-	} else
-		debugInfo.profile.installed_timer = NULL;
+	}
 
 	return B_HANDLED_INTERRUPT;
 }
@@ -1475,8 +1535,9 @@ user_debug_thread_unscheduled(Thread* thread)
 	struct timer* timer = thread->debug_info.profile.installed_timer;
 	if (timer != NULL) {
 		// track remaining time
-		bigtime_t left = thread->debug_info.profile.timer_end - system_time();
+		bigtime_t left = profiling_timer_left(thread);
 		thread->debug_info.profile.interval_left = max_c(left, 0);
+		thread->debug_info.profile.installed_timer->hook = NULL;
 		thread->debug_info.profile.installed_timer = NULL;
 
 		// cancel timer
@@ -1498,7 +1559,7 @@ user_debug_thread_scheduled(Thread* thread)
 	SpinLocker threadDebugInfoLocker(thread->debug_info.lock);
 
 	if (thread->debug_info.profile.samples != NULL
-		&& !thread->debug_info.profile.buffer_full) {
+			&& thread->debug_info.profile.interval_left >= 0) {
 		// install profiling timer
 		schedule_profiling_timer(thread,
 			thread->debug_info.profile.interval_left);
@@ -1561,6 +1622,7 @@ nub_thread_cleanup(Thread *nubThread)
 		nubThread->id, nubThread->team->debug_info.debugger_port));
 
 	ConditionVariable debugChangeCondition;
+	debugChangeCondition.Init(nubThread->team, "debug change condition");
 	prepare_debugger_change(nubThread->team, debugChangeCondition);
 
 	team_debug_info teamDebugInfo;
@@ -1574,7 +1636,7 @@ nub_thread_cleanup(Thread *nubThread)
 
 	team_debug_info &info = nubThread->team->debug_info;
 	if (info.flags & B_TEAM_DEBUG_DEBUGGER_INSTALLED
-		&& info.nub_thread == nubThread->id) {
+			&& info.nub_thread == nubThread->id) {
 		teamDebugInfo = info;
 		clear_team_debug_info(&info, false);
 		destroyDebugInfo = true;
@@ -2246,6 +2308,7 @@ debug_nub_thread(void *)
 				int32 stackDepth = message.start_profiler.stack_depth;
 				bool variableStackDepth
 					= message.start_profiler.variable_stack_depth;
+				bool profileKernel = message.start_profiler.profile_kernel;
 				bigtime_t interval = max_c(message.start_profiler.interval,
 					B_DEBUG_MIN_PROFILE_INTERVAL);
 				status_t result = B_OK;
@@ -2273,7 +2336,8 @@ debug_nub_thread(void *)
 				void* samples = NULL;
 				if (result == B_OK) {
 					clonedSampleArea = clone_area("profiling samples", &samples,
-						B_ANY_KERNEL_ADDRESS, B_READ_AREA | B_WRITE_AREA,
+						B_ANY_KERNEL_ADDRESS,
+						B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
 						sampleArea);
 					if (clonedSampleArea >= 0) {
 						// we need the memory locked
@@ -2316,7 +2380,8 @@ debug_nub_thread(void *)
 							threadDebugInfo.profile.stack_depth = stackDepth;
 							threadDebugInfo.profile.variable_stack_depth
 								= variableStackDepth;
-							threadDebugInfo.profile.buffer_full = false;
+							threadDebugInfo.profile.profile_kernel = profileKernel;
+							threadDebugInfo.profile.flush_needed = false;
 							threadDebugInfo.profile.interval_left = interval;
 							threadDebugInfo.profile.installed_timer = NULL;
 							threadDebugInfo.profile.image_event = imageEvent;
@@ -2363,6 +2428,7 @@ debug_nub_thread(void *)
 				bool variableStackDepth = false;
 				int32 imageEvent = 0;
 				int32 droppedTicks = 0;
+				bigtime_t lastCPUTime = 0;
 
 				// get the thread and detach the profile info
 				Thread* thread = Thread::GetAndLock(threadID);
@@ -2386,8 +2452,12 @@ debug_nub_thread(void *)
 						imageEvent = threadDebugInfo.profile.image_event;
 						threadDebugInfo.profile.sample_area = -1;
 						threadDebugInfo.profile.samples = NULL;
-						threadDebugInfo.profile.buffer_full = false;
+						threadDebugInfo.profile.flush_needed = false;
 						threadDebugInfo.profile.dropped_ticks = 0;
+						{
+							SpinLocker threadTimeLocker(thread->time_lock);
+							lastCPUTime = thread->CPUTime(false);
+						}
 					} else
 						result = B_BAD_VALUE;
 				} else
@@ -2405,6 +2475,7 @@ debug_nub_thread(void *)
 					reply.profiler_update.sample_count = sampleCount;
 					reply.profiler_update.dropped_ticks = droppedTicks;
 					reply.profiler_update.stopped = true;
+					reply.profiler_update.last_cpu_time = lastCPUTime;
 				} else
 					reply.profiler_update.origin.thread = result;
 
@@ -2535,6 +2606,8 @@ install_team_debugger(team_id teamID, port_id debuggerPort,
 
 	// Check the debugger team: It must neither be the kernel team nor the
 	// debugged team.
+	if (teamID == B_CURRENT_TEAM)
+		teamID = team_get_current_team_id();
 	if (debuggerTeam == team_get_kernel_team_id() || debuggerTeam == teamID) {
 		TRACE(("install_team_debugger(): Can't debug kernel or debugger team. "
 			"debugger: %" B_PRId32 ", debugged: %" B_PRId32 "\n", debuggerTeam,
@@ -2545,12 +2618,10 @@ install_team_debugger(team_id teamID, port_id debuggerPort,
 	// get the team
 	Team* team;
 	ConditionVariable debugChangeCondition;
+	debugChangeCondition.Init(NULL, "debug change condition");
 	error = prepare_debugger_change(teamID, debugChangeCondition, team);
 	if (error != B_OK)
 		return error;
-
-	// get the real team ID
-	teamID = team->id;
 
 	// check, if a debugger is already installed
 
@@ -2834,6 +2905,10 @@ _user_disable_debugger(int state)
 status_t
 _user_install_default_debugger(port_id debuggerPort)
 {
+	// Do not allow non-root processes to install a default debugger.
+	if (geteuid() != 0)
+		return B_PERMISSION_DENIED;
+
 	// if supplied, check whether the port is a valid port
 	if (debuggerPort >= 0) {
 		port_info portInfo;
@@ -2855,6 +2930,9 @@ _user_install_default_debugger(port_id debuggerPort)
 port_id
 _user_install_team_debugger(team_id teamID, port_id debuggerPort)
 {
+	if (geteuid() != 0 && team_geteuid(teamID) != geteuid())
+		return B_PERMISSION_DENIED;
+
 	return install_team_debugger(teamID, debuggerPort, -1, false, false);
 }
 
@@ -2864,6 +2942,7 @@ _user_remove_team_debugger(team_id teamID)
 {
 	Team* team;
 	ConditionVariable debugChangeCondition;
+	debugChangeCondition.Init(NULL, "debug change condition");
 	status_t error = prepare_debugger_change(teamID, debugChangeCondition,
 		team);
 	if (error != B_OK)
@@ -2954,7 +3033,7 @@ _user_debug_thread(thread_id threadID)
 void
 _user_wait_for_debugger(void)
 {
-	debug_thread_debugged message;
+	debug_thread_debugged message = {};
 	thread_hit_debug_event(B_DEBUGGER_MESSAGE_THREAD_DEBUGGED, &message,
 		sizeof(message), false);
 }

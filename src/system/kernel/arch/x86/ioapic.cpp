@@ -8,7 +8,7 @@
 #include <int.h>
 #include <vm/vm.h>
 
-#include "irq_routing_table.h"
+#include "acpi_irq_routing_table.h"
 
 #include <ACPI.h>
 #include <AutoDeleter.h>
@@ -108,6 +108,7 @@ struct ioapic {
 };
 
 
+static int32 sIOAPICPhys = 0;
 static ioapic* sIOAPICs = NULL;
 static int32 sSourceOverrides[ISA_INTERRUPT_COUNT];
 
@@ -355,8 +356,8 @@ ioapic_map_ioapic(struct ioapic& ioapic, phys_addr_t physicalAddress)
 		= ((ioapic.version >> IO_APIC_MAX_REDIRECTION_ENTRY_SHIFT)
 			& IO_APIC_MAX_REDIRECTION_ENTRY_MASK);
 	if (ioapic.max_redirection_entry >= MAX_SUPPORTED_REDIRECTION_ENTRIES) {
-		dprintf("io-apic %u entry count exceeds max supported, only using the "
-			"first %u entries", ioapic.number,
+		dprintf("io-apic %u entry count %d exceeds max supported, only using the "
+			"first %u entries\n", ioapic.number, ioapic.max_redirection_entry,
 			(uint8)MAX_SUPPORTED_REDIRECTION_ENTRIES);
 		ioapic.max_redirection_entry = MAX_SUPPORTED_REDIRECTION_ENTRIES - 1;
 	}
@@ -670,7 +671,16 @@ ioapic_is_interrupt_available(int32 gsi)
 
 
 void
-ioapic_init(kernel_args* args)
+ioapic_preinit(kernel_args* args)
+{
+	sIOAPICPhys = args->arch_args.ioapic_phys;
+
+	// The real IO-APIC initialization occurs after PCI initialization.
+}
+
+
+void
+ioapic_init()
 {
 	static const interrupt_controller ioapicController = {
 		"82093AA IOAPIC",
@@ -683,10 +693,10 @@ ioapic_init(kernel_args* args)
 		&ioapic_assign_interrupt_to_cpu,
 	};
 
-	if (args->arch_args.apic == NULL)
+	if (!apic_available())
 		return;
 
-	if (args->arch_args.ioapic_phys == 0) {
+	if (sIOAPICPhys == 0) {
 		dprintf("no io-apics available, not using io-apics for interrupt "
 			"routing\n");
 		return;
@@ -698,16 +708,16 @@ ioapic_init(kernel_args* args)
 		return;
 	}
 
-	// load acpi module
+	// load ACPI module
 	status_t status;
 	acpi_module_info* acpiModule;
 	status = get_module(B_ACPI_MODULE_NAME, (module_info**)&acpiModule);
 	if (status != B_OK) {
-		dprintf("acpi module not available, not configuring io-apics\n");
+		dprintf("ACPI module not available, not configuring io-apics\n");
 		return;
 	}
-	BPrivate::CObjectDeleter<const char, status_t>
-		acpiModulePutter(B_ACPI_MODULE_NAME, put_module);
+	BPrivate::CObjectDeleter<const char, status_t, put_module>
+		acpiModulePutter(B_ACPI_MODULE_NAME);
 
 	acpi_table_madt* madt = NULL;
 	if (acpiModule->get_table(ACPI_SIG_MADT, 0, (void**)&madt) != B_OK) {
@@ -743,7 +753,7 @@ ioapic_init(kernel_args* args)
 	}
 
 	// use the boot CPU as the target for all interrupts
-	uint8 targetAPIC = args->arch_args.cpu_apic_id[0];
+	uint8 targetAPIC = x86_get_cpu_apic_id(0);
 
 	struct ioapic* current = sIOAPICs;
 	while (current != NULL) {

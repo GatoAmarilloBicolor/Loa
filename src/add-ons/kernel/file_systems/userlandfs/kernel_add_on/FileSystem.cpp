@@ -8,6 +8,7 @@
 
 #include <util/AutoLock.h>
 
+#include <thread.h>
 #include <fs/node_monitor.h>
 #include <Notifications.h>
 
@@ -35,7 +36,7 @@ static const bigtime_t kNotificationRequestTimeout = 50000;	// 50 ms
 
 
 struct FileSystem::SelectSyncMap
-	: public SynchronizedHashMap<HashKeyPointer<selectsync*>, int32*> {
+	: public SynchronizedHashMap<HashKeyPointer<selectsync*>, int32*, Locker> {
 };
 
 

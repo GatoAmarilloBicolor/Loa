@@ -15,9 +15,16 @@ SubDirHdrs [ FDirName $(SUBDIR) $(DOTDOT) expat xmlparse ] ;
 
 SubDirCcFlags -DCORTEX_NAMESPACE=cortex ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
-
 StaticLibrary cortex_media_routing_view.a :
+	MediaJack.cpp
+	MediaNodePanel.cpp
+	MediaRoutingView.cpp
+	MediaWire.cpp
+;
+
+DoCatalogs cortex_media_routing_view.a :
+	x-vnd.Cortex.MediaRoutingView
+	:
 	MediaJack.cpp
 	MediaNodePanel.cpp
 	MediaRoutingView.cpp

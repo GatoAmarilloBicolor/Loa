@@ -46,8 +46,7 @@ status_t
 loopback_frame_init(struct net_interface*interface, net_domain* domain,
 	net_datalink_protocol** _protocol)
 {
-	// We only support a single type!
-	if (interface->device->type != IFT_LOOP)
+	if (interface->device->type != IFT_LOOP && interface->device->type != IFT_TUNNEL)
 		return B_BAD_TYPE;
 
 	loopback_frame_protocol* protocol;
@@ -56,14 +55,20 @@ loopback_frame_init(struct net_interface*interface, net_domain* domain,
 	status_t status = get_module(NET_STACK_MODULE_NAME, (module_info**)&stack);
 	if (status != B_OK)
 		return status;
-
 	status = stack->register_device_deframer(interface->device,
 		&loopback_deframe);
 	if (status != B_OK)
 		goto err1;
 
-	// Locally received buffers don't need a domain device handler, as the
-	// buffer reception is handled internally.
+	if (interface->device->type == IFT_LOOP) {
+		// Locally received buffers don't need a domain device handler, as the
+		// buffer reception is handled internally.
+	} else if (interface->device->type == IFT_TUNNEL) {
+		status = stack->register_domain_device_handler(
+			interface->device, B_NET_FRAME_TYPE_IPV4, domain);
+		if (status != B_OK)
+			return status;
+	}
 
 	protocol = new(std::nothrow) loopback_frame_protocol;
 	if (protocol == NULL) {

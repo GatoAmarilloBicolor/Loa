@@ -34,15 +34,22 @@ public:
 
 			status_t			Mktime(struct tm* inOutTm, time_t& timeOut);
 
+			status_t			Timegm(struct tm* inOutTm, time_t& timeOut);
+
 private:
-			status_t			_FillTmValues(const TimeZone* icuTimeZone,
+			status_t			_FillTmValues(const U_NAMESPACE_QUALIFIER
+										TimeZone* icuTimeZone,
 									const time_t* inTime, struct tm* tmOut);
+
+			status_t			_Mktime(const U_NAMESPACE_QUALIFIER
+										TimeZone* icuTimeZone,
+									struct tm* inOutTm, time_t& timeOut);
 
 			const ICUTimeData&	fTimeData;
 
 			TimeConversionDataBridge*	fDataBridge;
 
-			TimeZone*			fTimeZone;
+			U_NAMESPACE_QUALIFIER TimeZone*	fTimeZone;
 			char				fTimeZoneID[B_FILE_NAME_LENGTH];
 };
 

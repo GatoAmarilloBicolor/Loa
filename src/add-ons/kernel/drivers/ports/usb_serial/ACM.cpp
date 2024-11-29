@@ -30,7 +30,11 @@ ACMDevice::AddDevice(const usb_configuration_info *config)
 	// Search ACM Communication Interface
 	for (size_t i = 0; i < config->interface_count && status < B_OK; i++) {
 		usb_interface_info *interface = config->interface[i].active;
+		if (interface == NULL)
+			continue;
 		usb_interface_descriptor *descriptor = interface->descr;
+		if (descriptor == NULL)
+			continue;
 		if (descriptor->interface_class != USB_CDC_COMMUNICATION_INTERFACE_CLASS
 			|| descriptor->interface_subclass != USB_CDC_COMMUNICATION_INTERFACE_ACM_SUBCLASS)
 			continue;
@@ -83,6 +87,7 @@ ACMDevice::AddDevice(const usb_configuration_info *config)
 			|| descriptor->interface_class == USB_CDC_DATA_INTERFACE_CLASS)
 			&& interface->endpoint_count >= 1) {
 			SetControlPipe(interface->endpoint[0].handle);
+			SetInterruptBufferSize(interface->endpoint[0].descr->max_packet_size);
 		} else {
 			TRACE("Indicated command interface doesn't fit our needs!\n");
 			status = ENODEV;
@@ -95,15 +100,21 @@ ACMDevice::AddDevice(const usb_configuration_info *config)
 		usb_interface_descriptor *descriptor = interface->descr;
 		if (descriptor->interface_class == USB_CDC_DATA_INTERFACE_CLASS
 			&& interface->endpoint_count >= 2) {
-			if (!(interface->endpoint[0].descr->endpoint_address & USB_ENDPOINT_ADDR_DIR_IN))
+			if (!(interface->endpoint[0].descr->endpoint_address & USB_ENDPOINT_ADDR_DIR_IN)) {
+				SetWriteBufferSize(ROUNDUP(interface->endpoint[0].descr->max_packet_size, 16));
 				SetWritePipe(interface->endpoint[0].handle);
-			else
+			} else {
+				SetReadBufferSize(ROUNDUP(interface->endpoint[0].descr->max_packet_size, 16));
 				SetReadPipe(interface->endpoint[0].handle);
+			}
 
-			if (interface->endpoint[1].descr->endpoint_address & USB_ENDPOINT_ADDR_DIR_IN)
+			if (interface->endpoint[1].descr->endpoint_address & USB_ENDPOINT_ADDR_DIR_IN) {
+				SetReadBufferSize(ROUNDUP(interface->endpoint[1].descr->max_packet_size, 16));
 				SetReadPipe(interface->endpoint[1].handle);
-			else
+			} else {
+				SetWriteBufferSize(ROUNDUP(interface->endpoint[1].descr->max_packet_size, 16));
 				SetWritePipe(interface->endpoint[1].handle);
+			}
 		} else {
 			TRACE("Indicated data interface doesn't fit our needs!\n");
 			status = ENODEV;

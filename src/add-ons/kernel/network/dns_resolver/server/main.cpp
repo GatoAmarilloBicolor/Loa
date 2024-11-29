@@ -7,6 +7,7 @@
  */
 
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -120,7 +121,9 @@ GetAddrInfo(const char* buffer)
 	freeaddrinfo(ai);
 	if (result != B_OK)
 		return write_port(gReplyPort, MsgError, &result, sizeof(result));
-	return write_port(gReplyPort, MsgReply, reply, totalSize);
+	result = write_port(gReplyPort, MsgReply, reply, totalSize);
+	free(reply);
+	return result;
 }
 
 

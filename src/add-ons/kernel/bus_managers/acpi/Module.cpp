@@ -57,9 +57,8 @@ static status_t
 acpi_module_register_device(device_node* parent)
 {
 	device_attr attrs[] = {
-		{ B_DEVICE_PRETTY_NAME, B_STRING_TYPE, { string: "ACPI" }},
-
-		{ B_DEVICE_FLAGS, B_UINT32_TYPE, { ui32: B_KEEP_DRIVER_LOADED }},
+		{ B_DEVICE_PRETTY_NAME, B_STRING_TYPE, { .string = "ACPI" }},
+		{ B_DEVICE_FLAGS, B_UINT32_TYPE, { .ui32 = B_KEEP_DRIVER_LOADED }},
 		{}
 	};
 
@@ -86,33 +85,81 @@ acpi_enumerate_child_devices(device_node* node, const char* root)
 			case ACPI_TYPE_PROCESSOR:
 			case ACPI_TYPE_THERMAL:
 			case ACPI_TYPE_DEVICE: {
-				char hid[16] = "";
-				device_attr attrs[] = {
+				device_attr attrs[16] = {
 					// info about device
-					{ B_DEVICE_BUS, B_STRING_TYPE, { string: "acpi" }},
+					{ B_DEVICE_BUS, B_STRING_TYPE, { .string = "acpi" }},
 
 					// location on ACPI bus
-					{ ACPI_DEVICE_PATH_ITEM, B_STRING_TYPE, { string: result }},
+					{ ACPI_DEVICE_PATH_ITEM, B_STRING_TYPE, { .string = result }},
 
 					// info about the device
-					{ ACPI_DEVICE_HID_ITEM, B_STRING_TYPE, { string: hid }},
-					{ ACPI_DEVICE_TYPE_ITEM, B_UINT32_TYPE, { ui32: type }},
+					{ ACPI_DEVICE_TYPE_ITEM, B_UINT32_TYPE, { .ui32 = type }},
 
-					// consumer specification
-					/*{ B_DRIVER_MAPPING, B_STRING_TYPE, { string:
-						"hid_%" ACPI_DEVICE_HID_ITEM "%" }},
-					{ B_DRIVER_MAPPING "/0", B_STRING_TYPE, { string:
-						"type_%" ACPI_DEVICE_TYPE_ITEM "%" }},*/
-					{ B_DEVICE_FLAGS, B_UINT32_TYPE, { ui32: /*B_FIND_CHILD_ON_DEMAND|*/B_FIND_MULTIPLE_CHILDREN }},
+					{ B_DEVICE_FLAGS, B_UINT32_TYPE, { .ui32 = B_FIND_MULTIPLE_CHILDREN }},
 					{ NULL }
 				};
 
-				if (type == ACPI_TYPE_DEVICE)
-					get_device_hid(result, hid, sizeof(hid));
+				uint32 attrCount = 4;
+				char* hid = NULL;
+				char* cidList[11] = { NULL };
+				char* uid = NULL;
+				char* cls = NULL;
+				if (type == ACPI_TYPE_DEVICE) {
+					if (get_device_info(result, &hid, (char**)&cidList, 8,
+						&uid, &cls) == B_OK) {
+						if (hid != NULL) {
+							attrs[attrCount].name = ACPI_DEVICE_HID_ITEM;
+							attrs[attrCount].type = B_STRING_TYPE;
+							attrs[attrCount].value.string = hid;
+							attrCount++;
+						}
+						for (int i = 0; cidList[i] != NULL; i++) {
+							attrs[attrCount].name = ACPI_DEVICE_CID_ITEM;
+							attrs[attrCount].type = B_STRING_TYPE;
+							attrs[attrCount].value.string = cidList[i];
+							attrCount++;
+						}
+						if (uid != NULL) {
+							attrs[attrCount].name = ACPI_DEVICE_UID_ITEM;
+							attrs[attrCount].type = B_STRING_TYPE;
+							attrs[attrCount].value.string = uid;
+							attrCount++;
+						}
+						if (cls != NULL) {
+							uint32 clsClass = strtoul(cls, NULL, 16);
+							attrs[attrCount].name = B_DEVICE_TYPE;
+							attrs[attrCount].type = B_UINT16_TYPE;
+							attrs[attrCount].value.ui16 = (clsClass >> 16) & 0xff ;
+							attrCount++;
+							attrs[attrCount].name = B_DEVICE_SUB_TYPE;
+							attrs[attrCount].type = B_UINT16_TYPE;
+							attrs[attrCount].value.ui16 = (clsClass >> 8) & 0xff ;
+							attrCount++;
+							attrs[attrCount].name = B_DEVICE_INTERFACE;
+							attrs[attrCount].type = B_UINT16_TYPE;
+							attrs[attrCount].value.ui16 = (clsClass >> 0) & 0xff ;
+							attrCount++;
+						}
+					}
+					uint32 addr;
+					if (get_device_addr(result, &addr) == B_OK) {
+						attrs[attrCount].name = ACPI_DEVICE_ADDR_ITEM;
+						attrs[attrCount].type = B_UINT32_TYPE;
+						attrs[attrCount].value.ui32 = addr;
+						attrCount++;
+					}
+				}
 
-				if (gDeviceManager->register_node(node, ACPI_DEVICE_MODULE_NAME, attrs,
-						NULL, &deviceNode) == B_OK)
-	                acpi_enumerate_child_devices(deviceNode, result);
+				status_t status = gDeviceManager->register_node(node,
+						ACPI_DEVICE_MODULE_NAME, attrs, NULL, &deviceNode);
+				free(hid);
+				free(uid);
+				free(cls);
+				for (int i = 0; cidList[i] != NULL; i++)
+					free(cidList[i]);
+				if (status != B_OK)
+					break;
+				acpi_enumerate_child_devices(deviceNode, result);
 				break;
 			}
 			default:
@@ -135,19 +182,23 @@ acpi_module_register_child_devices(void* cookie)
 		ACPI_NS_DUMP_DEVICE_MODULE_NAME);
 	if (status != B_OK)
 		return status;
+	status = gDeviceManager->publish_device(node, "acpi/call",
+		ACPI_CALL_DEVICE_MODULE_NAME);
+	if (status != B_OK)
+		return status;
 
 	if ((AcpiGbl_FADT.Flags & ACPI_FADT_POWER_BUTTON) == 0) {
 		dprintf("registering power button\n");
 		device_attr attrs[] = {
 			// info about device
-			{ B_DEVICE_BUS, B_STRING_TYPE, { string: "acpi" }},
+			{ B_DEVICE_BUS, B_STRING_TYPE, { .string = "acpi" }},
 
 			// info about the device
-			{ ACPI_DEVICE_HID_ITEM, B_STRING_TYPE, { string: "ACPI_FPB" }},
-			{ ACPI_DEVICE_TYPE_ITEM, B_UINT32_TYPE, { ui32: ACPI_TYPE_DEVICE }},
+			{ ACPI_DEVICE_HID_ITEM, B_STRING_TYPE, { .string = "ACPI_FPB" }},
+			{ ACPI_DEVICE_TYPE_ITEM, B_UINT32_TYPE, { .ui32 = ACPI_TYPE_DEVICE }},
 
 			// consumer specification
-			{ B_DEVICE_FLAGS, B_UINT32_TYPE, { ui32: B_FIND_MULTIPLE_CHILDREN }},
+			{ B_DEVICE_FLAGS, B_UINT32_TYPE, { .ui32 = B_FIND_MULTIPLE_CHILDREN }},
 			{ NULL }
 		};
 		device_node* deviceNode;
@@ -158,14 +209,14 @@ acpi_module_register_child_devices(void* cookie)
 		dprintf("registering sleep button\n");
 		device_attr attrs[] = {
 			// info about device
-			{ B_DEVICE_BUS, B_STRING_TYPE, { string: "acpi" }},
+			{ B_DEVICE_BUS, B_STRING_TYPE, { .string = "acpi" }},
 
 			// info about the device
-			{ ACPI_DEVICE_HID_ITEM, B_STRING_TYPE, { string: "ACPI_FSB" }},
-			{ ACPI_DEVICE_TYPE_ITEM, B_UINT32_TYPE, { ui32: ACPI_TYPE_DEVICE }},
+			{ ACPI_DEVICE_HID_ITEM, B_STRING_TYPE, { .string = "ACPI_FSB" }},
+			{ ACPI_DEVICE_TYPE_ITEM, B_UINT32_TYPE, { .ui32 = ACPI_TYPE_DEVICE }},
 
 			// consumer specification
-			{ B_DEVICE_FLAGS, B_UINT32_TYPE, { ui32: B_FIND_MULTIPLE_CHILDREN }},
+			{ B_DEVICE_FLAGS, B_UINT32_TYPE, { .ui32 = B_FIND_MULTIPLE_CHILDREN }},
 			{ NULL }
 		};
 		device_node* deviceNode;
@@ -253,7 +304,7 @@ static struct acpi_root_info sACPIRootModule = {
 	get_next_entry,
 	get_next_object,
 	get_device,
-	get_device_hid,
+	get_device_info,
 	get_object_type,
 	get_object,
 	get_object_typed,
@@ -279,5 +330,6 @@ module_info* modules[] = {
 	(module_info*)&gACPIDeviceModule,
 	(module_info*)&embedded_controller_driver_module,
 	(module_info*)&embedded_controller_device_module,
+	(module_info*)&gAcpiCallDeviceModule,
 	NULL
 };

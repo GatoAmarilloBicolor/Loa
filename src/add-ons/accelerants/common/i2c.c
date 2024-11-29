@@ -108,7 +108,7 @@ wait_for_clk(const i2c_bus *bus, bigtime_t timeout)
 			return B_OK;
 
 		if (system_time() - startTime > timeout) {
-			TRACE("%s: Timeout waiting on clock (r)\n");
+			TRACE("%s: Timeout waiting on clock (r)\n", __func__);
 			return B_TIMEOUT;
 		}
 
@@ -268,12 +268,12 @@ send_byte(const i2c_bus *bus, uint8 byte, bool acknowledge)
 
 //!	Send slave address, obeying 10-bit addresses and general call addresses
 static status_t
-send_slave_address(const i2c_bus *bus, int slaveAddress, bool isWrite)
+send_slave_address(const i2c_bus *bus, uint8 slaveAddress, bool isWrite)
 {
 	status_t status;
 
 	TRACE("%s: 0x%X\n", __func__, slaveAddress);
-	status = send_byte(bus, (slaveAddress & 0xfe) | !isWrite, true);
+	status = send_byte(bus, (slaveAddress & 0xfe) | (isWrite ? 0 : 1), true);
 	if (status != B_OK)
 		return status;
 
@@ -400,10 +400,17 @@ receive_bytes(const i2c_bus *bus, uint8 *readBuffer, ssize_t readLength)
 
 //!	Combined i2c send+receive format
 status_t
-i2c_send_receive(const i2c_bus *bus, int slaveAddress, const uint8 *writeBuffer,
+i2c_send_receive_callback(const i2c_bus *bus, uint32 slaveAddress, const uint8 *writeBuffer,
 	size_t writeLength, uint8 *readBuffer, size_t readLength)
 {
-	status_t status = send_start_condition(bus);
+	status_t status;
+
+	// the address is 7-bit
+	slaveAddress <<= 1;
+	if (slaveAddress > 0xff)
+		return B_BAD_VALUE;
+
+	status = send_start_condition(bus);
 	if (status != B_OK)
 		return status;
 

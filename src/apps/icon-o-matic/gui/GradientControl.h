@@ -1,19 +1,16 @@
 /*
- * Copyright 2006-2007, Haiku.
+ * Copyright 2006-2007, 2023, Haiku.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
  *		Stephan Aßmus <superstippi@gmx.de>
+ *		Zardshard
  */
 #ifndef GRADIENT_CONTROL_H
 #define GRADIENT_CONTROL_H
 
 
 #include <View.h>
-
-#if LIB_LAYOUT
-#	include <layout.h>
-#endif
 
 #include "IconBuild.h"
 
@@ -27,12 +24,7 @@ enum {
 	MSG_GRADIENT_CONTROL_FOCUS_CHANGED	= 'gcfc',
 };
 
-class GradientControl :
-						#if LIB_LAYOUT
-						public MView,
-						#endif
-						public BView {
-
+class GradientControl : public BView {
  public:
 								GradientControl(BMessage* message = NULL,
 												BHandler* target = NULL);
@@ -58,6 +50,8 @@ class GradientControl :
 
 	virtual	void				Draw(BRect updateRect);
 	virtual	void				FrameResized(float width, float height);
+
+	virtual	void				GetPreferredSize(float* width, float* height);
 
 								// GradientControl
 			void				SetGradient(const _ICON_NAMESPACE Gradient*

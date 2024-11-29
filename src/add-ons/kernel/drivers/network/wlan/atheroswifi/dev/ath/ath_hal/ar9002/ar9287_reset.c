@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar9002/ar9287_reset.c 249580 2013-04-17 07:31:53Z adrian $
  */
 
 #include "opt_ah.h"
@@ -110,7 +110,6 @@ ar9287SetPowerCalTable(struct ath_hal *ah,
 
 	*pTxPowerIndexOffset = 0;
 }
-
 
 /* XXX hard-coded values? */
 #define REDUCE_SCALED_POWER_BY_TWO_CHAIN     6

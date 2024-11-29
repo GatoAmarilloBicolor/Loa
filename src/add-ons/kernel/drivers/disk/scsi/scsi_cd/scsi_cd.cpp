@@ -131,7 +131,7 @@ test_capacity(cd_driver_info *info)
 			PAGE_STATE_WIRED | VM_PAGE_ALLOC_BUSY);
 
 		entries[numEntries].address = page->physical_page_number * B_PAGE_SIZE;
-		entries[numEntries].size = bytes;;
+		entries[numEntries].size = bytes;
 
 		left -= bytes;
 	}
@@ -207,6 +207,7 @@ get_geometry(cd_handle *handle, device_geometry *geometry)
 		return B_DEV_MEDIA_CHANGED;
 
 	devfs_compute_geometry_size(geometry, info->capacity, info->block_size);
+	geometry->bytes_per_physical_sector = info->physical_block_size;
 
 	geometry->device_type = info->device_type;
 	geometry->removable = info->removable;
@@ -655,20 +656,6 @@ read_cd(cd_driver_info *info, const scsi_read_cd *readCD)
 }
 
 
-static int
-log2(uint32 x)
-{
-	int y;
-
-	for (y = 31; y >= 0; --y) {
-		if (x == (1UL << y))
-			break;
-	}
-
-	return y;
-}
-
-
 static status_t
 do_io(void* cookie, IOOperation* operation)
 {
@@ -709,6 +696,8 @@ cd_uninit_device(void* _cookie)
 
 	delete info->io_scheduler;
 	delete info->dma_resource;
+	info->io_scheduler = NULL;
+	info->dma_resource = NULL;
 }
 
 
@@ -759,67 +748,11 @@ cd_free(void* cookie)
 
 
 static status_t
-cd_read(void* cookie, off_t pos, void* buffer, size_t* _length)
-{
-	cd_handle* handle = (cd_handle*)cookie;
-	size_t length = *_length;
-
-	if (handle->info->capacity == 0)
-		return B_DEV_NO_MEDIA;
-
-	IORequest request;
-	status_t status = request.Init(pos, (addr_t)buffer, length, false, 0);
-	if (status != B_OK)
-		return status;
-
-	status = handle->info->io_scheduler->ScheduleRequest(&request);
-	if (status != B_OK)
-		return status;
-
-	status = request.Wait(0, 0);
-	if (status == B_OK)
-		*_length = length;
-	else
-		dprintf("cd_read(): request.Wait() returned: %s\n", strerror(status));
-
-	return status;
-}
-
-
-static status_t
-cd_write(void* cookie, off_t pos, const void* buffer, size_t* _length)
-{
-	cd_handle* handle = (cd_handle*)cookie;
-	size_t length = *_length;
-
-	if (handle->info->capacity == 0)
-		return B_DEV_NO_MEDIA;
-
-	IORequest request;
-	status_t status = request.Init(pos, (addr_t)buffer, length, true, 0);
-	if (status != B_OK)
-		return status;
-
-	status = handle->info->io_scheduler->ScheduleRequest(&request);
-	if (status != B_OK)
-		return status;
-
-	status = request.Wait(0, 0);
-	if (status == B_OK)
-		*_length = length;
-	else
-		dprintf("cd_write(): request.Wait() returned: %s\n", strerror(status));
-
-	return status;
-}
-
-
-static status_t
 cd_io(void* cookie, io_request* request)
 {
 	cd_handle* handle = (cd_handle*)cookie;
 
-	if (handle->info->capacity == 0) {
+	if (handle->info->capacity == 0 || handle->info->io_scheduler == NULL) {
 		notify_io_request(request, B_DEV_NO_MEDIA);
 		return B_DEV_NO_MEDIA;
 	}
@@ -849,7 +782,7 @@ cd_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 
 		case B_GET_GEOMETRY:
 		{
-			if (buffer == NULL /*|| length != sizeof(device_geometry)*/)
+			if (buffer == NULL || length > sizeof(device_geometry))
 				return B_BAD_VALUE;
 
 		 	device_geometry geometry;
@@ -857,7 +790,7 @@ cd_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 			if (status != B_OK)
 				return status;
 
-			return user_memcpy(buffer, &geometry, sizeof(device_geometry));
+			return user_memcpy(buffer, &geometry, length);
 		}
 
 		case B_GET_ICON_NAME:
@@ -961,16 +894,10 @@ cd_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 
 
 static void
-cd_set_capacity(cd_driver_info* info, uint64 capacity, uint32 blockSize)
+cd_set_capacity(cd_driver_info* info, uint64 capacity, uint32 blockSize, uint32 physicalBlockSize)
 {
-	TRACE("cd_set_capacity(info = %p, capacity = %Ld, blockSize = %ld)\n",
+	TRACE("cd_set_capacity(info = %p, capacity = %lld, blockSize = %ld)\n",
 		info, capacity, blockSize);
-
-	// get log2, if possible
-	uint32 blockShift = log2(blockSize);
-
-	if ((1UL << blockShift) != blockSize)
-		blockShift = 0;
 
 	if (info->block_size != blockSize) {
 		if (capacity == 0) {
@@ -1018,6 +945,7 @@ cd_set_capacity(cd_driver_info* info, uint64 capacity, uint32 blockSize)
 
 		info->io_scheduler->SetCallback(do_io, info);
 		info->block_size = blockSize;
+		info->physical_block_size = physicalBlockSize;
 	}
 
 	if (info->original_capacity != capacity && info->io_scheduler != NULL) {
@@ -1048,7 +976,7 @@ cd_media_changed(cd_driver_info* info, scsi_ccb* request)
 
 
 scsi_periph_callbacks callbacks = {
-	(void (*)(periph_device_cookie, uint64, uint32))cd_set_capacity,
+	(void (*)(periph_device_cookie, uint64, uint32, uint32))cd_set_capacity,
 	(void (*)(periph_device_cookie, scsi_ccb *))cd_media_changed
 };
 
@@ -1093,7 +1021,7 @@ cd_register_device(device_node* node)
 	// get inquiry data
 	if (sDeviceManager->get_attr_raw(node, SCSI_DEVICE_INQUIRY_ITEM,
 			(const void**)&deviceInquiry, &inquiryLength, true) != B_OK
-		|| inquiryLength < sizeof(deviceInquiry))
+		|| inquiryLength < sizeof(scsi_res_inquiry))
 		return B_ERROR;
 
 	// get block limit of underlying hardware to lower it (if necessary)
@@ -1108,8 +1036,9 @@ cd_register_device(device_node* node)
 
 	// ready to register
 	device_attr attrs[] = {
-		{"removable", B_UINT8_TYPE, {ui8: deviceInquiry->removable_medium}},
-		{B_DMA_MAX_TRANSFER_BLOCKS, B_UINT32_TYPE, {ui32: maxBlocks}},
+		{B_DEVICE_PRETTY_NAME, B_STRING_TYPE, {.string = "SCSI CD-ROM Drive"}},
+		{"removable", B_UINT8_TYPE, {.ui8 = deviceInquiry->removable_medium}},
+		{B_DMA_MAX_TRANSFER_BLOCKS, B_UINT32_TYPE, {.ui32 = maxBlocks}},
 		{ NULL }
 	};
 
@@ -1217,8 +1146,8 @@ struct device_module_info sSCSICDDevice = {
 	cd_open,
 	cd_close,
 	cd_free,
-	cd_read,
-	cd_write,
+	NULL,	// read
+	NULL,	// write
 	cd_io,
 	cd_ioctl,
 

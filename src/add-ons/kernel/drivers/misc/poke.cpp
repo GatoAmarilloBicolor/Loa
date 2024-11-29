@@ -1,16 +1,21 @@
 /*
  * Copyright 2005, Oscar Lesta. All rights reserved.
- * Copyright 2018, Haiku, Inc. All rights reserved.
+ * Copyright 2018-2023, Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  */
-
+#include "poke.h"
 
 #include <Drivers.h>
 #include <KernelExport.h>
 #include <ISA.h>
 #include <PCI.h>
 
-#include "poke.h"
+#include <team.h>
+#include <vm/vm.h>
+
+#if defined(__i386__) || defined(__x86_64__)
+#include <thread.h>
+#endif
 
 
 static status_t poke_open(const char*, uint32, void**);
@@ -41,8 +46,6 @@ int32 api_version = B_CUR_DRIVER_API_VERSION;
 isa_module_info* isa;
 pci_module_info* pci;
 
-static int32 open_count;
-
 
 status_t
 init_hardware(void)
@@ -54,8 +57,6 @@ init_hardware(void)
 status_t
 init_driver(void)
 {
-	open_count = 0;
-
 	if (get_module(B_ISA_MODULE_NAME, (module_info**)&isa) < B_OK)
 		return ENOSYS;
 
@@ -101,10 +102,14 @@ poke_open(const char* name, uint32 flags, void** cookie)
 	if (getuid() != 0 && geteuid() != 0)
 		return EPERM;
 
-	if (atomic_add(&open_count, 1) != 0) {
-		atomic_add(&open_count, -1);
-		return B_BUSY;
-	}
+#if defined(__i386__) || defined(__x86_64__)
+	/* on x86, raise the IOPL so that outb/inb will work */
+	iframe* frame = x86_get_user_iframe();
+	int iopl = 3;
+	frame->flags &= ~X86_EFLAGS_IO_PRIVILEG_LEVEL;
+	frame->flags |= (iopl << X86_EFLAGS_IO_PRIVILEG_LEVEL_SHIFT)
+		& X86_EFLAGS_IO_PRIVILEG_LEVEL;
+#endif
 
 	return B_OK;
 }
@@ -120,7 +125,14 @@ poke_close(void* cookie)
 status_t
 poke_free(void* cookie)
 {
-	atomic_add(&open_count, -1);
+#if defined(__i386__) || defined(__x86_64__)
+	iframe* frame = x86_get_user_iframe();
+	int iopl = 0;
+	frame->flags &= ~X86_EFLAGS_IO_PRIVILEG_LEVEL;
+	frame->flags |= (iopl << X86_EFLAGS_IO_PRIVILEG_LEVEL_SHIFT)
+		& X86_EFLAGS_IO_PRIVILEG_LEVEL;
+#endif
+
 	return B_OK;
 }
 
@@ -270,8 +282,7 @@ poke_control(void* cookie, uint32 op, void* arg, size_t length)
 				return B_BAD_VALUE;
 
 			result = get_memory_map(ioctl.address, ioctl.size, &table, 1);
-			ioctl.physical_address = (void*)(addr_t)table.address;
-				// TODO: mem_map_args::physical_address should be phys_addr_t!
+			ioctl.physical_address = table.address;
 			ioctl.size = table.size;
 			if (user_memcpy(arg, &ioctl, sizeof(mem_map_args)) != B_OK)
 				return B_BAD_ADDRESS;
@@ -287,12 +298,12 @@ poke_control(void* cookie, uint32 op, void* arg, size_t length)
 				return B_BAD_VALUE;
 
 			char name[B_OS_NAME_LENGTH];
-			if (user_strlcpy(name, ioctl.name, B_OS_NAME_LENGTH) != B_OK)
+			if (user_strlcpy(name, ioctl.name, B_OS_NAME_LENGTH) < B_OK)
 				return B_BAD_ADDRESS;
 
-			ioctl.area = map_physical_memory(name,
-				(addr_t)ioctl.physical_address, ioctl.size, ioctl.flags,
-				ioctl.protection, (void**)&ioctl.address);
+			ioctl.area = vm_map_physical_memory(team_get_current_team_id(), name,
+				(void**)&ioctl.address, ioctl.flags, ioctl.size, ioctl.protection,
+				ioctl.physical_address, false);
 
 			if (user_memcpy(arg, &ioctl, sizeof(mem_map_args)) != B_OK)
 				return B_BAD_ADDRESS;
@@ -307,7 +318,7 @@ poke_control(void* cookie, uint32 op, void* arg, size_t length)
 			if (ioctl.signature != POKE_SIGNATURE)
 				return B_BAD_VALUE;
 
-			return delete_area(ioctl.area);
+			return _user_delete_area(ioctl.area);
 		}
 	}
 

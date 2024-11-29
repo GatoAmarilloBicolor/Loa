@@ -1,5 +1,5 @@
 /*
- * Copyright 2005-2008, Haiku, Inc. All Rights Reserved.
+ * Copyright 2005-2020, Haiku, Inc. All Rights Reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -17,6 +17,9 @@
 #include <KernelExport.h>
 #include <OS.h>
 #include <USB3.h>
+
+#include <kernel.h>
+#include <wacom_driver.h>
 
 int32 api_version = B_CUR_DRIVER_API_VERSION;
 
@@ -106,12 +109,12 @@ static wacom_device*
 add_device(usb_device dev)
 {
 	wacom_device *device = NULL;
-	int num, ifc, alt;
+	int num;
+	size_t ifc, alt;
 	const usb_interface_info *ii;
 	status_t st;
 	const usb_device_descriptor* udd;
 	const usb_configuration_info *conf;
-	bool setConfiguration = false;
 
 	// we need these four for a Wacom tablet
 	size_t controlTransferLength;
@@ -134,7 +137,6 @@ add_device(usb_device dev)
 		// see if the device has been configured already
 		if (!conf) {
 			conf = usb->get_nth_configuration(dev, 0);
-			setConfiguration = true;
 		}
 
 		if (!conf)
@@ -181,95 +183,93 @@ got_one:
 	device->notify_lock = -1;
 	device->data = NULL;
 
-//	if (setConfiguration) {
-		// the configuration has to be set yet (was not the current one)
-		DPRINTF_INFO((ID "add_device() - setting configuration...\n"));
-		if ((st = usb->set_configuration(dev, conf)) != B_OK) {
-			dprintf(ID "add_device() -> set_configuration() returns %ld\n", st);
+	DPRINTF_INFO((ID "add_device() - setting configuration...\n"));
+	if ((st = usb->set_configuration(dev, conf)) != B_OK) {
+		dprintf(ID "add_device() -> "
+			"set_configuration() returns %" B_PRId32 "\n", st);
+		goto fail;
+	} else
+		DPRINTF_ERR((ID " ... success!\n"));
+
+	if (conf->interface[ifc].active != ii) {
+		// the interface we found is not the active one and has to be set
+		DPRINTF_INFO((ID "add_device() - setting interface: %p...\n", ii));
+		if ((st = usb->set_alt_interface(dev, ii)) != B_OK) {
+			dprintf(ID "add_device() -> "
+				"set_alt_interface() returns %" B_PRId32 "\n", st);
 			goto fail;
 		} else
 			DPRINTF_ERR((ID " ... success!\n"));
+	}
+	// see if the device is a Wacom tablet and needs some special treatment
+	// let's hope Wacom doesn't produce normal mice any time soon, or this
+	// check will have to be more specific about product_id...hehe
+	if (udd->vendor_id == 0x056a) {
+		// do the control transfers to set up absolute mode (default is HID
+		// mode)
 
-		if (conf->interface[ifc].active != ii) {
-			// the interface we found is not the active one and has to be set
-			DPRINTF_INFO((ID "add_device() - setting interface: %p...\n", ii));
-			if ((st = usb->set_alt_interface(dev, ii)) != B_OK) {
-				dprintf(ID "add_device() -> set_alt_interface() returns %ld\n",
-					st);
-				goto fail;
-			} else
-				DPRINTF_ERR((ID " ... success!\n"));
+		// see 'Device Class Definition for HID 1.11' (HID1_11.pdf),
+		// par. 7.2 (available at www.usb.org/developers/hidpage)
+
+		// set protocol mode to 'report' (instead of 'boot')
+		controlTransferLength = 0;
+		// HID Class-Specific Request, Host to device (=0x21):
+		// SET_PROTOCOL (=0x0b) to Report Protocol (=1)
+		// of Interface #0 (=0)
+		st = usb->send_request(dev, 0x21, 0x0b, 1, 0, 0, 0,
+			&controlTransferLength);
+
+		if (st < B_OK) {
+			dprintf(ID "add_device() - "
+				"control transfer 1 failed: %" B_PRId32 "\n", st);
 		}
-		// see if the device is a Wacom tablet and needs some special treatment
-		// let's hope Wacom doesn't produce normal mice any time soon, or this
-		// check will have to be more specific about product_id...hehe
-		if (udd->vendor_id == 0x056a) {
-			// do the control transfers to set up absolute mode (default is HID
-			// mode)
 
-			// see 'Device Class Definition for HID 1.11' (HID1_11.pdf),
-			// par. 7.2 (available at www.usb.org/developers/hidpage)
+		// try up to five times to set the tablet to 'Wacom'-mode (enabling
+		// absolute mode, pressure data, etc.)
+		controlTransferLength = 2;
 
-			// set protocol mode to 'report' (instead of 'boot')
-			controlTransferLength = 0;
+		for (tryCount = 0; tryCount < 5; tryCount++) {
 			// HID Class-Specific Request, Host to device (=0x21):
-			// SET_PROTOCOL (=0x0b) to Report Protocol (=1)
-			// of Interface #0 (=0)
-			st = usb->send_request(dev, 0x21, 0x0b, 1, 0, 0, 0,
-				&controlTransferLength);
+			// SET_REPORT (=0x09) type Feature (=3) with ID 2 (=2) of
+			// Interface #0 (=0) to repData (== { 0x02, 0x02 })
+			st = usb->send_request(dev, 0x21, 0x09, (3 << 8) + 2, 0, 2,
+				repData, &controlTransferLength);
 
 			if (st < B_OK) {
-				dprintf(ID "add_device() - control transfer 1 failed: %ld\n",
-					st);
+				dprintf(ID "add_device() - "
+					"control transfer 2 failed: %" B_PRId32 "\n", st);
 			}
 
-			// try up to five times to set the tablet to 'Wacom'-mode (enabling
-			// absolute mode, pressure data, etc.)
-			controlTransferLength = 2;
+			// check if registers are set correctly
 
-			for (tryCount = 0; tryCount < 5; tryCount++) {
-				// HID Class-Specific Request, Host to device (=0x21):
-				// SET_REPORT (=0x09) type Feature (=3) with ID 2 (=2) of
-				// Interface #0 (=0) to repData (== { 0x02, 0x02 })
-				st = usb->send_request(dev, 0x21, 0x09, (3 << 8) + 2, 0, 2,
-					repData, &controlTransferLength);
+			// HID Class-Specific Request, Device to host (=0xA1):
+			// GET_REPORT (=0x01) type Feature (=3) with ID 2 (=2) of
+			// Interface #0 (=0) to retData
+			st = usb->send_request(dev, 0xA1, 0x01, (3 << 8) + 2, 0, 2,
+				retData, &controlTransferLength);
 
-				if (st < B_OK) {
-					dprintf(ID "add_device() - control transfer 2 failed: %ld"
-						"\n", st);
-				}
-
-				// check if registers are set correctly
-
-				// HID Class-Specific Request, Device to host (=0xA1):
-				// GET_REPORT (=0x01) type Feature (=3) with ID 2 (=2) of
-				// Interface #0 (=0) to retData
-				st = usb->send_request(dev, 0xA1, 0x01, (3 << 8) + 2, 0, 2,
-					retData, &controlTransferLength);
-
-				if (st < B_OK) {
-					dprintf(ID "add_device() - control transfer 3 failed: %ld"
-						"\n", st);
-				}
-
-				DPRINTF_INFO((ID "add_device() - retData: %u - %u\n",
-					retData[0], retData[1]));
-
-				if (retData[0] == repData[0] && retData[1] == repData[1]) {
-					DPRINTF_INFO((ID "add_device() - successfully set "
-						"'Wacom'-mode\n"));
-					break;
-				}
+			if (st < B_OK) {
+				dprintf(ID "add_device() - "
+					"control transfer 3 failed: %" B_PRId32 "\n", st);
 			}
 
-			DPRINTF_INFO((ID "add_device() - number of tries: %u\n",
-				tryCount + 1));
+			DPRINTF_INFO((ID "add_device() - retData: %u - %u\n",
+				retData[0], retData[1]));
 
-			if (tryCount > 4) {
-				dprintf(ID "add_device() - set 'Wacom'-mode failed\n");
+			if (retData[0] == repData[0] && retData[1] == repData[1]) {
+				DPRINTF_INFO((ID "add_device() - successfully set "
+					"'Wacom'-mode\n"));
+				break;
 			}
 		}
-//	}
+
+		DPRINTF_INFO((ID "add_device() - number of tries: %u\n",
+			tryCount + 1));
+
+		if (tryCount > 4) {
+			dprintf(ID "add_device() - set 'Wacom'-mode failed\n");
+		}
+	}
 
 	// configure the rest of the wacom_device
 	device->pipe = ii->endpoint[0].handle;
@@ -323,7 +323,8 @@ device_added(usb_device dev, void** cookie)
 	// first see, if this device is already added
 	acquire_sem(sDeviceListLock);
 	for (device = sDeviceList; device; device = device->next) {
-		DPRINTF_ERR((ID "device_added() - old device: %ld\n", device->dev));
+		DPRINTF_ERR((ID "device_added() - old device: %" B_PRIu32 "\n",
+			device->dev));
 		if (device->dev == dev) {
 			DPRINTF_ERR((ID "device_added() - already added - done!\n"));
 			*cookie = (void*)device;
@@ -401,13 +402,6 @@ device_open(const char *dname, uint32 flags, void** cookie)
 	int n;
 	status_t ret = B_ERROR;
 
-	char controlDevicePath[1024];
-	sprintf(controlDevicePath, "%s%s", kBasePublishPath, "control");
-	if (strcmp(dname, controlDevicePath) == 0) {
-		dprintf(ID "device_open() -> refuse to open control device\n");
-		return B_ERROR;
-	}
-
 	n = atoi(dname + strlen(kBasePublishPath));
 
 	DPRINTF_INFO((ID "device_open(\"%s\",%d,...)\n", dname, flags));
@@ -426,8 +420,8 @@ device_open(const char *dname, uint32 flags, void** cookie)
 						ret = device->notify_lock;
 						device->open--;
 						*cookie = NULL;
-						dprintf(ID "device_open() -> create_sem() returns %ld\n",
-							ret);
+						dprintf(ID "device_open() -> "
+							"create_sem() returns %" B_PRId32 "\n", ret);
 					} else {
 						ret = B_OK;
 					}
@@ -435,7 +429,8 @@ device_open(const char *dname, uint32 flags, void** cookie)
 				release_sem(sDeviceListLock);
 				return ret;
 //			} else {
-//				dprintf(ID "device_open() -> device is already open %ld\n", ret);
+//				dprintf(ID "device_open() -> device is already open %ld\n",
+//					ret);
 //				release_sem(sDeviceListLock);
 //				return B_ERROR;
 //			}
@@ -480,16 +475,16 @@ device_free(void *cookie)
 	return B_OK;
 }
 
-// device_interupt_callback
+// device_interrupt_callback
 static void
-device_interupt_callback(void* cookie, status_t status, void* data,
-	uint32 actualLength)
+device_interrupt_callback(void* cookie, status_t status, void* data,
+	size_t actualLength)
 {
 	wacom_device* device = (wacom_device*)cookie;
-	uint32 length = min_c(actualLength, device->max_packet_size);
+	size_t length = min_c(actualLength, device->max_packet_size);
 
-	DPRINTF_INFO((ID "device_interupt_callback(%p) name = \"%s%d\" -> "
-		"status: %ld, length: %ld\n", cookie, kBasePublishPath, device->number,
+	DPRINTF_INFO((ID "device_interrupt_callback(%p) name = \"%s%d\" -> "
+		"status: %ld, length: %zu\n", cookie, kBasePublishPath, device->number,
 		status, actualLength));
 
 	device->status = status;
@@ -503,19 +498,24 @@ device_interupt_callback(void* cookie, status_t status, void* data,
 		release_sem(device->notify_lock);
 	}
 
-	DPRINTF_INFO((ID "device_interupt_callback() - done\n"));
+	DPRINTF_INFO((ID "device_interrupt_callback() - done\n"));
 }
 
 // read_header
-static void
+static status_t
 read_header(const wacom_device* device, void* buffer)
 {
-	uint16* ids = (uint16*)buffer;
-	uint32* size = (uint32*)buffer;
+	wacom_device_header device_header;
+	device_header.vendor_id = device->vendor;
+	device_header.product_id = device->product;
+	device_header.max_packet_size = device->max_packet_size;
 
-	ids[0] = device->vendor;
-	ids[1] = device->product;
-	size[1] = device->max_packet_size;
+	if (!IS_USER_ADDRESS(buffer)) {
+		memcpy(buffer, &device_header, sizeof(wacom_device_header));
+		return B_OK;
+	}
+
+	return user_memcpy(buffer, &device_header, sizeof(wacom_device_header));
 }
 
 // device_read
@@ -532,19 +532,19 @@ device_read(void* cookie, off_t pos, void* buf, size_t* count)
 
 	ret = device->notify_lock;
 
-	DPRINTF_INFO((ID "device_read(%p,%Ld,0x%x,%d) name = \"%s%d\"\n",
+	DPRINTF_INFO((ID "device_read(%p,%lld,0x%x,%d) name = \"%s%d\"\n",
 			 cookie, pos, buf, *count, kBasePublishPath, device->number));
 
 	if (ret >= B_OK) {
 		// what the client "reads" is decided depending on how much bytes are
-		// provided 8 bytes are needed to "read" vendor id, product id and max
-		// packet size in case the client wants to read more than 8 bytes, a usb
-		// interupt transfer is scheduled, and an error report is returned as
-		// appropriate
-		if (*count > 8) {
+		// provided. "sizeof(wacom_device_header)" bytes are needed to "read"
+		// vendor id, product id and max packet size in case the client wants to
+		// read more than "sizeof(wacom_device_header)" bytes, a usb interupt
+		// transfer is scheduled, and an error report is returned as appropriate
+		if (*count > sizeof(wacom_device_header)) {
 			// queue the interrupt transfer
 			ret = usb->queue_interrupt(device->pipe, device->data,
-				device->max_packet_size, device_interupt_callback, device);
+				device->max_packet_size, device_interrupt_callback, device);
 			if (ret >= B_OK) {
 				// we will block here until the interrupt transfer has been done
 				ret = acquire_sem_etc(device->notify_lock, 1,
@@ -562,9 +562,8 @@ device_read(void* cookie, off_t pos, void* buf, size_t* count)
 						DPRINTF_INFO((ID "device_read(%p) name = \"%s%d\" -> "
 							"B_TIMED_OUT\n", cookie, kBasePublishPath,
 							device->number));
-						*count = 8;
-						read_header(device, buffer);
-						ret = B_OK;
+						*count = sizeof(wacom_device_header);
+						ret = read_header(device, buffer);
 					} else {
 						// any other error trying to acquire the semaphore
 						*count = 0;
@@ -573,31 +572,39 @@ device_read(void* cookie, off_t pos, void* buf, size_t* count)
 					if (device->status == 0/*B_USBD_SUCCESS*/) {
 						DPRINTF_INFO((ID "interrupt transfer - success\n"));
 						// copy the data from the buffer
-						dataLength = min_c(device->length, *count - 8);
-						*count = dataLength + 8;
-						read_header(device, buffer);
-						memcpy(buffer + 8, device->data, dataLength);
+						dataLength = min_c(device->length,
+							*count - sizeof(wacom_device_header));
+						*count = dataLength + sizeof(wacom_device_header);
+						ret = read_header(device, buffer);
+						if (ret == B_OK) {
+							if (IS_USER_ADDRESS(buffer))
+								ret = user_memcpy(
+									buffer + sizeof(wacom_device_header),
+									device->data, dataLength);
+							else
+								memcpy(buffer + sizeof(wacom_device_header),
+									device->data, dataLength);
+						}
 					} else {
 						// an error happened during the interrupt transfer
 						*count = 0;
-						dprintf(ID "interrupt transfer - failure: %ld\n",
-							device->status);
+						dprintf(ID "interrupt transfer - "
+							"failure: %" B_PRIu32 "\n", device->status);
 						ret = B_ERROR;
 					}
 				}
 			} else {
 				*count = 0;
 				dprintf(ID "device_read(%p) name = \"%s%d\" -> error queuing "
-					"interrupt: %ld\n", cookie, kBasePublishPath,
+					"interrupt: %" B_PRId32 "\n", cookie, kBasePublishPath,
 					device->number, ret);
 			}
-		} else if (*count == 8) {
-			read_header(device, buffer);
-			ret = B_OK;
+		} else if (*count == sizeof(wacom_device_header)) {
+			ret = read_header(device, buffer);
 		} else {
 			dprintf(ID "device_read(%p) name = \"%s%d\" -> buffer size must be "
-				"at least 8 bytes!\n", cookie, kBasePublishPath,
-				device->number);
+				"at least the size of the wacom_device_header struct!\n",
+				cookie, kBasePublishPath, device->number);
 			*count = 0;
 			ret = B_BAD_VALUE;
 		}
@@ -723,12 +730,7 @@ publish_devices()
 				i++;
 			}
 		}
-		// publish the currently fake control device
-		sDeviceNames[i] = (char*)malloc(strlen(kBasePublishPath) + 8);
-		if (sDeviceNames[i])
-			sprintf(sDeviceNames[i], "%s%s", kBasePublishPath, "control");
-
-		sDeviceNames[i + 1] = NULL;
+		sDeviceNames[i] = NULL;
 	}
 
 	release_sem(sDeviceListLock);

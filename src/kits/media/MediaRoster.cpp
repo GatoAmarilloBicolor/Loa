@@ -61,7 +61,7 @@ char __dont_remove_copyright_from_binary[] = "Copyright (c) 2002-2006 Marcus "
 
 #include <AppMisc.h>
 #include <DataExchange.h>
-#include <debug.h>
+#include <MediaDebug.h>
 #include <DormantNodeManager.h>
 #include <MediaMisc.h>
 #include <MediaRosterEx.h>
@@ -70,6 +70,7 @@ char __dont_remove_copyright_from_binary[] = "Copyright (c) 2002-2006 Marcus "
 #include <SharedBufferList.h>
 #include <TList.h>
 
+#include "PortPool.h"
 #include "TimeSourceObjectManager.h"
 
 
@@ -114,8 +115,17 @@ static BLocker sInitLocker("BMediaRoster::Roster locker");
 static List<LocalNode> sRegisteredNodes;
 
 
+// This class takes care of all static initialization and destruction of
+// libmedia objects. It guarantees that things are created and destroyed in
+// the correct order, as well as performing some "garbage collecting" by being
+// destructed automatically on application exit.
 class MediaRosterUndertaker {
 public:
+	MediaRosterUndertaker()
+	{
+		gPortPool = new PortPool();
+	}
+
 	~MediaRosterUndertaker()
 	{
 		BAutolock _(sInitLocker);
@@ -144,6 +154,9 @@ public:
 			wait_for_thread(roster, &err);
 			if (err != B_OK)
 				ERROR("BMediaRoster: wait_for_thread returned error");
+
+			// Only now delete the port pool
+			delete gPortPool;
 		}
 	}
 };
@@ -601,7 +614,8 @@ BMediaRosterEx::PublishOutputs(const media_node& node, List<media_output>* list)
 		size_t size;
 		size = ROUND_UP_TO_PAGE(count * sizeof(media_output));
 		request.area = create_area("publish outputs", &start_addr,
-			B_ANY_ADDRESS, size, B_NO_LOCK, B_READ_AREA | B_WRITE_AREA);
+			B_ANY_ADDRESS, size, B_NO_LOCK,
+			B_READ_AREA | B_WRITE_AREA | B_CLONEABLE_AREA);
 		if (request.area < B_OK) {
 			ERROR("PublishOutputs: failed to create area, %#" B_PRIx32 "\n",
 				request.area);
@@ -650,7 +664,8 @@ BMediaRosterEx::PublishInputs(const media_node& node, List<media_input>* list)
 		size_t size;
 		size = ROUND_UP_TO_PAGE(count * sizeof(media_input));
 		request.area = create_area("publish inputs", &start_addr,
-			B_ANY_ADDRESS, size, B_NO_LOCK, B_READ_AREA | B_WRITE_AREA);
+			B_ANY_ADDRESS, size, B_NO_LOCK,
+			B_READ_AREA | B_WRITE_AREA | B_CLONEABLE_AREA);
 		if (request.area < B_OK) {
 			ERROR("PublishInputs: failed to create area, %#" B_PRIx32 "\n",
 				request.area);
@@ -1546,7 +1561,7 @@ BMediaRoster::PrerollNode(const media_node& node)
 	if (IS_INVALID_NODE(node))
 		return B_MEDIA_BAD_NODE;
 
-	char dummy;
+	char dummy = 0;
 	return write_port(node.port, NODE_PREROLL, &dummy, sizeof(dummy));
 }
 
@@ -2232,14 +2247,14 @@ BMediaRoster::UnregisterNode(BMediaNode* node)
 		return B_OK;
 	}
 	if (node->ID() == NODE_UNREGISTERED_ID) {
-		PRINT(1, "Warning: BMediaRoster::UnregisterNode: node id %ld, name "
-			"'%s' already unregistered\n", node->ID(), node->Name());
+		PRINT(1, "Warning: BMediaRoster::UnregisterNode: node id %" B_PRId32
+			", name '%s' already unregistered\n", node->ID(), node->Name());
 		return B_OK;
 	}
 	if (node->fRefCount != 0) {
-		PRINT(1, "Warning: BMediaRoster::UnregisterNode: node id %ld, name "
-			"'%s' has local reference count of %ld\n", node->ID(), node->Name(),
-			node->fRefCount);
+		PRINT(1, "Warning: BMediaRoster::UnregisterNode: node id %" B_PRId32
+			", name '%s' has local reference count of %" B_PRId32 "\n",
+			node->ID(), node->Name(), node->fRefCount);
 		// no return here, we continue and unregister!
 	}
 
@@ -2420,7 +2435,7 @@ BMediaRoster::GetParameterWebFor(const media_node& node, BParameterWeb** _web)
 		area_id area;
 		void *data;
 		area = create_area("parameter web data", &data, B_ANY_ADDRESS, size,
-			B_NO_LOCK, B_READ_AREA | B_WRITE_AREA);
+			B_NO_LOCK, B_READ_AREA | B_WRITE_AREA | B_CLONEABLE_AREA);
 		if (area < B_OK) {
 			ERROR("BMediaRoster::GetParameterWebFor couldn't create area of "
 				"size %" B_PRId32 "\n", size);
@@ -2897,7 +2912,7 @@ BMediaRoster::GetLatencyFor(const media_node& producer, bigtime_t* _latency)
 
 	*_latency = reply.latency;
 
-//	printf("BMediaRoster::GetLatencyFor producer %ld has maximum latency %Ld\n", producer.node, *out_latency);
+//	printf("BMediaRoster::GetLatencyFor producer %ld has maximum latency %lld\n", producer.node, *out_latency);
 	return B_OK;
 }
 

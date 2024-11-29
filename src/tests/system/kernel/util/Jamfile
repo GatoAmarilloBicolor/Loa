@@ -1,22 +1,25 @@
 SubDir HAIKU_TOP src tests system kernel util ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
 AddSubDirSupportedPlatforms libbe_test ;
 
 UsePrivateHeaders [ FDirName kernel util ] ;
 UsePrivateHeaders [ FDirName kernel ] ;
 UseHeaders [ FDirName $(HAIKU_TOP) src tests kits app ] ;
 
-# Two versions of the test lib are not really needed until
-# we start linking to Be libraries, but it doesn't hurt...
+SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src system kernel util ] ;
+
 UnitTestLib libkernelutilstest.so
 	: KernelUtilsTestAddon.cpp
 #	  AVLTreeMapTest.cpp
+	  BOpenHashTableTest.cpp
+	  BitmapTest.cpp
 	  SinglyLinkedListTest.cpp
 	  DoublyLinkedListTest.cpp
 	  VectorMapTest.cpp
 	  VectorSetTest.cpp
 	  VectorTest.cpp
-	: [ TargetLibstdc++ ]
+
+	  Bitmap.cpp
+	: [ TargetLibstdc++ ] be
 ;
 

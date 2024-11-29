@@ -33,6 +33,7 @@
 #include <lock.h>
 #include <smp.h>
 #include <util/AutoLock.h>
+#include <util/ThreadAutoLock.h>
 #include <vm/vm.h>
 #include <vm/vm_types.h>
 #include <vm/VMAddressSpace.h>
@@ -89,7 +90,7 @@ private:
 // #pragma mark -
 
 
-class LargeMemoryTranslationMapPhysicalPageMapper
+class LargeMemoryTranslationMapPhysicalPageMapper final
 	: public TranslationMapPhysicalPageMapper {
 public:
 								LargeMemoryTranslationMapPhysicalPageMapper();
@@ -114,7 +115,7 @@ private:
 };
 
 
-class LargeMemoryPhysicalPageMapper : public X86PhysicalPageMapper {
+class LargeMemoryPhysicalPageMapper final : public X86PhysicalPageMapper {
 public:
 								LargeMemoryPhysicalPageMapper();
 

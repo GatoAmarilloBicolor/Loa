@@ -28,8 +28,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: releng/11.1/sys/dev/ath/if_ath_ioctl.c 298939 2016-05-02 19:56:48Z pfg $");
-
 /*
  * Driver for the Atheros Wireless LAN controller.
  *
@@ -197,13 +195,12 @@ ath_ioctl_diag(struct ath_softc *sc, struct ath_diag *ad)
 		 * pointer for us to use below in reclaiming the buffer;
 		 * may want to be more defensive.
 		 */
-		outdata = malloc(outsize, M_TEMP, M_NOWAIT);
+		outdata = malloc(outsize, M_TEMP, M_NOWAIT | M_ZERO);
 		if (outdata == NULL) {
 			error = ENOMEM;
 			goto bad;
 		}
 	}
-
 
 	ATH_LOCK(sc);
 	if (id != HAL_DIAG_REGS)
@@ -243,7 +240,7 @@ ath_ioctl(struct ieee80211com *ic, u_long cmd, void *data)
 	switch (cmd) {
 	case SIOCGATHSTATS: {
 		struct ieee80211vap *vap;
-		struct ifnet *ifp;
+		if_t ifp;
 		const HAL_RATE_TABLE *rt;
 
 		/* NB: embed these numbers to get a consistent view */
@@ -251,9 +248,9 @@ ath_ioctl(struct ieee80211com *ic, u_long cmd, void *data)
 		sc->sc_stats.ast_rx_packets = 0;
 		TAILQ_FOREACH(vap, &ic->ic_vaps, iv_next) {
 			ifp = vap->iv_ifp;
-			sc->sc_stats.ast_tx_packets += ifp->if_get_counter(ifp,
+			sc->sc_stats.ast_tx_packets += if_getcounter(ifp,
 			    IFCOUNTER_OPACKETS);
-			sc->sc_stats.ast_rx_packets += ifp->if_get_counter(ifp,
+			sc->sc_stats.ast_rx_packets += if_getcounter(ifp,
 			    IFCOUNTER_IPACKETS);
 		}
 		sc->sc_stats.ast_tx_rssi = ATH_RSSI(sc->sc_halstats.ns_avgtxrssi);
@@ -267,12 +264,12 @@ ath_ioctl(struct ieee80211com *ic, u_long cmd, void *data)
 		    rt->info[sc->sc_txrix].dot11Rate &~ IEEE80211_RATE_BASIC;
 		if (rt->info[sc->sc_txrix].phy & IEEE80211_T_HT)
 			sc->sc_stats.ast_tx_rate |= IEEE80211_RATE_MCS;
-		return copyout(&sc->sc_stats,
-		    ifr->ifr_data, sizeof (sc->sc_stats));
+		return copyout(&sc->sc_stats, ifr_data_get_ptr(ifr),
+		    sizeof (sc->sc_stats));
 	}
 	case SIOCGATHAGSTATS:
-		return copyout(&sc->sc_aggr_stats,
-		    ifr->ifr_data, sizeof (sc->sc_aggr_stats));
+		return copyout(&sc->sc_aggr_stats, ifr_data_get_ptr(ifr),
+		    sizeof (sc->sc_aggr_stats));
 	case SIOCZATHSTATS: {
 		int error;
 
@@ -296,6 +293,8 @@ ath_ioctl(struct ieee80211com *ic, u_long cmd, void *data)
 		return (ath_ioctl_spectral(sc, data));
 	case SIOCGATHNODERATESTATS:
 		return (ath_ioctl_ratestats(sc, data));
+	case SIOCGATHBTCOEX:
+		return (ath_btcoex_ioctl(sc, data));
 	default:
 		/*
 		 * This signals the net80211 layer that we didn't handle this
@@ -304,4 +303,3 @@ ath_ioctl(struct ieee80211com *ic, u_long cmd, void *data)
 		return (ENOTTY);
 	}
 }
-

@@ -605,7 +605,7 @@ ItemIterator::GoToNext(Item *item)
 	LeafNode *node = NULL;
 	status_t error = _GetLeafNode(&node);
 	if (error == B_OK) {
-//PRINT(("  leaf node: %Ld\n", node->GetNumber()));
+//PRINT(("  leaf node: %lld\n", node->GetNumber()));
 		// get the leaf node on which the next item resides
 		int32 newIndex = fIndex + 1;
 		while (error == B_OK && newIndex >= node->CountItems()) {
@@ -614,7 +614,7 @@ ItemIterator::GoToNext(Item *item)
 		}
 		// got the node, get the item
 		if (error == B_OK) {
-//PRINT(("  leaf node now: %Ld\n", node->GetNumber()));
+//PRINT(("  leaf node now: %lld\n", node->GetNumber()));
 			fIndex = newIndex;
 //PRINT(("  index now: %ld\n", fIndex));
 			if (item)
@@ -1315,7 +1315,7 @@ status_t
 StreamReader::ReadAt(off_t position, void *buffer, size_t bufferSize,
 					 size_t *_bytesRead)
 {
-//PRINT(("StreamReader::ReadAt(%Ld, %p, %lu)\n", position, buffer, bufferSize));
+//PRINT(("StreamReader::ReadAt(%lld, %p, %lu)\n", position, buffer, bufferSize));
 	status_t error = (position >= 0 && buffer && _bytesRead ? InitCheck()
 															: B_BAD_VALUE);
 	// get the size of the stream
@@ -1324,7 +1324,7 @@ StreamReader::ReadAt(off_t position, void *buffer, size_t bufferSize,
 	// compute the number of bytes that acually have to be read
 	if (error == B_OK) {
 		if (position < fStreamSize) {
-			if (position + bufferSize > fStreamSize)
+			if (position + (off_t)bufferSize > fStreamSize)
 				bufferSize = fStreamSize - position;
 		} else
 			bufferSize = 0;
@@ -1334,7 +1334,7 @@ StreamReader::ReadAt(off_t position, void *buffer, size_t bufferSize,
 		size_t bytesRead = 0;
 		while (error == B_OK && bufferSize > 0
 			   && (error = _SeekTo(position)) == B_OK) {
-//PRINT(("  seeked to %Ld: fItemOffset: %Ld, fItemSize: %Ld\n", position,
+//PRINT(("  seeked to %lld: fItemOffset: %lld, fItemSize: %lld\n", position,
 //fItemOffset, fItemSize));
 			off_t inItemOffset = max_c(0LL, position - fItemOffset);
 			off_t toRead = min_c(fItemSize - inItemOffset, (off_t)bufferSize);
@@ -1500,7 +1500,7 @@ RETURN_ERROR(error);
 status_t
 StreamReader::_ReadIndirectItem(off_t offset, void *buffer, size_t bufferSize)
 {
-//PRINT(("StreamReader::_ReadIndirectItem(%Ld, %p, %lu)\n", offset, buffer, bufferSize));
+//PRINT(("StreamReader::_ReadIndirectItem(%lld, %p, %lu)\n", offset, buffer, bufferSize));
 	status_t error = B_OK;
 	IndirectItem &indirect = *static_cast<IndirectItem*>(&fItem);
 	// skip items until the offset is reached
@@ -1522,12 +1522,16 @@ StreamReader::_ReadIndirectItem(off_t offset, void *buffer, size_t bufferSize)
 			off_t blockOffset = i * (off_t)fBlockSize;
 			uint32 localOffset = max_c(0LL, offset - blockOffset);
 			uint32 toRead = min_c(fBlockSize - localOffset, bufferSize);
-			memcpy(buffer, (uint8*)block->GetData() + localOffset, toRead);
+			memcpy(buffer,
+				reinterpret_cast<uint8*>(block->GetData()) + localOffset,
+				toRead);
+
 			block->Put();
 			bufferSize -= toRead;
 			buffer = (uint8*)buffer + toRead;
 		} else {
-			FATAL(("failed to get block %Lu\n", indirect.BlockNumberAt(i)));
+			FATAL(("failed to get block %" B_PRIu64 "\n",
+				indirect.BlockNumberAt(i)));
 			error = B_IO_ERROR;
 		}
 	}
@@ -1539,9 +1543,10 @@ StreamReader::_ReadIndirectItem(off_t offset, void *buffer, size_t bufferSize)
 status_t
 StreamReader::_ReadDirectItem(off_t offset, void *buffer, size_t bufferSize)
 {
-//PRINT(("StreamReader::_ReadDirectItem(%Ld, %p, %lu)\n", offset, buffer, bufferSize));
+//PRINT(("StreamReader::_ReadDirectItem(%lld, %p, %lu)\n", offset, buffer, bufferSize));
 	// copy the data into the buffer
-	memcpy(buffer, (uint8*)fItem.GetData() + offset, bufferSize);
+	memcpy(buffer,
+		reinterpret_cast<uint8*>(fItem.GetData()) + offset, bufferSize);
 	return B_OK;
 }
 

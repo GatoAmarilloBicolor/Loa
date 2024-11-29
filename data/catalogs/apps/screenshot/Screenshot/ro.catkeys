@@ -1,31 +1,31 @@
 1	romanian	x-vnd.haiku-screenshot	3958461128
-seconds	ScreenshotWindow		secunde
-Desktop	ScreenshotWindow		Desktop
-Include window border	ScreenshotWindow		Include margine fereastră
-Screenshot	System name		Captură de ecran
-Select	ScreenshotWindow		Selectează
-The destination path exists but is not a folder.	ScreenshotWindow		Calea de destinație există dar nu este un dosar.
-Capture active window	ScreenshotWindow		Capturează fereastra activă
-Cancel	ScreenshotWindow		Anulează
-Name:	ScreenshotWindow		Nume:
-Choose folder…	ScreenshotWindow		Alege dosar…
-This file already exists.\n Are you sure you would like to overwrite it?	ScreenshotWindow		Acest fișier există deja.\n Sigur doriți să-l suprascrieți?
-Choose folder	ScreenshotWindow		Alege dosar
-Save	ScreenshotWindow		Salvează
+Include window border	ScreenshotWindow		Include marginea ferestrei
 Overwrite	ScreenshotWindow		Suprascrie
-Please select	ScreenshotWindow		Alegeți
-Save as:	ScreenshotWindow		Salvează ca:
-Copy to clipboard	ScreenshotWindow		Copiază la clipboard
 Save in:	ScreenshotWindow		Salvează în:
-screenshot	Screenshot	Base filename of screenshot files	captură de ecran
-New screenshot	ScreenshotWindow		Captură de ecran nouă
-Artwork folder	ScreenshotWindow		Dosar artwork
-Home folder	ScreenshotWindow		Dosar personal
-Failed to save screenshot	ScreenshotWindow		Nu s-a putut salva captura de ecran
+Error saving \"%s\":\n\t%s	ScreenshotWindow		Eroare la salvarea \„%s\”:\n\t%s
+This file already exists.\n Are you sure you would like to overwrite it?	ScreenshotWindow		Acest fișier există deja.\n Sigur doriți să îl suprascrieți?
 OK	ScreenshotWindow		OK
-Settings…	ScreenshotWindow		Configurări…
-overwrite	ScreenshotWindow		suprascrie
-Delay:	ScreenshotWindow		Întârziere:
-Error saving \"%s\":\n\t%s	ScreenshotWindow		Eroare la salvarea \"%s\":\n\t%s
-Include mouse pointer	ScreenshotWindow		Include indicator maus
+The destination path exists but is not a folder.	ScreenshotWindow		Calea de destinație există dar nu este un dosar.
+Select	ScreenshotWindow		Selectează
+Save as:	ScreenshotWindow		Salvează ca:
+seconds	ScreenshotWindow		secunde
+New screenshot	ScreenshotWindow		Captură de ecran nouă
+Screenshot	System name		Captură de ecran
+Desktop	ScreenshotWindow		Desktop
+Artwork folder	ScreenshotWindow		Dosar de lucrări de artă
 Translator Settings	ScreenshotWindow		Configurări traducător
+Include mouse pointer	ScreenshotWindow		Include indicatorul mausului
+overwrite	ScreenshotWindow		suprascrie
+Settings…	ScreenshotWindow		Configurări…
+Choose folder	ScreenshotWindow		Alege un dosar
+Name:	ScreenshotWindow		Nume:
+Choose folder…	ScreenshotWindow		Alegere dosar…
+Please select	ScreenshotWindow		Selectați
+Failed to save screenshot	ScreenshotWindow		Nu s-a putut salva captura de ecran
+Cancel	ScreenshotWindow		Anulează
+Delay:	ScreenshotWindow		Întârziere:
+Copy to clipboard	ScreenshotWindow		Copiază la clipboard
+screenshot	Screenshot	Base filename of screenshot files	captură de ecran
+Home folder	ScreenshotWindow		Dosar home
+Save	ScreenshotWindow		Salvează
+Capture active window	ScreenshotWindow		Capturează fereastra activă

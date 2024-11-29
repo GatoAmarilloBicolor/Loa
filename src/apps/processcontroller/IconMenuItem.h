@@ -1,26 +1,7 @@
 /*
-
-	IconMenuItem.h
-
-	ProcessController
-	(c) 2000, Georges-Edouard Berenger, All Rights Reserved.
-	Copyright (C) 2004 beunited.org
-
-	This library is free software; you can redistribute it and/or
-	modify it under the terms of the GNU Lesser General Public
-	License as published by the Free Software Foundation; either
-	version 2.1 of the License, or (at your option) any later version.
-
-	This library is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-	Lesser General Public License for more details.
-
-	You should have received a copy of the GNU Lesser General Public
-	License along with this library; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-
-*/
+ * Copyright 2000, Georges-Edouard Berenger. All rights reserved.
+ * Distributed under the terms of the MIT License.
+ */
 #ifndef _ICON_MENU_ITEM_H_
 #define _ICON_MENU_ITEM_H_
 
@@ -34,24 +15,20 @@ class IconMenuItem : public BMenuItem {
 	public:
 		IconMenuItem(BBitmap*, const char* title,
 			BMessage*, bool drawText = true, bool purge = false);
-
 		IconMenuItem(BBitmap*, BMenu*, bool drawText = true,
 			bool purge = false);
-
-		IconMenuItem(const char* mime, const char* title, BMessage*,
-			bool drawText = true);
-
 		virtual ~IconMenuItem();
+
+		void Reset(BBitmap*, bool purge = false);
+
 		virtual	void DrawContent();
 		virtual	void Highlight(bool isHighlighted);
 		virtual	void GetContentSize(float* width, float* height);
 
-		static	int	MinHeight();
-
-	private:
-		void DefaultIcon(const char* mime);
+	protected:
 		void DrawIcon();
 
+	private:
 		BBitmap*	fIcon;
 		bool		fDrawText;
 		bool		fPurge;

@@ -12,6 +12,7 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 		SubDirSysHdrs $(HAIKU_TOP) src system libroot posix glibc include arch
 			generic ;
 		SubDirSysHdrs $(HAIKU_TOP) src system libroot posix glibc include ;
+		SubDirSysHdrs $(HAIKU_TOP) src system libroot posix glibc ctype ;
 		SubDirSysHdrs $(HAIKU_TOP) src system libroot posix glibc libio ;
 		SubDirSysHdrs $(HAIKU_TOP) src system libroot posix glibc misc ;
 		SubDirSysHdrs $(HAIKU_TOP) src system libroot posix glibc locale ;
@@ -20,11 +21,6 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 		UsePrivateHeaders libroot ;
 
 		MergeObject <$(architecture)>posix_gnu_misc.o :
-			hsearch.c
-			hsearch_r.c
-			insremque.c
-			lsearch.c
-			tsearch.c
 			efgcvt.c
 			efgcvt_r.c
 			;

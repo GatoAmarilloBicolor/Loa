@@ -350,9 +350,9 @@ FragmentPacket::AddFragment(uint16 start, uint16 end, net_buffer* buffer,
 		gBufferModule->remove_header(buffer, previous->fragment.end - start);
 		start = previous->fragment.end;
 	}
-	if (next != NULL && next->fragment.start < end) {
-		TRACE("    remove trailer %d bytes", next->fragment.start - end);
-		gBufferModule->remove_trailer(buffer, next->fragment.start - end);
+	if (next != NULL && end > next->fragment.start) {
+		TRACE("    remove trailer %d bytes", end - next->fragment.start);
+		gBufferModule->remove_trailer(buffer, end - next->fragment.start);
 		end = next->fragment.start;
 	}
 
@@ -370,11 +370,11 @@ FragmentPacket::AddFragment(uint16 start, uint16 end, net_buffer* buffer,
 		status_t status = gBufferModule->merge(buffer, previous, false);
 		TRACE("    merge previous: %s", strerror(status));
 		if (status != B_OK) {
-			fFragments.Insert(next, previous);
+			fFragments.InsertBefore(next, previous);
 			return status;
 		}
 
-		fFragments.Insert(next, buffer);
+		fFragments.InsertBefore(next, buffer);
 
 		// cut down existing hole
 		fBytesLeft -= end - start;
@@ -398,11 +398,11 @@ FragmentPacket::AddFragment(uint16 start, uint16 end, net_buffer* buffer,
 		TRACE("    merge next: %s", strerror(status));
 		if (status != B_OK) {
 			// Insert "next" at its previous position
-			fFragments.Insert(afterNext, next);
+			fFragments.InsertBefore(afterNext, next);
 			return status;
 		}
 
-		fFragments.Insert(afterNext, buffer);
+		fFragments.InsertBefore(afterNext, buffer);
 
 		// cut down existing hole
 		fBytesLeft -= end - start;
@@ -423,7 +423,7 @@ FragmentPacket::AddFragment(uint16 start, uint16 end, net_buffer* buffer,
 
 	buffer->fragment.start = start;
 	buffer->fragment.end = end;
-	fFragments.Insert(next, buffer);
+	fFragments.InsertBefore(next, buffer);
 
 	// update length of the hole, if any
 	fBytesLeft -= end - start;
@@ -792,7 +792,7 @@ raw_receive_data(net_buffer* buffer)
 
 	TRACE("RawReceiveData(%i)", buffer->protocol);
 
-	if ((buffer->flags & MSG_MCAST) != 0) {
+	if ((buffer->msg_flags & MSG_MCAST) != 0) {
 		deliver_multicast(&gIPv6Module, buffer, true);
 	} else {
 		RawSocketList::Iterator iterator = sRawSockets.GetIterator();
@@ -1045,9 +1045,21 @@ ipv6_free(net_protocol* protocol)
 
 
 status_t
-ipv6_connect(net_protocol* protocol, const struct sockaddr* address)
+ipv6_connect(net_protocol* _protocol, const struct sockaddr* address)
 {
-	return B_ERROR;
+	ipv6_protocol* protocol = (ipv6_protocol*)_protocol;
+	RawSocket* raw = protocol->raw;
+	if (raw == NULL)
+		return B_ERROR;
+	if (address->sa_len != sizeof(struct sockaddr_in6))
+		return B_BAD_VALUE;
+	if (address->sa_family != AF_INET6)
+		return EAFNOSUPPORT;
+
+	memcpy(&protocol->socket->peer, address, sizeof(struct sockaddr_in6));
+	sSocketModule->set_connected(protocol->socket);
+
+	return B_OK;
 }
 
 
@@ -1240,7 +1252,7 @@ ip6_select_hoplimit(net_protocol* _protocol, net_buffer* buffer)
 	// 3. The system default hoplimit.
 
 	ipv6_protocol* protocol = (ipv6_protocol*)_protocol;
-	const bool isMulticast = buffer->flags & MSG_MCAST;
+	const bool isMulticast = buffer->msg_flags & MSG_MCAST;
 
 	if (protocol) {
 		return isMulticast ? protocol->multicast_time_to_live
@@ -1271,13 +1283,13 @@ ipv6_send_routed_data(net_protocol* _protocol, struct net_route* route,
 	sockaddr_in6& source = *(sockaddr_in6*)buffer->source;
 	sockaddr_in6& destination = *(sockaddr_in6*)buffer->destination;
 
-	buffer->flags &= ~(MSG_BCAST | MSG_MCAST);
+	buffer->msg_flags &= ~(MSG_BCAST | MSG_MCAST);
 
 	if (IN6_IS_ADDR_UNSPECIFIED(&destination.sin6_addr))
 		return EDESTADDRREQ;
 
 	if (IN6_IS_ADDR_MULTICAST(&destination.sin6_addr))
-		buffer->flags |= MSG_MCAST;
+		buffer->msg_flags |= MSG_MCAST;
 
 	uint16 dataLength = buffer->size;
 
@@ -1330,7 +1342,7 @@ ipv6_send_routed_data(net_protocol* _protocol, struct net_route* route,
 	ip6_sprintf(&destination.sin6_addr, addrbuf);
 	TRACE_SK(protocol, "  SendRoutedData(): destination: %s", addrbuf);
 
-	uint32 mtu = route->mtu ? route->mtu : interface->mtu;
+	uint32 mtu = route->mtu ? route->mtu : interface->device->mtu;
 	if (buffer->size > mtu) {
 		// we need to fragment the packet
 		return send_fragments(protocol, route, buffer, mtu);
@@ -1428,7 +1440,7 @@ ipv6_get_mtu(net_protocol* protocol, const struct sockaddr* address)
 	if (route->mtu != 0)
 		mtu = route->mtu;
 	else
-		mtu = route->interface_address->interface->mtu;
+		mtu = route->interface_address->interface->device->mtu;
 
 	sDatalinkModule->put_route(sDomain, route);
 	// TODO: what about extension headers?
@@ -1457,13 +1469,13 @@ ipv6_receive_data(net_buffer* buffer)
 		return B_BAD_DATA;
 
 	// lower layers notion of Broadcast or Multicast have no relevance to us
-	buffer->flags &= ~(MSG_BCAST | MSG_MCAST);
+	buffer->msg_flags &= ~(MSG_BCAST | MSG_MCAST);
 
 	sockaddr_in6 destination;
 	fill_sockaddr_in6(&destination, header.Dst());
 
 	if (IN6_IS_ADDR_MULTICAST(&destination.sin6_addr)) {
-		buffer->flags |= MSG_MCAST;
+		buffer->msg_flags |= MSG_MCAST;
 	} else {
 		uint32 matchedAddressType = 0;
 
@@ -1485,7 +1497,7 @@ ipv6_receive_data(net_buffer* buffer)
 		}
 
 		// copy over special address types (MSG_BCAST or MSG_MCAST):
-		buffer->flags |= matchedAddressType;
+		buffer->msg_flags |= matchedAddressType;
 	}
 
 	// set net_buffer's source/destination address
@@ -1535,7 +1547,7 @@ ipv6_receive_data(net_buffer* buffer)
 		return EAFNOSUPPORT;
 	}
 
-	if ((buffer->flags & MSG_MCAST) != 0) {
+	if ((buffer->msg_flags & MSG_MCAST) != 0) {
 		// Unfortunately historical reasons dictate that the IP multicast
 		// model be a little different from the unicast one. We deliver
 		// this frame directly to all sockets registered with interest

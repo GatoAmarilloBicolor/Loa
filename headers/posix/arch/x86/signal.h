@@ -2,15 +2,15 @@
  * Copyright 2002-2012 Haiku, Inc. All Rights Reserved.
  * Distributed under the terms of the MIT License.
  */
-#ifndef _ARCH_SIGNAL_H_
-#define _ARCH_SIGNAL_H_
+#ifndef _ARCH_X86_SIGNAL_H_
+#define _ARCH_X86_SIGNAL_H_
 
 
 /*
  * Architecture-specific structure passed to signal handlers
  */
 
-#if __INTEL__
+#if __i386__
 
 typedef struct packed_fp_stack {
 	unsigned char	st0[10];
@@ -146,6 +146,6 @@ struct vregs {
 	unsigned long			ebx;
 };
 
-#endif /* __INTEL__ */
+#endif /* __i386__ */
 
-#endif /* _ARCH_SIGNAL_H_ */
+#endif /* _ARCH_X86_SIGNAL_H_ */

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1997, 1998, 1999
  *	Bill Paul <wpaul@ctr.columbia.edu>.  All rights reserved.
  *
@@ -29,7 +31,7 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
  *
- * $FreeBSD: releng/11.1/sys/dev/an/if_aironet_ieee.h 139749 2005-01-06 01:43:34Z imp $
+ * $FreeBSD$
  */
 
 #ifndef _IF_AIRONET_IEEE_H
@@ -149,7 +151,6 @@ struct an_rssi_entry {
 	u_int8_t	an_rss_pct;
 	u_int8_t	an_rss_dbm;
 };
-
 
 struct an_ltv_key {
 	u_int16_t	an_len;
@@ -639,7 +640,6 @@ struct an_rxframe {
 	u_int8_t		an_addr4[6];		/* 0x2C */
 	u_int8_t		an_gaplen;		/* 0x32 */
 } __packed;
-
 
 /* Do not modify this unless you are modifying LEAP itself */
 #define LEAP_USERNAME_MAX 32

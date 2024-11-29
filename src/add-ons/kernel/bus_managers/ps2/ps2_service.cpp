@@ -21,6 +21,14 @@
 #endif
 
 
+//#define TRACE_PS2_SERVICE
+#ifdef TRACE_PS2_SERVICE
+#	define TRACE(x...) dprintf(x)
+#else
+#	define TRACE(x...)
+#endif
+
+
 typedef struct {
 	uint32		id;
 	ps2_dev *	dev;
@@ -141,11 +149,11 @@ ps2_service_thread(void *arg)
 static int
 ps2_republish(int argc, char **argv)
 {
-	int dev = 4;
+	int dev = PS2_DEVICE_KEYB;
 	if (argc == 2)
 		dev = strtoul(argv[1], NULL, 0);
-	if (dev < 0 || dev > 4)
-		dev = 4;
+	if (dev < 0 || dev >= PS2_DEVICE_COUNT)
+		dev = PS2_DEVICE_KEYB;
 	ps2_service_notify_device_republish(&ps2_device[dev]);
 	return 0;
 }

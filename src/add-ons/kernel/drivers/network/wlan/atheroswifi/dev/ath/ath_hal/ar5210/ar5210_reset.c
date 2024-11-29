@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2004 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5210/ar5210_reset.c 290612 2015-11-09 15:59:42Z adrian $
  */
 #include "opt_ah.h"
 
@@ -608,7 +608,6 @@ ar5210SetResetReg(struct ath_hal *ah, uint32_t resetMask, u_int delay)
 	}
 	return rt;
 }
-
 
 /*
  * Returns: the pcdac value

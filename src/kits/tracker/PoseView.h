@@ -51,41 +51,19 @@ All rights reserved.
 #include "Utilities.h"
 #include "ViewState.h"
 
+#include <ColorConversion.h>
 #include <Directory.h>
 #include <FilePanel.h>
+#include <HashSet.h>
 #include <MessageRunner.h>
 #include <String.h>
 #include <ScrollBar.h>
 #include <View.h>
-#include <hash_set>
 #include <set>
 
 
 class BRefFilter;
 class BList;
-
-#if __GNUC__ > 2
-namespace __gnu_cxx {
-template<>
-struct hash<node_ref>
-#else
-template<>
-struct std::hash<node_ref>
-#endif
-{
-	size_t
-	operator()(node_ref ref) const
-	{
-		return ref.node;
-	}
-};
-#if __GNUC__ > 2
-} // namespace __gnu_cxx
-typedef __gnu_cxx::hash_set<node_ref, __gnu_cxx::hash<node_ref> > NodeSet;
-#else
-typedef std::hash_set<node_ref, std::hash<node_ref> > NodeSet;
-#endif
-
 
 namespace BPrivate {
 
@@ -94,9 +72,6 @@ class BContainerWindow;
 class EntryListBase;
 class TScrollBar;
 
-
-const int32 kSmallStep = 10;
-const int32 kListOffset = 20;
 
 const uint32 kMiniIconMode = 'Tmic';
 const uint32 kIconMode = 'Ticn';
@@ -126,7 +101,7 @@ public:
 	Model* TargetModel() const;
 
 	virtual bool IsFilePanel() const;
-	bool IsDesktopWindow() const;
+	bool IsDesktop() const;
 	virtual bool IsDesktopView() const;
 
 	// state saving/restoring
@@ -183,7 +158,6 @@ public:
 	void SetSelectionRectEnabled(bool);
 	void SetAlwaysAutoPlace(bool);
 	void SetSelectionChangedHook(bool);
-	void SetShowHideSelection(bool);
 	void SetEnsurePosesVisible(bool);
 	void SetIconMapping(bool);
 	void SetAutoScroll(bool);
@@ -224,12 +198,13 @@ public:
 		// returns height, descent, etc.
 	float FontHeight() const;
 	float ListElemHeight() const;
-	void SetListElemHeight();
+	float ListOffset() const;
 
 	void SetIconPoseHeight();
 	float IconPoseHeight() const;
+	uint32 UnscaledIconSizeInt() const;
 	uint32 IconSizeInt() const;
-	icon_size IconSize() const;
+	BSize IconSize() const;
 
 	BRect Extent() const;
 	void GetLayoutInfo(uint32 viewMode, BPoint* grid,
@@ -238,8 +213,8 @@ public:
 	int32 CountItems() const;
 	void UpdateCount();
 
-	rgb_color DeskTextColor() const;
-	rgb_color DeskTextBackColor() const;
+	virtual rgb_color TextColor(bool selected = false) const;
+	virtual rgb_color BackColor(bool selected = false) const;
 
 	bool WidgetTextOutline() const;
 	void SetWidgetTextOutline(bool);
@@ -295,8 +270,13 @@ public:
 	void SetDefaultPrinter();
 
 	void IdentifySelection(bool force = false);
+
+	// unmounting
+	bool CanUnmountSelection();
 	void UnmountSelectedVolumes();
+
 	virtual void OpenParent();
+	virtual bool ParentIsRoot();
 
 	virtual void OpenSelection(BPose* clicked_pose = NULL,
 		int32* index = NULL);
@@ -310,8 +290,7 @@ public:
 	// Move to trash calls try to select the next pose in the view
 	// when they are dones
 	virtual void MoveSelectionToTrash(bool selectNext = true);
-	virtual void DeleteSelection(bool selectNext = true,
-		bool askUser = true);
+	virtual void DeleteSelection(bool selectNext = true, bool confirm = true);
 	virtual void MoveEntryToTrash(const entry_ref*,
 		bool selectNext = true);
 
@@ -327,9 +306,13 @@ public:
 	void ShowSelection(bool);
 	void AddRemovePoseFromSelection(BPose* pose, int32 index,
 		bool select);
+	int32 CountSelected() const;
+	bool SelectedVolumeIsReadOnly() const;
+	bool TargetVolumeIsReadOnly() const;
+	bool CanEditName() const;
+	bool CanMoveToTrashOrDuplicate() const;
 
-	BLooper* SelectionHandler();
-	void SetSelectionHandler(BLooper*);
+	void SetSelectionHandler(BLooper* looper);
 
 	BObjectList<BString>*MimeTypesInSelection();
 
@@ -422,7 +405,6 @@ public:
 	void HideBarberPole();
 
 	bool fShowSelectionWhenInactive;
-	bool fTransparentSelection;
 	bool fIsDrawingSelectionRect;
 
 	bool IsWatchingDateFormatChange();
@@ -438,9 +420,12 @@ public:
 
 	void SetTextWidgetToCheck(BTextWidget*, BTextWidget* = NULL);
 
+	BTextWidget* ActiveTextWidget() { return fActiveTextWidget; };
+	void SetActiveTextWidget(BTextWidget* w) { fActiveTextWidget = w; };
+
 protected:
 	// view setup
-	virtual void SetUpDefaultColumnsIfNeeded();
+	virtual void SetupDefaultColumnsIfNeeded();
 
 	virtual EntryListBase* InitDirentIterator(const entry_ref*);
 		// sets up an entry iterator for _add_poses_
@@ -626,8 +611,7 @@ protected:
 		BPoint mouseLocation) const;
 
 	// selection
-	void SelectPosesListMode(BRect, BList**);
-	void SelectPosesIconMode(BRect, BList**);
+	void SelectPoses(BRect, BList**);
 	void AddRemoveSelectionRange(BPoint where, bool extendSelection,
 		BPose* pose);
 
@@ -685,9 +669,11 @@ protected:
 	void SendSelectionAsRefs(uint32 what, bool onlyQueries = false);
 	void MoveListToTrash(BObjectList<entry_ref>*, bool selectNext,
 		bool deleteDirectly);
-	void Delete(BObjectList<entry_ref>*, bool selectNext, bool askUser);
-	void Delete(const entry_ref&ref, bool selectNext, bool askUser);
+	void Delete(BObjectList<entry_ref>*, bool selectNext, bool confirm);
+	void Delete(const entry_ref&ref, bool selectNext, bool confirm);
 	void RestoreItemsFromTrash(BObjectList<entry_ref>*, bool selectNext);
+	void DoDelete();
+	void DoMoveToTrash();
 
 	void WatchParentOf(const entry_ref*);
 	void StopWatchingParentsOf(const entry_ref*);
@@ -696,37 +682,79 @@ protected:
 
 private:
 	void DrawOpenAnimation(BRect);
+	void ApplyBackgroundColor();
 
 	void MoveSelectionOrEntryToTrash(const entry_ref* ref, bool selectNext);
 
 protected:
+	struct node_ref_key {
+		node_ref_key() {}
+		node_ref_key(const node_ref& value) : value(value) {}
+
+		uint32 GetHashCode() const
+		{
+			return (uint32)value.device ^ (uint32)value.node;
+		}
+
+		node_ref_key operator=(const node_ref_key& other)
+		{
+			value = other.value;
+			return *this;
+		}
+
+		bool operator==(const node_ref_key& other) const
+		{
+			return (value == other.value);
+		}
+
+		bool operator!=(const node_ref_key& other) const
+		{
+			return (value != other.value);
+		}
+
+		node_ref	value;
+	};
+
+protected:
+	BViewState* fViewState;
+	bool fStateNeedsSaving;
+
+	bool fSavePoseLocations : 1;
+	bool fMultipleSelection : 1;
+	bool fDragEnabled : 1;
+	bool fDropEnabled : 1;
+
+	BLooper* fSelectionHandler;
+
+	std::set<thread_id> fAddPosesThreads;
+	PoseList* fPoseList;
+
+	PendingNodeMonitorCache pendingNodeMonitorCache;
+
+private:
 	TScrollBar* fHScrollBar;
 	BScrollBar* fVScrollBar;
 	Model* fModel;
 	BPose* fActivePose;
 	BRect fExtent;
 	// the following should probably be just member lists, not pointers
-	PoseList* fPoseList;
 	PoseList* fFilteredPoseList;
 	PoseList* fVSPoseList;
 	PoseList* fSelectionList;
-	NodeSet fInsertedNodes;
+	HashSet<node_ref_key> fInsertedNodes;
 	BObjectList<BString> fMimeTypesInSelectionCache;
 		// used for mime string based icon highliting during a drag
 	BObjectList<Model>* fZombieList;
-	PendingNodeMonitorCache pendingNodeMonitorCache;
 	BObjectList<BColumn>* fColumnList;
 	BObjectList<BString>* fMimeTypeList;
 	BObjectList<Model>* fBrokenLinks;
 	bool fMimeTypeListIsDirty;
-	BViewState* fViewState;
-	bool fStateNeedsSaving;
 	BCountView* fCountView;
 	float fListElemHeight;
+	float fListOffset;
 	float fIconPoseHeight;
 	BPose* fDropTarget;
 	BPose* fAlreadySelectedDropTarget;
-	BLooper* fSelectionHandler;
 	BPoint fLastClickPoint;
 	int32 fLastClickButtons;
 	const BPose* fLastClickedPose;
@@ -739,12 +767,12 @@ protected:
 	BPoint fHintLocation;
 	float fAutoScrollInc;
 	int32 fAutoScrollState;
-	std::set<thread_id> fAddPosesThreads;
 	bool fWidgetTextOutline;
 	const BPose* fSelectionPivotPose;
 	const BPose* fRealPivotPose;
 	BMessageRunner* fKeyRunner;
 	bool fTrackRightMouseUp;
+	bool fTrackMouseUp;
 
 	struct SelectionRectInfo {
 		SelectionRectInfo()
@@ -764,20 +792,16 @@ protected:
 	SelectionRectInfo fSelectionRectInfo;
 
 	bool fSelectionVisible : 1;
-	bool fMultipleSelection : 1;
-	bool fDragEnabled : 1;
-	bool fDropEnabled : 1;
 	bool fSelectionRectEnabled : 1;
+	bool fTransparentSelection : 1;
 	bool fAlwaysAutoPlace : 1;
 	bool fAllowPoseEditing : 1;
 	bool fSelectionChangedHook : 1;
 		// get rid of this
-	bool fSavePoseLocations : 1;
-	bool fShowHideSelection : 1;
 	bool fOkToMapIcons : 1;
 	bool fEnsurePosesVisible : 1;
 	bool fShouldAutoScroll : 1;
-	bool fIsDesktopWindow : 1;
+	bool fIsDesktop : 1;
 	bool fIsWatchingDateFormatChange : 1;
 	bool fHasPosesInClipboard : 1;
 	bool fCursorCheck : 1;
@@ -791,7 +815,6 @@ protected:
 
 	static float sFontHeight;
 	static font_height sFontInfo;
-	static BFont sCurrentFont;
 	static BString sMatchString;
 		// used for typeahead - should be replaced by a typeahead state
 
@@ -802,6 +825,11 @@ protected:
 	static OffscreenBitmap* sOffscreen;
 
 	BTextWidget* fTextWidgetToCheck;
+	BTextWidget* fActiveTextWidget;
+
+private:
+	mutable uint32 fCachedIconSizeFrom;
+	mutable BSize fCachedIconSize;
 
 	typedef BView _inherited;
 };
@@ -865,15 +893,10 @@ BPoseView::ListElemHeight() const
 }
 
 
-inline void
-BPoseView::SetListElemHeight()
+inline float
+BPoseView::ListOffset() const
 {
-	float extra = 0;
-	if (IconSize() > B_MINI_ICON)
-		extra = kLargeIconSeparator;
-
-	fListElemHeight = std::max((float)IconSize() + extra,
-		ceilf(sFontHeight) < 20 ? 20 : ceilf(sFontHeight * 1.1f));
+	return fListOffset;
 }
 
 
@@ -885,16 +908,16 @@ BPoseView::IconPoseHeight() const
 
 
 inline uint32
-BPoseView::IconSizeInt() const
+BPoseView::UnscaledIconSizeInt() const
 {
 	return fViewState->IconSize();
 }
 
 
-inline icon_size
-BPoseView::IconSize() const
+inline uint32
+BPoseView::IconSizeInt() const
 {
-	return (icon_size)fViewState->IconSize();
+	return IconSize().IntegerWidth() + 1;
 }
 
 
@@ -904,6 +927,11 @@ BPoseView::SelectionList() const
 	return fSelectionList;
 }
 
+inline int32
+BPoseView::CountSelected() const
+{
+	return fSelectionList->CountItems();
+}
 
 inline BObjectList<BString>*
 BPoseView::MimeTypesInSelection()
@@ -990,9 +1018,9 @@ BPoseView::IsFilePanel() const
 
 
 inline bool
-BPoseView::IsDesktopWindow() const
+BPoseView::IsDesktop() const
 {
-	return fIsDesktopWindow;
+	return fIsDesktop;
 }
 
 
@@ -1039,13 +1067,6 @@ BPoseView::ReverseSort() const
 
 
 inline void
-BPoseView::SetShowHideSelection(bool on)
-{
-	fShowHideSelection = on;
-}
-
-
-inline void
 BPoseView::SetIconMapping(bool on)
 {
 	fOkToMapIcons = on;
@@ -1076,7 +1097,7 @@ BPoseView::CountColumns() const
 inline float
 BPoseView::StartOffset() const
 {
-	return kListOffset + IconSizeInt() + kMiniIconSeparator + 1;
+	return fListOffset + ListIconSize() + kMiniIconSeparator + 1;
 }
 
 

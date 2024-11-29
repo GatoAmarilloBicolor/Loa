@@ -22,6 +22,8 @@
 #include <package/PackageInfoAttributes.h>
 
 #include <AutoDeleter.h>
+#include <AutoDeleterPosix.h>
+#include <AutoDeleterDrivers.h>
 #include <PackagesDirectoryDefs.h>
 
 #include <vfs.h>
@@ -316,21 +318,20 @@ Volume::Mount(const char* parameterString)
 	const char* shineThrough = NULL;
 	const char* packagesState = NULL;
 
-	void* parameterHandle = parse_driver_settings_string(parameterString);
-	if (parameterHandle != NULL) {
-		packages = get_driver_parameter(parameterHandle, "packages", NULL,
-			NULL);
-		volumeName = get_driver_parameter(parameterHandle, "volume-name", NULL,
-			NULL);
-		mountType = get_driver_parameter(parameterHandle, "type", NULL, NULL);
-		shineThrough = get_driver_parameter(parameterHandle, "shine-through",
+	DriverSettingsUnloader parameterHandle(
+		parse_driver_settings_string(parameterString));
+	if (parameterHandle.IsSet()) {
+		packages = get_driver_parameter(parameterHandle.Get(), "packages",
 			NULL, NULL);
-		packagesState = get_driver_parameter(parameterHandle, "state", NULL,
+		volumeName = get_driver_parameter(parameterHandle.Get(), "volume-name",
+			NULL, NULL);
+		mountType = get_driver_parameter(parameterHandle.Get(), "type", NULL,
 			NULL);
+		shineThrough = get_driver_parameter(parameterHandle.Get(),
+			"shine-through", NULL, NULL);
+		packagesState = get_driver_parameter(parameterHandle.Get(), "state",
+			NULL, NULL);
 	}
-
-	CObjectDeleter<void, status_t> parameterHandleDeleter(parameterHandle,
-		&delete_driver_settings);
 
 	if (packages != NULL && packages[0] == '\0') {
 		FATAL("invalid package folder ('packages' parameter)!\n");
@@ -398,10 +399,10 @@ Volume::Mount(const char* parameterString)
 
 	// create the root node
 	fRootDirectory
-		= new(std::nothrow) ::RootDirectory(kRootDirectoryID, st.st_mtim);
+		= new ::RootDirectory(kRootDirectoryID, st.st_mtim);
 	if (fRootDirectory == NULL)
 		RETURN_ERROR(B_NO_MEMORY);
-	fRootDirectory->Init(NULL, volumeNameString);
+	fRootDirectory->Init(volumeNameString);
 	fNodes.Insert(fRootDirectory);
 	fRootDirectory->AcquireReference();
 		// one reference for the table
@@ -567,6 +568,7 @@ Volume::IOCtl(Node* node, uint32 operation, void* buffer, size_t size)
 void
 Volume::AddNodeListener(NodeListener* listener, Node* node)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 	ASSERT(!listener->IsListening());
 
 	listener->StartedListening(node);
@@ -581,6 +583,7 @@ Volume::AddNodeListener(NodeListener* listener, Node* node)
 void
 Volume::RemoveNodeListener(NodeListener* listener)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 	ASSERT(listener->IsListening());
 
 	Node* node = listener->ListenedNode();
@@ -603,6 +606,7 @@ Volume::RemoveNodeListener(NodeListener* listener)
 void
 Volume::AddQuery(Query* query)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 	fQueries.Add(query);
 }
 
@@ -610,6 +614,7 @@ Volume::AddQuery(Query* query)
 void
 Volume::RemoveQuery(Query* query)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 	fQueries.Remove(query);
 }
 
@@ -659,9 +664,11 @@ Volume::PublishVNode(Node* node)
 void
 Volume::PackageLinkNodeAdded(Node* node)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	_AddPackageLinksNode(node);
 
-	notify_entry_created(ID(), node->Parent()->ID(), node->Name(), node->ID());
+	notify_entry_created(ID(), node->GetParentUnchecked()->ID(), node->Name(), node->ID());
 	_NotifyNodeAdded(node);
 }
 
@@ -669,9 +676,11 @@ Volume::PackageLinkNodeAdded(Node* node)
 void
 Volume::PackageLinkNodeRemoved(Node* node)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	_RemovePackageLinksNode(node);
 
-	notify_entry_removed(ID(), node->Parent()->ID(), node->Name(), node->ID());
+	notify_entry_removed(ID(), node->GetParentUnchecked()->ID(), node->Name(), node->ID());
 	_NotifyNodeRemoved(node);
 }
 
@@ -680,7 +689,9 @@ void
 Volume::PackageLinkNodeChanged(Node* node, uint32 statFields,
 	const OldNodeAttributes& oldAttributes)
 {
-	Directory* parent = node->Parent();
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
+	Directory* parent = node->GetParentUnchecked();
 	notify_stat_changed(ID(), parent != NULL ? parent->ID() : -1, node->ID(),
 		statFields);
 	_NotifyNodeChanged(node, statFields, oldAttributes);
@@ -706,14 +717,13 @@ Volume::_LoadOldPackagesStates(const char* packagesState)
 	}
 
 	// iterate through the "administrative" dir
-	DIR* dir = fdopendir(fd);
-	if (dir == NULL) {
+	DirCloser dir(fdopendir(fd));
+	if (!dir.IsSet()) {
 		ERROR("Failed to open administrative directory: %s\n", strerror(errno));
 		RETURN_ERROR(errno);
 	}
-	CObjectDeleter<DIR, int> dirCloser(dir, closedir);
 
-	while (dirent* entry = readdir(dir)) {
+	while (dirent* entry = readdir(dir.Get())) {
 		if (strncmp(entry->d_name, "state_", 6) != 0
 			|| strcmp(entry->d_name, packagesState) < 0) {
 			continue;
@@ -812,20 +822,19 @@ Volume::_AddInitialPackagesFromActivationFile(
 	PackagesDirectory* packagesDirectory)
 {
 	// try reading the activation file
-	int fd = openat(packagesDirectory->DirectoryFD(),
+	FileDescriptorCloser fd(openat(packagesDirectory->DirectoryFD(),
 		packagesDirectory == fPackagesDirectory
 			? kActivationFilePath : kActivationFileName,
-		O_RDONLY);
-	if (fd < 0) {
+		O_RDONLY));
+	if (!fd.IsSet()) {
 		INFORM("Failed to open packages activation file: %s\n",
 			strerror(errno));
 		RETURN_ERROR(errno);
 	}
-	FileDescriptorCloser fdCloser(fd);
 
 	// read the whole file into memory to simplify things
 	struct stat st;
-	if (fstat(fd, &st) != 0) {
+	if (fstat(fd.Get(), &st) != 0) {
 		ERROR("Failed to stat packages activation file: %s\n",
 			strerror(errno));
 		RETURN_ERROR(errno);
@@ -841,7 +850,7 @@ Volume::_AddInitialPackagesFromActivationFile(
 		RETURN_ERROR(B_NO_MEMORY);
 	MemoryDeleter fileContentDeleter(fileContent);
 
-	ssize_t bytesRead = read(fd, fileContent, st.st_size);
+	ssize_t bytesRead = read(fd.Get(), fileContent, st.st_size);
 	if (bytesRead < 0) {
 		ERROR("Failed to read packages activation file: %s\n", strerror(errno));
 		RETURN_ERROR(errno);
@@ -897,15 +906,14 @@ Volume::_AddInitialPackagesFromDirectory()
 		RETURN_ERROR(errno);
 	}
 
-	DIR* dir = fdopendir(fd);
-	if (dir == NULL) {
+	DirCloser dir(fdopendir(fd));
+	if (!dir.IsSet()) {
 		ERROR("Failed to open packages directory \"%s\": %s\n",
 			fPackagesDirectory->Path(), strerror(errno));
 		RETURN_ERROR(errno);
 	}
-	CObjectDeleter<DIR, int> dirCloser(dir, closedir);
 
-	while (dirent* entry = readdir(dir)) {
+	while (dirent* entry = readdir(dir.Get())) {
 		// skip "." and ".."
 		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
 			continue;
@@ -996,7 +1004,7 @@ Volume::_AddPackageContent(Package* package, bool notify)
 	if (error != B_OK)
 		RETURN_ERROR(error);
 
-	for (PackageNodeList::Iterator it = package->Nodes().GetIterator();
+	for (PackageNodeList::ConstIterator it = package->Nodes().GetIterator();
 			PackageNode* node = it.Next();) {
 		// skip over ".PackageInfo" file, it isn't part of the package content
 		if (strcmp(node->Name(),
@@ -1034,7 +1042,7 @@ Volume::_RemovePackageContent(Package* package, PackageNode* endNode,
 		node = nextNode;
 	}
 
-	fPackageFSRoot->RemovePackage(package);;
+	fPackageFSRoot->RemovePackage(package);
 }
 
 
@@ -1048,6 +1056,8 @@ status_t
 Volume::_AddPackageContentRootNode(Package* package,
 	PackageNode* rootPackageNode, bool notify)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	PackageNode* packageNode = rootPackageNode;
 	Directory* directory = fRootDirectory;
 	directory->WriteLock();
@@ -1060,7 +1070,7 @@ Volume::_AddPackageContentRootNode(Package* package,
 			// unlock all directories
 			while (directory != NULL) {
 				directory->WriteUnlock();
-				directory = directory->Parent();
+				directory = directory->GetParentUnchecked();
 			}
 
 			// remove the added package nodes
@@ -1096,10 +1106,12 @@ Volume::_AddPackageContentRootNode(Package* package,
 			// no more siblings -- go back up the tree
 			packageNode = packageDirectory;
 			directory->WriteUnlock();
-			directory = directory->Parent();
+			directory = directory->GetParentUnchecked();
 				// the parent is still locked, so this is safe
 		} while (packageNode != NULL);
 	} while (packageNode != NULL);
+
+	ASSERT(directory == NULL);
 
 	return B_OK;
 }
@@ -1115,13 +1127,21 @@ void
 Volume::_RemovePackageContentRootNode(Package* package,
 	PackageNode* rootPackageNode, PackageNode* endPackageNode, bool notify)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	PackageNode* packageNode = rootPackageNode;
 	Directory* directory = fRootDirectory;
 	directory->WriteLock();
 
 	do {
-		if (packageNode == endPackageNode)
+		if (packageNode == endPackageNode) {
+			// unlock all directories
+			while (directory != NULL) {
+				directory->WriteUnlock();
+				directory = directory->GetParentUnchecked();
+			}
 			break;
+		}
 
 		// recurse into directory
 		if (PackageDirectory* packageDirectory
@@ -1155,10 +1175,12 @@ Volume::_RemovePackageContentRootNode(Package* package,
 			// no more siblings -- go back up the tree
 			packageNode = packageDirectory;
 			directory->WriteUnlock();
-			directory = directory->Parent();
+			directory = directory->GetParentUnchecked();
 				// the parent is still locked, so this is safe
 		} while (packageNode != NULL/* && packageNode != rootPackageNode*/);
 	} while (packageNode != NULL/* && packageNode != rootPackageNode*/);
+
+	ASSERT(directory == NULL);
 }
 
 
@@ -1189,10 +1211,12 @@ Volume::_AddPackageNode(Directory* directory, PackageNode* packageNode,
 	}
 
 	BReference<Node> nodeReference(node);
-	NodeWriteLocker nodeWriteLocker(node);
+	DirectoryWriteLocker directoryNodeWriteLocker;
+	if (Directory* directory = dynamic_cast<Directory*>(node))
+		directoryNodeWriteLocker.SetTo(directory, false, true);
 
 	BReference<Node> newNodeReference;
-	NodeWriteLocker newNodeWriteLocker;
+	DirectoryWriteLocker newDirectoryNodeWriteLocker;
 	Node* oldNode = NULL;
 
 	if (!newNode && !S_ISDIR(node->Mode()) && oldPackageNode != NULL
@@ -1218,7 +1242,8 @@ Volume::_AddPackageNode(Directory* directory, PackageNode* packageNode,
 		unpackingNode = newUnpackingNode;
 		node = unpackingNode->GetNode();
 		newNodeReference.SetTo(node);
-		newNodeWriteLocker.SetTo(node, false);
+		if (Directory* newDirectory = dynamic_cast<Directory*>(node))
+			newDirectoryNodeWriteLocker.SetTo(newDirectory, false, true);
 
 		directory->AddChild(node);
 		fNodes.Insert(node);
@@ -1227,6 +1252,10 @@ Volume::_AddPackageNode(Directory* directory, PackageNode* packageNode,
 
 	status_t error = unpackingNode->AddPackageNode(packageNode, ID());
 	if (error != B_OK) {
+		dprintf("packagefs: Failed to add node \"%s\" of package \"%s\": %s\n",
+			packageNode->Name().Data(), packageNode->GetPackage()->Name().Data(),
+			strerror(error));
+
 		// Remove the node, if created before. If the node was created to
 		// replace the previous node, send out notifications instead.
 		if (newNode) {
@@ -1283,14 +1312,16 @@ Volume::_RemovePackageNode(Directory* directory, PackageNode* packageNode,
 		return;
 
 	BReference<Node> nodeReference(node);
-	NodeWriteLocker nodeWriteLocker(node);
+	DirectoryWriteLocker directoryNodeWriteLocker;
+	if (Directory* directory = dynamic_cast<Directory*>(node))
+		directoryNodeWriteLocker.SetTo(directory, false, true);
 
 	PackageNode* headPackageNode = unpackingNode->GetPackageNode();
 	bool nodeRemoved = false;
 	Node* newNode = NULL;
 
 	BReference<Node> newNodeReference;
-	NodeWriteLocker newNodeWriteLocker;
+	DirectoryWriteLocker newDirectoryNodeWriteLocker;
 
 	// If this is the last package node of the node, remove it completely.
 	if (unpackingNode->IsOnlyPackageNode(packageNode)) {
@@ -1327,7 +1358,8 @@ Volume::_RemovePackageNode(Directory* directory, PackageNode* packageNode,
 				// add the new node
 				newNode = newUnpackingNode->GetNode();
 				newNodeReference.SetTo(newNode);
-				newNodeWriteLocker.SetTo(newNode, false);
+				if (Directory* newDirectory = dynamic_cast<Directory*>(newNode))
+					newDirectoryNodeWriteLocker.SetTo(newDirectory, false, true);
 
 				directory->AddChild(newNode);
 				fNodes.Insert(newNode);
@@ -1378,9 +1410,9 @@ Volume::_CreateUnpackingNode(mode_t mode, Directory* parent, const String& name,
 {
 	UnpackingNode* unpackingNode;
 	if (S_ISREG(mode) || S_ISLNK(mode))
-		unpackingNode = new(std::nothrow) UnpackingLeafNode(fNextNodeID++);
+		unpackingNode = new UnpackingLeafNode(fNextNodeID++);
 	else if (S_ISDIR(mode))
-		unpackingNode = new(std::nothrow) UnpackingDirectory(fNextNodeID++);
+		unpackingNode = new UnpackingDirectory(fNextNodeID++);
 	else
 		RETURN_ERROR(B_UNSUPPORTED);
 
@@ -1390,7 +1422,7 @@ Volume::_CreateUnpackingNode(mode_t mode, Directory* parent, const String& name,
 	Node* node = unpackingNode->GetNode();
 	BReference<Node> nodeReference(node, true);
 
-	status_t error = node->Init(parent, name);
+	status_t error = node->Init(name);
 	if (error != B_OK)
 		RETURN_ERROR(error);
 
@@ -1409,7 +1441,7 @@ void
 Volume::_RemoveNode(Node* node)
 {
 	// remove from parent
-	Directory* parent = node->Parent();
+	Directory* parent = node->GetParentUnchecked();
 	parent->RemoveChild(node);
 
 	// remove from node table
@@ -1421,22 +1453,35 @@ Volume::_RemoveNode(Node* node)
 void
 Volume::_RemoveNodeAndVNode(Node* node)
 {
+	Directory* parent = NULL;
+	DirectoryWriteLocker nodeWriteLocker;
+	if (Directory* directory = dynamic_cast<Directory*>(node))
+		nodeWriteLocker.SetTo(directory, false, true);
+	else
+		parent = node->GetParentUnchecked();
+
+	// Remove the node from its parent and the volume. This makes the node
+	// inaccessible via the get_vnode() and lookup() hooks, and (if this
+	// is not a directory) prevents any future accesses, since regular Nodes
+	// do not have a lock of their own.
+	_RemoveNode(node);
+
+	const bool isKnownToVFS = node->IsKnownToVFS();
+
+	if (parent != NULL) {
+		// This node is not a directory. In order to avoid deadlocks, unlock
+		// its parent while we invoke the VFS, so that any threads trying
+		// to acquire the directory's lock wake up and exit.
+		parent->WriteUnlock();
+	} else {
+		nodeWriteLocker.Unlock();
+	}
+
 	// If the node is known to the VFS, we get the vnode, remove it, and put it,
 	// so that the VFS will discard it as soon as possible (i.e. now, if no one
 	// else is using it).
-	NodeWriteLocker nodeWriteLocker(node);
-
-	// Remove the node from its parent and the volume. This makes the node
-	// inaccessible via the get_vnode() and lookup() hooks.
-	_RemoveNode(node);
-
-	bool getVNode = node->IsKnownToVFS();
-
-	nodeWriteLocker.Unlock();
-
-	// Get a vnode reference, if the node is already known to the VFS.
 	Node* dummyNode;
-	if (getVNode && GetVNode(node->ID(), dummyNode) == B_OK) {
+	if (isKnownToVFS && GetVNode(node->ID(), dummyNode) == B_OK) {
 		// TODO: There still is a race condition here which we can't avoid
 		// without more help from the VFS. Right after we drop the write
 		// lock a vnode for the node could be discarded by the VFS. At that
@@ -1454,6 +1499,9 @@ Volume::_RemoveNodeAndVNode(Node* node)
 		RemoveVNode(node->ID());
 		PutVNode(node->ID());
 	}
+
+	if (parent != NULL)
+		parent->WriteLock();
 }
 
 
@@ -1517,7 +1565,7 @@ Volume::_ChangeActivation(ActivationChangeRequest& request)
 				|| item->parentDirectoryID != fPackagesDirectory->NodeID()) {
 				ERROR("Volume::_ChangeActivation(): mismatching packages "
 					"directory\n");
-				RETURN_ERROR(B_BAD_VALUE);
+				RETURN_ERROR(B_MISMATCHED_VALUES);
 			}
 
 			Package* package = _FindPackage(item->name);
@@ -1526,21 +1574,21 @@ Volume::_ChangeActivation(ActivationChangeRequest& request)
 				if (package != NULL) {
 					ERROR("Volume::_ChangeActivation(): package to activate "
 						"already activated: \"%s\"\n", item->name);
-					RETURN_ERROR(B_BAD_VALUE);
+					RETURN_ERROR(B_NAME_IN_USE);
 				}
 				newPackageCount++;
 			} else if (item->type == PACKAGE_FS_DEACTIVATE_PACKAGE) {
 				if (package == NULL) {
 					ERROR("Volume::_ChangeActivation(): package to deactivate "
 						"not found: \"%s\"\n", item->name);
-					RETURN_ERROR(B_BAD_VALUE);
+					RETURN_ERROR(B_NAME_NOT_FOUND);
 				}
 				oldPackageCount++;
 			} else if (item->type == PACKAGE_FS_REACTIVATE_PACKAGE) {
 				if (package == NULL) {
 					ERROR("Volume::_ChangeActivation(): package to reactivate "
 						"not found: \"%s\"\n", item->name);
-					RETURN_ERROR(B_BAD_VALUE);
+					RETURN_ERROR(B_NAME_NOT_FOUND);
 				}
 				oldPackageCount++;
 				newPackageCount++;
@@ -1548,7 +1596,9 @@ Volume::_ChangeActivation(ActivationChangeRequest& request)
 				RETURN_ERROR(B_BAD_VALUE);
 		}
 	}
-INFORM("Volume::_ChangeActivation(): %" B_PRId32 " new packages, %" B_PRId32 " old packages\n", newPackageCount, oldPackageCount);
+
+	INFORM("Volume::_ChangeActivation(): %" B_PRId32 " new packages, %" B_PRId32
+		" old packages\n", newPackageCount, oldPackageCount);
 
 	// Things look good so far -- allocate reference arrays for the packages to
 	// add and remove.
@@ -1608,7 +1658,8 @@ INFORM("Volume::_ChangeActivation(): %" B_PRId32 " new packages, %" B_PRId32 " o
 		oldPackageReferences[oldPackageIndex++].SetTo(package);
 		_RemovePackageContent(package, NULL, true);
 		_RemovePackage(package);
-INFORM("package \"%s\" deactivated\n", package->FileName().Data());
+
+		INFORM("package \"%s\" deactivated\n", package->FileName().Data());
 	}
 // TODO: Since package removal cannot fail, consider adding the new packages
 // first. The reactivation case may make that problematic, since two packages
@@ -1627,7 +1678,7 @@ INFORM("package \"%s\" deactivated\n", package->FileName().Data());
 			_RemovePackage(package);
 			break;
 		}
-INFORM("package \"%s\" activated\n", package->FileName().Data());
+		INFORM("package \"%s\" activated\n", package->FileName().Data());
 	}
 
 	// Try to roll back the changes, if an error occurred.
@@ -1688,7 +1739,7 @@ Volume::_CreateShineThroughDirectory(Directory* parent, const char* name,
 	if (!nameString.SetTo(name))
 		RETURN_ERROR(B_NO_MEMORY);
 
-	status_t error = directory->Init(parent, nameString);
+	status_t error = directory->Init(nameString);
 	if (error != B_OK)
 		RETURN_ERROR(error);
 
@@ -1733,6 +1784,8 @@ Volume::_CreateShineThroughDirectories(const char* shineThroughSetting)
 	if (directories == NULL)
 		return B_OK;
 
+	DirectoryWriteLocker rootDirectoryWriteLocker(fRootDirectory);
+
 	// iterate through the directory list and create the directories
 	while (const char* directoryName = *(directories++)) {
 		// create the directory
@@ -1750,6 +1803,8 @@ Volume::_CreateShineThroughDirectories(const char* shineThroughSetting)
 status_t
 Volume::_PublishShineThroughDirectories()
 {
+	DirectoryWriteLocker rootDirectoryWriteLocker(fRootDirectory);
+
 	// Iterate through the root directory children and bind the shine-through
 	// directories to the respective mount point subdirectories.
 	Node* nextNode;
@@ -1775,7 +1830,7 @@ Volume::_PublishShineThroughDirectories()
 			_RemoveNode(directory);
 			continue;
 		}
-		CObjectDeleter<struct vnode> vnodePutter(vnode, &vfs_put_vnode);
+		VnodePutter vnodePutter(vnode);
 
 		// stat it
 		struct stat st;
@@ -1827,10 +1882,9 @@ Volume::_AddPackageLinksDirectory()
 	PackageLinksDirectory* packageLinksDirectory
 		= fPackageFSRoot->GetPackageLinksDirectory();
 
-	NodeWriteLocker rootDirectoryWriteLocker(fRootDirectory);
-	NodeWriteLocker packageLinksDirectoryWriteLocker(packageLinksDirectory);
+	DirectoryWriteLocker rootDirectoryWriteLocker(fRootDirectory);
+	DirectoryWriteLocker packageLinksDirectoryWriteLocker(packageLinksDirectory);
 
-	packageLinksDirectory->SetParent(fRootDirectory);
 	fRootDirectory->AddChild(packageLinksDirectory);
 
 	_AddPackageLinksNode(packageLinksDirectory);
@@ -1848,13 +1902,12 @@ Volume::_RemovePackageLinksDirectory()
 		= fPackageFSRoot->GetPackageLinksDirectory();
 
 	VolumeWriteLocker volumeLocker(this);
-	NodeWriteLocker rootDirectoryWriteLocker(fRootDirectory);
-	NodeWriteLocker packageLinksDirectoryWriteLocker(packageLinksDirectory);
+	DirectoryWriteLocker rootDirectoryWriteLocker(fRootDirectory);
+	DirectoryWriteLocker packageLinksDirectoryWriteLocker(packageLinksDirectory);
 
-	if (packageLinksDirectory->Parent() == fRootDirectory) {
+	if (packageLinksDirectory->GetParentUnchecked() == fRootDirectory) {
 		packageLinksDirectory->SetListener(NULL);
 		fRootDirectory->RemoveChild(packageLinksDirectory);
-		packageLinksDirectory->SetParent(NULL);
 	}
 }
 
@@ -1870,9 +1923,9 @@ Volume::_AddPackageLinksNode(Node* node)
 	// If this is a directory, recursively add descendants. The directory tree
 	// for the package links isn't deep, so we can do recursion.
 	if (Directory* directory = dynamic_cast<Directory*>(node)) {
+		DirectoryReadLocker directoryReadLocker(directory);
 		for (Node* child = directory->FirstChild(); child != NULL;
 				child = directory->NextChild(child)) {
-			NodeWriteLocker childWriteLocker(child);
 			_AddPackageLinksNode(child);
 		}
 	}
@@ -1885,9 +1938,9 @@ Volume::_RemovePackageLinksNode(Node* node)
 	// If this is a directory, recursively remove descendants. The directory
 	// tree for the package links isn't deep, so we can do recursion.
 	if (Directory* directory = dynamic_cast<Directory*>(node)) {
+		DirectoryReadLocker directoryReadLocker(directory);
 		for (Node* child = directory->FirstChild(); child != NULL;
 				child = directory->NextChild(child)) {
-			NodeWriteLocker childWriteLocker(child);
 			_RemovePackageLinksNode(child);
 		}
 	}

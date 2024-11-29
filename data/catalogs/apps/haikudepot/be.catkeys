@@ -1,45 +1,28 @@
-1	belarusian	x-vnd.Haiku-HaikuDepot	1426156857
-Name	PackageListView		Імя
-Close	RatePackageWindow		Закрыць
-Changelog	PackageInfoView		Гісторыя зменаў
-Click a package to view information	PackageInfoView		Клікніце пакет каб пабачыць інфарамацыю пра яго
-No changelog available.	PackageInfoView		Спіс змен не існуе
-Description	PackageListView		Апісанне
-Install	PackageManager		Усталяваць
-Tools	MainWindow		Прылады
-HaikuDepot	System name		HaikuDepot
-Close	UserLoginWindow		Закрыць
+1	belarusian	x-vnd.Haiku-HaikuDepot	2848065911
 Rate package…	PackageInfoView		Ацаніць пакунак…
-Uninstall	PackageManager		Выдаліць
-<no info>	PackageInfoView		<няма інфармацыі>
-An error occurred while initializing the package manager: %message%	MainWindow		Падчас ініцыялізацыі пакункавага мэнэджэра здарылася памылка: %message%
-Close	PackageManager		Закрыць
-Status	PackageListView		Стан
-Development	Model		Распрацоўка
-Fatal error	PackageManager		Фатальная памылка
-Ratings	PackageInfoView		Рэйтынг
-Inactive	PackageListView		Неактыўны
-(%Votes%)	PackageInfoView		(%Votes%)
-Downloading:	PackageInfoView		Спампоўваецца:
-Search terms:	FilterView		Умовы пошуку:
-%Version%	PackageInfoView		%Version%
-No user ratings available.	PackageInfoView		Рэйтынг карыстальнікаў не існуе
-An error occurred while refreshing the repository: %error% (%details%)	MainWindow		Падчас аднаўлення інфармацыі сховішчаў адбылася памылка: %error% (%details%)
-Productivity	Model		Прадукцыйнасць
-Games	Model		Гульні
-Rating	PackageListView		Рэйтынг
-(%Votes%)	FeaturedPackagesView		(%Votes%)
-Graphics	Model		Графіка
-Local	MainWindow		Лакальныя
-Close	MainWindow		Закрыць
-Video	Model		Відэа
-An error occurred while refreshing the repository: %error%	MainWindow		Падчас аднаўлення інфармацыі сховішчаў адбылася памылка: %error%
-Pending…	PackageListView		Чакае…
-Uninstalled	PackageListView		Выдаленныя
-Unknown	PackageListView		Невядомы
-Available	PackageListView		Даступна
-n/a	PackageInfoView		н/н
-Send	RatePackageWindow		Даслаць
-Audio	Model		Аўдыё
-About	PackageInfoView		Пра Праграму
 Active	PackageListView		Актыўны
+Name	PackageListView		Імя
+No changelog available.	PackageInfoView		Спіс змен не існуе
+Available	PackageListView		Даступна
+Click a package to view information	PackageInfoView		Клікніце пакет каб пабачыць інфарамацыю пра яго
+Send	RatePackageWindow		Даслаць
+Close	RatePackageWindow		Закрыць
+Close	UserLoginWindow		Закрыць
+n/a	PackageInfoView		н/н
+Status	PackageListView		Стан
+Unknown	PackageListView		Невядомы
+Pending…	PackageListView		Чакае…
+Search terms:	FilterView		Умовы пошуку:
+Uninstalled	PackageListView		Выдаленныя
+No user ratings available.	PackageInfoView		Рэйтынг карыстальнікаў не існуе
+<no info>	PackageInfoView		<няма інфармацыі>
+Rating	PackageListView		Рэйтынг
+Ratings	PackageInfoView		Рэйтынг
+Close	PackageManager		Закрыць
+Changelog	PackageInfoView		Гісторыя зменаў
+About	PackageInfoView		Пра Праграму
+Inactive	PackageListView		Неактыўны
+Downloading:	PackageInfoView		Спампоўваецца:
+(%Votes%)	PackageInfoView		(%Votes%)
+HaikuDepot	System name		HaikuDepot
+Description	PackageListView		Апісанне

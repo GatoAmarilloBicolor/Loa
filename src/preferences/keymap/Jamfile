@@ -4,8 +4,6 @@ UseHeaders [ FDirName $(HAIKU_COMMON_PLATFORM_OBJECT_DIR) data keymaps ] ;
 UseHeaders [ FDirName $(HAIKU_COMMON_PLATFORM_OBJECT_DIR) data
 	keyboard_layouts ] ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
-
 UsePrivateHeaders interface shared ;
 
 Includes [ FGristFiles KeymapWindow.cpp ] : <keymap-locale>KeymapNames.h ;
@@ -20,6 +18,7 @@ Preference Keymap :
 	KeymapListItem.cpp
 	KeymapWindow.cpp
 	ModifierKeysWindow.cpp
+	StatusMenuField.cpp
 
 	: be tracker localestub shared [ TargetLibstdc++ ]
 	: Keymap.rdef
@@ -31,4 +30,5 @@ DoCatalogs Keymap :
 	KeyboardLayoutView.cpp
 	KeymapWindow.cpp
 	ModifierKeysWindow.cpp
+	StatusMenuField.cpp
 ;

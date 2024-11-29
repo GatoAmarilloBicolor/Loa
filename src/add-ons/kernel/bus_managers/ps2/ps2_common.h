@@ -17,7 +17,7 @@
 #include <ISA.h>
 #include <Drivers.h>
 #include <KernelExport.h>
-#include <OS.h>
+#include <lock.h>
 
 #include "ps2_defs.h"
 #include "ps2_dev.h"
@@ -26,15 +26,21 @@
 #if 1
 #	define INFO(x...) dprintf(x)
 #else
-#	define INFO(x...)
+#	define INFO(x...) do {} while (false)
 #endif
 #define ERROR(x...) dprintf(x)
 
 //#define TRACE_PS2
 #ifdef TRACE_PS2
-#	define TRACE(x...) dprintf(x)
-#else
-#	define TRACE(x...)
+#define TRACE_PS2_ALPS
+#define TRACE_PS2_COMMON
+#define TRACE_PS2_DEV
+#define TRACE_PS2_ELANTECH
+#define TRACE_PS2_MOUSE
+#define TRACE_PS2_KEYBOARD
+#define TRACE_PS2_SERVICE
+#define TRACE_PS2_SYNAPTICS
+#define TRACE_PS2_TRACKPOINT
 #endif
 
 
@@ -45,7 +51,8 @@ extern device_hooks gKeyboardDeviceHooks;
 extern device_hooks gPointingDeviceHooks;
 
 extern bool gActiveMultiplexingEnabled;
-extern sem_id gControllerSem;
+extern bool gSetupComplete;
+extern mutex gControllerLock;
 
 
 #ifdef __cplusplus

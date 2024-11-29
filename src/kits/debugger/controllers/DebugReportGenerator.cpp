@@ -29,7 +29,6 @@
 #include "StackFrame.h"
 #include "StackTrace.h"
 #include "Statement.h"
-#include "StringUtils.h"
 #include "SystemInfo.h"
 #include "Team.h"
 #include "TeamDebugInfo.h"
@@ -290,9 +289,12 @@ DebugReportGenerator::_GenerateReportHeader(BFile& _output)
 	SystemInfo sysInfo;
 	if (fDebuggerInterface->GetSystemInfo(sysInfo) == B_OK) {
 		const system_info &info = sysInfo.GetSystemInfo();
+		const char* vendor = get_cpu_vendor_string(cpuVendor);
+		const char* model = get_cpu_model_string(platform, cpuVendor, cpuModel);
+
 		data.SetToFormat("CPU(s): %" B_PRId32 "x %s %s\n",
-			info.cpu_count, get_cpu_vendor_string(cpuVendor),
-			get_cpu_model_string(platform, cpuVendor, cpuModel));
+			info.cpu_count, vendor != NULL ? vendor : "unknown",
+			model != NULL ? model : "unknown");
 		WRITE_AND_CHECK(_output, data);
 
 		char maxSize[32];

@@ -1,6 +1,10 @@
 /*
- * Copyright 2008-09, Oliver Ruiz Dorantes, <oliver.ruiz.dorantes_at_gmail.com>
- * All rights reserved. Distributed under the terms of the MIT License.
+ * Copyright 2008-2009, Oliver Ruiz Dorantes, <oliver.ruiz.dorantes@gmail.com>
+ * Copyright 2021, Haiku, Inc.
+ * Distributed under the terms of the MIT License.
+ *
+ * Authors:
+ * 		Fredrik Modéen <fredrik_at_modeen.se>
  */
 
 #include <Alert.h>
@@ -63,9 +67,7 @@ public:
 	DeviceDiscovered(RemoteDevice* btDevice, DeviceClass cod)
 	{
 		BMessage* message = new BMessage(kMsgAddListDevice);
-
 		message->AddPointer("remoteItem", new DeviceListItem(btDevice));
-
 		fInquiryPanel->PostMessage(message);
 	}
 
@@ -149,11 +151,11 @@ InquiryPanel::InquiryPanel(BRect frame, LocalDevice* lDevice)
 	fRetrieveMessage = new BMessage(kMsgRetrieve);
 	fSecondsMessage = new BMessage(kMsgSecond);
 
-	BLayoutBuilder::Group<>(this, B_VERTICAL, 10)
-		.SetInsets(15)
-		.Add(fMessage)
+	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
+		.SetInsets(B_USE_SMALL_SPACING)
+		.Add(fMessage, 0)
 		.Add(fScanProgress, 10)
-		.Add(fScrollView)
+		.Add(fScrollView, 20)
 		.AddGroup(B_HORIZONTAL, 10)
 			.Add(fAddButton)
 			.AddGlue()
@@ -214,7 +216,8 @@ InquiryPanel::MessageReceived(BMessage* message)
 			fRemoteList->MakeEmpty();
 			fScanProgress->Reset();
 			fScanProgress->SetTo(1);
-			fScanProgress->SetTrailingText(B_TRANSLATE("Starting scan..."));
+			fScanProgress->SetTrailingText(B_TRANSLATE("Starting scan"
+				B_UTF8_ELLIPSIS));
 			fScanProgress->SetBarColor(activeColor);
 
 			fAddButton->SetEnabled(false);
@@ -234,7 +237,8 @@ InquiryPanel::MessageReceived(BMessage* message)
 			fRetrieving = true;
 			labelPlaced = false;
 			fScanProgress->SetTo(100);
-			fScanProgress->SetTrailingText(B_TRANSLATE("Retrieving names..."));
+			fScanProgress->SetTrailingText(B_TRANSLATE("Retrieving names"
+				B_UTF8_ELLIPSIS));
 			BMessageRunner::StartSending(fMessenger, fRetrieveMessage, 1000000, 1);
 
 		break;
@@ -281,10 +285,10 @@ InquiryPanel::MessageReceived(BMessage* message)
 						((DeviceListItem*)fRemoteList->ItemAt(retrievalIndex))
 							->SetDevice((BluetoothDevice*) fDiscoveryAgent
 							->RetrieveDevices(0).ItemAt(retrievalIndex));
-        				fRemoteList->InvalidateItem(retrievalIndex);
+						fRemoteList->InvalidateItem(retrievalIndex);
 
-        				retrievalIndex++;
-        				labelPlaced = false;
+						retrievalIndex++;
+						labelPlaced = false;
 					}
 
 					BMessageRunner::StartSending(fMessenger, fRetrieveMessage, 500000, 1);

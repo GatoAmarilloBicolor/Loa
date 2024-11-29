@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5416/ar5416_attach.c 305614 2016-09-08 15:05:25Z pfg $
  */
 #include "opt_ah.h"
 
@@ -356,11 +356,11 @@ ar5416Attach(uint16_t devid, HAL_SOFTC sc,
 	HAL_INI_INIT(&AH5416(ah)->ah_ini_addac, ar5416Addac, 2);
 
 	if (! IS_5416V2_2(ah)) {		/* Owl 2.1/2.0 */
+		ath_hal_printf(ah, "[ath] Enabling CLKDRV workaround for AR5416 < v2.2\n");
 		struct ini {
 			uint32_t	*data;		/* NB: !const */
 			int		rows, cols;
 		};
-		ath_hal_printf(ah, "[ath] Enabling CLKDRV workaround for AR5416 < v2.2\n");
 		/* override CLKDRV value */
 		OS_MEMCPY(&AH5416(ah)[1], ar5416Addac, sizeof(ar5416Addac));
 		AH5416(ah)->ah_ini_addac.data = (uint32_t *) &AH5416(ah)[1];
@@ -374,7 +374,7 @@ ar5416Attach(uint16_t devid, HAL_SOFTC sc,
 	if (ecode != HAL_OK)
 		goto bad;
 
-	if (!ar5416ChipReset(ah, AH_NULL)) {	/* reset chip */
+	if (!ar5416ChipReset(ah, AH_NULL, HAL_RESET_NORMAL)) {	/* reset chip */
 		HALDEBUG(ah, HAL_DEBUG_ANY, "%s: chip reset failed\n",
 		    __func__);
 		ecode = HAL_EIO;
@@ -630,7 +630,7 @@ ar5416WriteIni(struct ath_hal *ah, const struct ieee80211_channel *chan)
 }
 
 /*
- * Convert to baseband spur frequency given input channel frequency
+ * Convert to baseband spur frequency given input channel frequency 
  * and compute register settings below.
  */
 
@@ -718,7 +718,6 @@ ar5416SpurMitigate(struct ath_hal *ah, const struct ieee80211_channel *chan)
         SM(spur_freq_sd, AR_PHY_TIMING11_SPUR_FREQ_SD) |
         SM(spur_delta_phase, AR_PHY_TIMING11_SPUR_DELTA_PHASE));
     OS_REG_WRITE(ah, AR_PHY_TIMING11, new);
-
 
     /*
      * ============================================
@@ -967,7 +966,8 @@ ar5416FillCapabilityInfo(struct ath_hal *ah)
 	pCap->halChanHalfRate = AH_TRUE;
 	pCap->halChanQuarterRate = AH_TRUE;
 
-	pCap->halTstampPrecision = 32;
+	pCap->halTxTstampPrecision = 32;
+	pCap->halRxTstampPrecision = 32;
 	pCap->halHwPhyCounterSupport = AH_TRUE;
 	pCap->halIntrMask = HAL_INT_COMMON
 			| HAL_INT_RX
@@ -1019,8 +1019,6 @@ ar5416FillCapabilityInfo(struct ath_hal *ah)
 	pCap->halGTTSupport = AH_TRUE;
 	pCap->halCSTSupport = AH_TRUE;
 	pCap->halEnhancedDfsSupport = AH_FALSE;
-	/* Hardware supports 32 bit TSF values in the RX descriptor */
-	pCap->halHasLongRxDescTsf = AH_TRUE;
 	/*
 	 * BB Read WAR: this is only for AR5008/AR9001 NICs
 	 * It is also set individually in the AR91xx attach functions.

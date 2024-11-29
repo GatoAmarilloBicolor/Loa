@@ -10,13 +10,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ByteOrder.h>
 #include <util/AutoLock.h>
 
 #include "virtio_balloon.h"
 
 
 const char*
-get_feature_name(uint32 feature)
+get_feature_name(uint64 feature)
 {
 	switch (feature) {
 		case VIRTIO_BALLOON_F_MUST_TELL_HOST:
@@ -57,7 +58,7 @@ VirtioBalloonDevice::VirtioBalloonDevice(device_node* node)
 	fVirtio->negotiate_features(fVirtioDevice,
 		0, &fFeatures, &get_feature_name);
 
-	fStatus = fVirtio->alloc_queues(fVirtioDevice, 2, fVirtioQueues);
+	fStatus = fVirtio->alloc_queues(fVirtioDevice, 2, fVirtioQueues, NULL);
 	if (fStatus != B_OK) {
 		ERROR("queue allocation failed (%s)\n", strerror(fStatus));
 		return;
@@ -188,14 +189,13 @@ VirtioBalloonDevice::_Thread()
 
 		// alloc or release
 		TRACE("queue request\n");
-		status_t result = fVirtio->queue_request(queue, &fEntry, NULL, 
-			queue);
+		status_t result = fVirtio->queue_request(queue, &fEntry, NULL, NULL);
 		if (result != B_OK) {
 			ERROR("queueing failed (%s)\n", strerror(result));
 			return result;
 		}
 
-		while (fVirtio->queue_dequeue(queue, NULL) == NULL) {
+		while (!fVirtio->queue_dequeue(queue, NULL, NULL)) {
 			TRACE("wait for response\n");
 			queueConditionEntry.Wait(B_CAN_INTERRUPT);
 		}

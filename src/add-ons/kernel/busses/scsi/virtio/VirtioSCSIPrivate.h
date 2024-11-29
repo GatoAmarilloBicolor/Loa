@@ -22,7 +22,7 @@
 #	define TRACE(x...) ;
 #endif
 #define ERROR(x...)			dprintf("\33[33mvirtio_scsi:\33[0m " x)
-#define CALLED() 			TRACE("CALLED %s\n", __PRETTY_FUNCTION__)
+#define CALLED()			TRACE("CALLED %s\n", __PRETTY_FUNCTION__)
 
 extern device_manager_info* gDeviceManager;
 extern scsi_for_sim_interface *gSCSI;
@@ -65,21 +65,23 @@ private:
 	static	void				_RequestCallback(void* driverCookie,
 									void *cookie);
 			void				_RequestInterrupt();
-	static	void				_EventCallback(void *driverCookie, void *cookie);
-			void				_EventInterrupt(struct virtio_scsi_event* event);
+	static	void				_EventCallback(void *driverCookie,
+									void *cookie);
+			void				_EventInterrupt(
+									struct virtio_scsi_event* event);
 	static	void				_RescanChildBus(void *cookie);
 
 			void				_SubmitEvent(uint32 event);
 
 			device_node*		fNode;
-			scsi_bus 			fBus;
+			scsi_bus			fBus;
 
 			virtio_device_interface* fVirtio;
 			virtio_device*		fVirtioDevice;
 
 			status_t			fStatus;
 			struct virtio_scsi_config	fConfig;
-			uint32				fFeatures;
+			uint64				fFeatures;
 			::virtio_queue		fControlVirtioQueue;
 			::virtio_queue		fEventVirtioQueue;
 			::virtio_queue		fRequestVirtioQueue;
@@ -89,10 +91,8 @@ private:
 
 			VirtioSCSIRequest*	fRequest;
 
-			spinlock			fInterruptLock;
+			int32				fCurrentRequest;
 			ConditionVariable	fInterruptCondition;
-			ConditionVariableEntry fInterruptConditionEntry;
-			bool				fExpectsInterrupt;
 
 			scsi_dpc_cookie		fEventDPC;
 			struct virtio_scsi_event fEventBuffers[VIRTIO_SCSI_NUM_EVENTS];
@@ -123,6 +123,7 @@ public:
 									{ return fCCB->data_length > 0; }
 
 			status_t			Finish(bool resubmit);
+			void				Abort();
 
 			// SCSI stuff
 			status_t			Start(scsi_ccb *ccb);

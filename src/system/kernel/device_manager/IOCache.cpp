@@ -107,7 +107,7 @@ IOCache::Init(const char* name)
 		VM_PRIORITY_SYSTEM);
 
 	// get the area's cache
-	VMArea* area = VMAreaHash::Lookup(fArea);
+	VMArea* area = VMAreas::Lookup(fArea);
 	if (area == NULL) {
 		panic("IOCache::Init(): Where's our area (id: %" B_PRId32 ")?!", fArea);
 		return B_ERROR;
@@ -203,6 +203,8 @@ void
 IOCache::OperationCompleted(IOOperation* operation, status_t status,
 	generic_size_t transferredBytes)
 {
+	operation->SetStatus(status, transferredBytes);
+
 	if (status == B_OK) {
 		// always fail in case of partial transfers
 		((Operation*)operation)->finishedCondition.NotifyAll(
@@ -466,8 +468,7 @@ IOCache::_TransferRequestLineUncached(IORequest* request, off_t lineOffset,
 
 		error = _DoOperation(operation);
 
-		request->OperationFinished(&operation, error, false,
-			error == B_OK ? operation.OriginalLength() : 0);
+		request->OperationFinished(&operation);
 		request->SetUnfinished();
 			// Keep the request in unfinished state. ScheduleRequest() will set
 			// the final status and notify.
@@ -544,6 +545,12 @@ IOCache::_TransferPages(size_t firstPage, size_t pageCount, bool isWrite,
 			vecsEndAddress += B_PAGE_SIZE;
 		}
 	}
+
+	// Don't try to read past the end of the device just to fill a page;
+	// this makes sure that sum(fVecs[].length) == requestLength
+	generic_size_t padLength = B_PAGE_SIZE - requestLength % B_PAGE_SIZE;
+	if (vecCount > 0 && padLength != B_PAGE_SIZE)
+		fVecs[vecCount - 1].length -= padLength;
 
 	// create a request for the transfer
 	IORequest request;

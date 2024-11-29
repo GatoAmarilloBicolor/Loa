@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2012 Haiku, Inc. All Rights Reserved.
+ * Copyright 2002-2021 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  */
 #ifndef _STDLIB_H_
@@ -49,14 +49,16 @@ extern void		*calloc(size_t numElements, size_t size);
 extern void		free(void *pointer);
 extern void		*malloc(size_t size);
 extern int		posix_memalign(void **_pointer, size_t alignment, size_t size);
+extern void 	*aligned_alloc(size_t alignment, size_t size) _ALIGNED_BY_ARG(1);
 extern void		*realloc(void *oldPointer, size_t newSize);
+extern void		*reallocarray(void *ptr, size_t nelem, size_t elsize);
 
 /* process termination */
-extern void		abort(void);
+extern void		abort(void) __attribute__((noreturn));
 extern int		atexit(void (*func)(void));
 extern int		atfork(void (*func)(void));
-extern void		exit(int);
-extern void		_Exit(int);
+extern void		exit(int) __attribute__((noreturn));
+extern void		_Exit(int) __attribute__((noreturn));
 
 /* misc functions */
 extern char		*realpath(const char *path, char *resolved);
@@ -66,6 +68,7 @@ extern int		system(const char *command);
 extern char		*mktemp(char *name);
 extern char		*mkdtemp(char *templat);
 extern int		mkstemp(char *templat);
+extern int		mkostemp(char *templat, int oflags);
 
 extern char		*ecvt(double value, int digits, int *_decimalPoint, int *_sign);
 extern char		*fcvt(double value, int precision, int *_decimalPoint,
@@ -79,7 +82,7 @@ extern long		a64l(const char *string);
 extern char		**environ;
 extern int		clearenv(void);
 extern char		*getenv(const char *name);
-extern int		putenv(const char *string);
+extern int		putenv(char *string);
 extern int		setenv(char const *name, char const *value, int rewrite);
 extern int		unsetenv(const char *name);
 
@@ -181,6 +184,7 @@ extern int		getsubopt(char **optionp, char * const *keylistp,
 extern int		posix_openpt(int openFlags);
 extern int		grantpt(int masterFD);
 extern char*	ptsname(int masterFD);
+extern int		ptsname_r(int masterFD, char *path, size_t maxSize);
 extern int		unlockpt(int masterFD);
 
 /* internal accessor to value for MB_CUR_MAX */

@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include <syscall_utils.h>
+#include <time_private.h>
 
 #include <syscalls.h>
 #include <user_mutex_defs.h>
@@ -57,7 +58,8 @@ pthread_cond_destroy(pthread_cond_t* cond)
 
 
 static status_t
-cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex, bigtime_t timeout)
+cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex, uint32 flags,
+	bigtime_t timeout)
 {
 	if (mutex->owner != find_thread(NULL)) {
 		// calling thread isn't mutex owner
@@ -73,18 +75,17 @@ cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex, bigtime_t timeout)
 	cond->waiter_count++;
 
 	// make sure the user mutex we use for blocking is locked
-	atomic_or((int32*)&cond->lock, B_USER_MUTEX_LOCKED);
+	atomic_test_and_set((int32*)&cond->lock, B_USER_MUTEX_LOCKED, 0);
 
 	// atomically unlock the mutex and start waiting on the user mutex
 	mutex->owner = -1;
 	mutex->owner_count = 0;
 
-	int32 flags = (cond->flags & COND_FLAG_MONOTONIC) != 0 ? B_ABSOLUTE_TIMEOUT
-		: B_ABSOLUTE_REAL_TIME_TIMEOUT;
-
+	if ((cond->flags & COND_FLAG_SHARED) != 0)
+		flags |= B_USER_MUTEX_SHARED;
 	status_t status = _kern_mutex_switch_lock((int32*)&mutex->lock,
-		(int32*)&cond->lock, "pthread condition",
-		timeout == B_INFINITE_TIMEOUT ? 0 : flags, timeout);
+		((mutex->flags & MUTEX_FLAG_SHARED) ? B_USER_MUTEX_SHARED : 0),
+		(int32*)&cond->lock, "pthread condition", flags, timeout);
 
 	if (status == B_INTERRUPTED) {
 		// EINTR is not an allowed return value. We either have to restart
@@ -95,6 +96,7 @@ cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex, bigtime_t timeout)
 	pthread_mutex_lock(mutex);
 
 	cond->waiter_count--;
+
 	// If there are no more waiters, we can change mutexes.
 	if (cond->waiter_count == 0)
 		cond->mutex = NULL;
@@ -109,28 +111,56 @@ cond_signal(pthread_cond_t* cond, bool broadcast)
 	if (cond->waiter_count == 0)
 		return;
 
+	uint32 flags = 0;
+	if (broadcast)
+		flags |= B_USER_MUTEX_UNBLOCK_ALL;
+	if ((cond->flags & COND_FLAG_SHARED) != 0)
+		flags |= B_USER_MUTEX_SHARED;
+
 	// release the condition lock
-	_kern_mutex_unlock((int32*)&cond->lock,
-		broadcast ? B_USER_MUTEX_UNBLOCK_ALL : 0);
+	atomic_and((int32*)&cond->lock, ~(int32)B_USER_MUTEX_LOCKED);
+	_kern_mutex_unblock((int32*)&cond->lock, flags);
 }
 
 
 int
 pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* _mutex)
 {
-	RETURN_AND_TEST_CANCEL(cond_wait(cond, _mutex, B_INFINITE_TIMEOUT));
+	RETURN_AND_TEST_CANCEL(cond_wait(cond, _mutex, 0, B_INFINITE_TIMEOUT));
+}
+
+
+int
+pthread_cond_clockwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
+	clockid_t clock_id, const struct timespec* abstime)
+{
+	bigtime_t timeoutMicros;
+	if (abstime == NULL || !timespec_to_bigtime(*abstime, timeoutMicros))
+		RETURN_AND_TEST_CANCEL(EINVAL);
+
+	uint32 flags = 0;
+	switch (clock_id) {
+		case CLOCK_REALTIME:
+			flags = B_ABSOLUTE_REAL_TIME_TIMEOUT;
+			break;
+		case CLOCK_MONOTONIC :
+			flags = B_ABSOLUTE_TIMEOUT;
+			break;
+		default:
+			return B_BAD_VALUE;
+	}
+
+	RETURN_AND_TEST_CANCEL(cond_wait(cond, mutex, flags, timeoutMicros));
 }
 
 
 int
 pthread_cond_timedwait(pthread_cond_t* cond, pthread_mutex_t* mutex,
-	const struct timespec* tv)
+	const struct timespec* abstime)
 {
-	if (tv == NULL || tv->tv_nsec < 0 || tv->tv_nsec >= 1000 * 1000 * 1000)
-		RETURN_AND_TEST_CANCEL(EINVAL);
-
-	RETURN_AND_TEST_CANCEL(
-		cond_wait(cond, mutex, tv->tv_sec * 1000000LL + tv->tv_nsec / 1000LL));
+	return pthread_cond_clockwait(cond, mutex,
+		(cond->flags & COND_FLAG_MONOTONIC) != 0 ? CLOCK_MONOTONIC : CLOCK_REALTIME,
+		abstime);
 }
 
 

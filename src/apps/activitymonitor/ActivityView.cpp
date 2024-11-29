@@ -615,6 +615,7 @@ ActivityView::_Init(const BMessage* settings)
 	fLegendLayoutItem = NULL;
 #endif
 	SetViewColor(B_TRANSPARENT_COLOR);
+	SetFlags(Flags() | B_TRANSPARENT_BACKGROUND);
 
 	fLastRefresh = 0;
 	fDrawResolution = 1;
@@ -1323,7 +1324,7 @@ ActivityView::_PositionForValue(DataSource* source, DataHistory* values,
 
 
 void
-ActivityView::_DrawHistory(bool drawBackground)
+ActivityView::_DrawHistory()
 {
 	_UpdateOffscreenBitmap();
 
@@ -1337,9 +1338,7 @@ ActivityView::_DrawHistory(bool drawBackground)
 	BRect outerFrame = frame.InsetByCopy(-2, -2);
 
 	// draw the outer frame
-	uint32 flags = 0;
-	if (!drawBackground)
-		flags |= BControlLook::B_BLEND_FRAME;
+	uint32 flags = BControlLook::B_BLEND_FRAME;
 	be_control_look->DrawTextControlBorder(this, outerFrame,
 		outerFrame, fLegendBackgroundColor, flags);
 
@@ -1467,11 +1466,7 @@ ActivityView::_UpdateResolution(int32 resolution, bool broadcast)
 void
 ActivityView::Draw(BRect updateRect)
 {
-	bool drawBackground = true;
-	if (Parent() && (Parent()->Flags() & B_DRAW_ON_CHILDREN) != 0)
-		drawBackground = false;
-
-	_DrawHistory(drawBackground);
+	_DrawHistory();
 
 	if (!fShowLegend)
 		return;
@@ -1480,12 +1475,6 @@ ActivityView::Draw(BRect updateRect)
 	BRect legendFrame = _LegendFrame();
 	if (LowUIColor() == B_NO_COLOR)
 		SetLowColor(fLegendBackgroundColor);
-
-	if (drawBackground) {
-		BRect backgroundFrame(legendFrame);
-		backgroundFrame.bottom += kDraggerSize;
-		FillRect(backgroundFrame, B_SOLID_LOW);
-	}
 
 	BAutolock _(fSourcesLock);
 
@@ -1515,13 +1504,9 @@ ActivityView::Draw(BRect updateRect)
 
 		BString label = source->Label();
 		float possibleLabelWidth = frame.right - colorBox.right - 12 - width;
-		// TODO: TruncateString() is broken... remove + 5 when fixed!
-		if (ceilf(StringWidth(label.String()) + 5) > possibleLabelWidth)
+		if (ceilf(StringWidth(label.String())) > possibleLabelWidth)
 			label = source->ShortLabel();
 		TruncateString(&label, B_TRUNCATE_MIDDLE, possibleLabelWidth);
-
-		if (drawBackground)
-			SetHighColor(ui_color(B_PANEL_TEXT_COLOR));
 
 		if (be_control_look == NULL) {
 			DrawString(label.String(), BPoint(6 + colorBox.right, y));

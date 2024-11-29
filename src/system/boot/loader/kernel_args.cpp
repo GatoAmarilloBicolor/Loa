@@ -248,6 +248,16 @@ is_address_range_covered(addr_range* ranges, uint32 numRanges, uint64 base,
 }
 
 
+extern "C" uint64
+total_address_ranges_size(addr_range* ranges, uint32 numRanges)
+{
+	uint64 total = 0;
+	for (uint32 i = 0; i < numRanges; i++)
+		total += ranges[i].size;
+	return total;
+}
+
+
 void
 sort_address_ranges(addr_range* ranges, uint32 numRanges)
 {
@@ -282,6 +292,23 @@ insert_physical_memory_range(uint64 start, uint64 size)
 
 
 status_t
+remove_physical_memory_range(uint64 start, uint64 size)
+{
+	return remove_address_range(gKernelArgs.physical_memory_range,
+		&gKernelArgs.num_physical_memory_ranges, MAX_PHYSICAL_MEMORY_RANGE,
+		start, size);
+}
+
+
+uint64
+total_physical_memory()
+{
+	return total_address_ranges_size(gKernelArgs.physical_memory_range,
+		gKernelArgs.num_physical_memory_ranges);
+}
+
+
+status_t
 insert_physical_allocated_range(uint64 start, uint64 size)
 {
 	return insert_address_range(gKernelArgs.physical_allocated_range,
@@ -291,9 +318,27 @@ insert_physical_allocated_range(uint64 start, uint64 size)
 
 
 status_t
+remove_physical_allocated_range(uint64 start, uint64 size)
+{
+	return remove_address_range(gKernelArgs.physical_allocated_range,
+		&gKernelArgs.num_physical_allocated_ranges, MAX_PHYSICAL_ALLOCATED_RANGE,
+		start, size);
+}
+
+
+status_t
 insert_virtual_allocated_range(uint64 start, uint64 size)
 {
 	return insert_address_range(gKernelArgs.virtual_allocated_range,
+		&gKernelArgs.num_virtual_allocated_ranges, MAX_VIRTUAL_ALLOCATED_RANGE,
+		start, size);
+}
+
+
+status_t
+remove_virtual_allocated_range(uint64 start, uint64 size)
+{
+	return remove_address_range(gKernelArgs.virtual_allocated_range,
 		&gKernelArgs.num_virtual_allocated_ranges, MAX_VIRTUAL_ALLOCATED_RANGE,
 		start, size);
 }
@@ -323,13 +368,14 @@ ignore_physical_memory_ranges_beyond_4gb()
 			continue;
 		}
 
-		if (kLimit - range.start < range.size) {
+		if ((range.start + range.size) > kLimit) {
 			// the range is partially beyond the limit
 			dprintf("ignore_physical_memory_ranges_beyond_4gb(): ignoring "
 				"range: %#" B_PRIx64 " - %#" B_PRIx64 "\n", kLimit,
 				range.start + range.size);
 			gKernelArgs.ignored_physical_memory
 				+= range.size - (kLimit - range.start);
+			range.size = kLimit - range.start;
 		}
 
 		break;
@@ -342,72 +388,10 @@ ignore_physical_memory_ranges_beyond_4gb()
 // #pragma mark - kernel_args allocations
 
 
-/*!	This function can be used to allocate memory that is going
-	to be passed over to the kernel. For example, the preloaded_image
-	structures are allocated this way.
-	The boot loader heap doesn't make it into the kernel!
-*/
-extern "C" void*
-kernel_args_malloc(size_t size)
-{
-	//dprintf("kernel_args_malloc(): %ld bytes (%ld bytes left)\n", size, sFree);
-
-	if (sFirstFree != NULL && size <= sFree) {
-		// there is enough space in the current buffer
-		void* address = sFirstFree;
-		sFirstFree = (void*)((addr_t)sFirstFree + size);
-		sLast = address;
-		sFree -= size;
-
-		return address;
-	}
-
-	if (size > kChunkSize / 2 && sFree < size) {
-		// the block is so large, we'll allocate a new block for it
-		void* block = NULL;
-		if (platform_allocate_region(&block, size, B_READ_AREA | B_WRITE_AREA,
-				false) != B_OK) {
-			return NULL;
-		}
-
-#ifdef _BOOT_PLATFORM_EFI
-		uint64 translated_block;
-		platform_bootloader_address_to_kernel_address(block, &translated_block);
-		if (add_kernel_args_range((void *)translated_block, size) != B_OK)
-#else
-		if (add_kernel_args_range(block, size) != B_OK)
-#endif
-			panic("kernel_args max range too low!\n");
-		return block;
-	}
-
-	// just allocate a new block and "close" the old one
-	void* block = NULL;
-	if (platform_allocate_region(&block, kChunkSize, B_READ_AREA | B_WRITE_AREA,
-			false) != B_OK) {
-		return NULL;
-	}
-
-	sFirstFree = (void*)((addr_t)block + size);
-	sLast = block;
-	sFree = kChunkSize - size;
-#ifdef _BOOT_PLATFORM_EFI
-	uint64 translated_block;
-	platform_bootloader_address_to_kernel_address(block, &translated_block);
-	if (add_kernel_args_range((void *)translated_block, kChunkSize) != B_OK)
-#else
-	if (add_kernel_args_range(block, kChunkSize) != B_OK)
-#endif
-		panic("kernel_args max range too low!\n");
-
-	return block;
-}
-
-
 /*!	Convenience function that copies strdup() functions for the
 	kernel args heap.
 */
-extern "C" char*
+char*
 kernel_args_strdup(const char* string)
 {
 	if (string == NULL || string[0] == '\0')
@@ -424,11 +408,72 @@ kernel_args_strdup(const char* string)
 }
 
 
+/*!	This function can be used to allocate (optionally aligned) memory that
+	is going to be passed over to the kernel. For example, the preloaded_image
+	structures are allocated this way.
+	The boot loader heap doesn't make it into the kernel!
+*/
+void*
+kernel_args_malloc(size_t size, uint8 alignment)
+{
+	//dprintf("kernel_args_malloc(): %ld bytes (%ld bytes left)\n", size, sFree);
+
+	#define ALIGN(addr, align) (((addr) + align - 1) & ~(align - 1))
+	size_t alignedSize = size + alignment - 1;
+
+	if (sFirstFree != NULL && alignedSize <= sFree) {
+		// there is enough space in the current buffer
+		void* address = (void*)ALIGN((addr_t)sFirstFree, alignment);
+		sFirstFree = (void*)((addr_t)sFirstFree + alignedSize);
+		sLast = address;
+		sFree -= alignedSize;
+
+		return address;
+	}
+
+	if (alignedSize > kChunkSize / 2 && sFree < alignedSize) {
+		// the block is so large, we'll allocate a new block for it
+		void* block = NULL;
+		if (platform_allocate_region(&block, alignedSize,
+				B_READ_AREA | B_WRITE_AREA, false) != B_OK) {
+			return NULL;
+		}
+
+		// Translate the address if needed on the current platform
+		addr_t translated_block;
+		platform_bootloader_address_to_kernel_address(block, &translated_block);
+		if (add_kernel_args_range((void *)translated_block, size) != B_OK)
+			panic("kernel_args max range too low!\n");
+
+		return (void*)ALIGN((addr_t)block, alignment);
+	}
+
+	// just allocate a new block and "close" the old one
+	void* block = NULL;
+	if (platform_allocate_region(&block, kChunkSize, B_READ_AREA | B_WRITE_AREA,
+			false) != B_OK) {
+		return NULL;
+	}
+
+	sFirstFree = (void*)((addr_t)block + alignedSize);
+	sLast = block;
+	sFree = kChunkSize - alignedSize;
+
+	// Translate the address if needed on the current platform
+	addr_t translated_block;
+	platform_bootloader_address_to_kernel_address(block, &translated_block);
+	if (add_kernel_args_range((void *)translated_block, kChunkSize) != B_OK)
+		panic("kernel_args max range too low!\n");
+
+	return (void*)ALIGN((addr_t)block, alignment);
+}
+
+
 /*!	This function frees a block allocated via kernel_args_malloc().
 	It's very simple; it can only free the last allocation. It's
 	enough for its current usage in the boot loader, though.
 */
-extern "C" void
+void
 kernel_args_free(void* block)
 {
 	if (sLast != block) {

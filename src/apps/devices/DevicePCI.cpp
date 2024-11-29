@@ -70,7 +70,7 @@ DevicePCI::InitFromAttributes()
 	fAttributeMap[B_DEVICE_ID] = ToHex(fDeviceId);
 
 	// Fetch ClassInfo	
-	char classInfo[64];
+	char classInfo[128];
 	get_class_info(fClassBaseId, fClassSubId, fClassApiId, classInfo,
 		sizeof(classInfo));
 	
@@ -103,41 +103,16 @@ DevicePCI::InitFromAttributes()
 	
 	SetAttribute(B_TRANSLATE("Device name"), DeviceName);
 	SetAttribute(B_TRANSLATE("Manufacturer"), ManufacturerName);
+#if 0
+	// These are a source of confusion for users, leading them to think there
+	// is no driver for their device. Until we can display something useful,
+	// let's not show the lines at all.
 	SetAttribute(B_TRANSLATE("Driver used"), B_TRANSLATE("Not implemented"));
 	SetAttribute(B_TRANSLATE("Device paths"), B_TRANSLATE("Not implemented"));
+#endif
 	SetAttribute(B_TRANSLATE("Class info"), classInfo);
 	fCategory = (Category)fClassBaseId;
 	BString outlineName;
 	outlineName << ManufacturerName << " " << DeviceName;
 	SetText(outlineName.String());
 }
-
-
-Attributes
-DevicePCI::GetBusAttributes()
-{
-	Attributes attributes;
-	attributes.push_back(GetAttribute(B_DEVICE_TYPE));
-	attributes.push_back(GetAttribute(B_DEVICE_SUB_TYPE));
-	attributes.push_back(GetAttribute(B_DEVICE_INTERFACE));
-	attributes.push_back(GetAttribute(B_DEVICE_VENDOR_ID));
-	attributes.push_back(GetAttribute(B_DEVICE_ID));
-	return attributes;
-}
-
-
-BString
-DevicePCI::GetBusStrings()
-{
-	BString str("Class Info:\t\t\t\t: %classInfo%");
-	str.ReplaceFirst("%classInfo%", fAttributeMap["Class Info"]);
-	return str;
-}
-
-
-BString
-DevicePCI::GetBusTabName()
-{
-	return B_TRANSLATE("PCI Information");
-}
-

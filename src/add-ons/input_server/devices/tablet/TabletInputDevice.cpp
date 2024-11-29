@@ -322,61 +322,72 @@ TabletDevice::_ControlThread()
 			movements.pressure, movements.wheel_xdelta, movements.wheel_ydelta,
 			movements.eraser ? 'y' : 'n', movements.tilt_x, movements.tilt_y);
 
-		// Send single messages for each event
+		// Only send messages when pen is in range
 
-		uint32 buttons = lastButtons ^ movements.buttons;
-		if (buttons != 0) {
-			bool pressedButton = (buttons & movements.buttons) > 0;
-			BMessage* message = _BuildMouseMessage(
-				pressedButton ? B_MOUSE_DOWN : B_MOUSE_UP,
-				movements.timestamp, movements.buttons, movements.xpos,
-				movements.ypos);
-			if (message != NULL) {
-				if (pressedButton) {
-					message->AddInt32("clicks", movements.clicks);
-					LOG_EVENT("B_MOUSE_DOWN\n");
-				} else
-					LOG_EVENT("B_MOUSE_UP\n");
+		if (movements.has_contact) {
+			// Send single messages for each event
 
-				fTarget.EnqueueMessage(message);
-				lastButtons = movements.buttons;
-			}
-		}
+			movements.buttons |= (movements.switches & B_TIP_SWITCH);
+			movements.buttons |= (movements.switches & B_BARREL_SWITCH) >> 1;
+			bool eraser = (movements.switches & B_ERASER) != 0;
 
-		if (movements.xpos != lastXPosition
-			|| movements.ypos != lastYPosition) {
-			BMessage* message = _BuildMouseMessage(B_MOUSE_MOVED,
-				movements.timestamp, movements.buttons, movements.xpos,
-				movements.ypos);
-			if (message != NULL) {
-				message->AddFloat("be:tablet_x", movements.xpos);
-				message->AddFloat("be:tablet_y", movements.ypos);
-				message->AddFloat("be:tablet_pressure", movements.pressure);
-				message->AddInt32("be:tablet_eraser", movements.eraser);
-				if (movements.tilt_x != 0.0 || movements.tilt_y != 0.0) {
-					message->AddFloat("be:tablet_tilt_x", movements.tilt_x);
-					message->AddFloat("be:tablet_tilt_y", movements.tilt_y);
+			uint32 buttons = lastButtons ^ movements.buttons;
+			if (buttons != 0) {
+				bool pressedButton = (buttons & movements.buttons) > 0;
+				BMessage* message = _BuildMouseMessage(
+					pressedButton ? B_MOUSE_DOWN : B_MOUSE_UP,
+					movements.timestamp, movements.buttons, movements.xpos,
+					movements.ypos);
+				if (message != NULL) {
+					if (pressedButton) {
+						message->AddInt32("clicks", movements.clicks);
+						LOG_EVENT("B_MOUSE_DOWN\n");
+					} else
+						LOG_EVENT("B_MOUSE_UP\n");
+
+					fTarget.EnqueueMessage(message);
+					lastButtons = movements.buttons;
 				}
-
-				fTarget.EnqueueMessage(message);
-				lastXPosition = movements.xpos;
-				lastYPosition = movements.ypos;
 			}
-		}
 
-		if (movements.wheel_ydelta != 0 || movements.wheel_xdelta != 0) {
-			BMessage* message = new BMessage(B_MOUSE_WHEEL_CHANGED);
-			if (message == NULL)
-				continue;
+			if (movements.xpos != lastXPosition
+				|| movements.ypos != lastYPosition) {
+				BMessage* message = _BuildMouseMessage(B_MOUSE_MOVED,
+					movements.timestamp, movements.buttons, movements.xpos,
+					movements.ypos);
+				if (message != NULL) {
+					message->AddFloat("be:tablet_x", movements.xpos);
+					message->AddFloat("be:tablet_y", movements.ypos);
+					message->AddFloat("be:tablet_pressure", movements.pressure);
+					message->AddInt32("be:tablet_eraser", eraser);
 
-			if (message->AddInt64("when", movements.timestamp) == B_OK
-				&& message->AddFloat("be:wheel_delta_x",
-					movements.wheel_xdelta) == B_OK
-				&& message->AddFloat("be:wheel_delta_y",
-					movements.wheel_ydelta) == B_OK)
-				fTarget.EnqueueMessage(message);
-			else
-				delete message;
+					if (movements.tilt_x != 0.0 || movements.tilt_y != 0.0) {
+						message->AddFloat("be:tablet_tilt_x", movements.tilt_x);
+						message->AddFloat("be:tablet_tilt_y", movements.tilt_y);
+					}
+
+					fTarget.EnqueueMessage(message);
+					lastXPosition = movements.xpos;
+					lastYPosition = movements.ypos;
+				}
+			}
+
+			if (movements.wheel_ydelta != 0 || movements.wheel_xdelta != 0) {
+				BMessage* message = new BMessage(B_MOUSE_WHEEL_CHANGED);
+				if (message == NULL)
+					continue;
+
+				if (message->AddInt64("when", movements.timestamp) == B_OK
+					&& message->AddFloat("be:wheel_delta_x",
+						movements.wheel_xdelta) == B_OK
+					&& message->AddFloat("be:wheel_delta_y",
+						movements.wheel_ydelta) == B_OK
+					&& message->AddInt32("be:device_subtype",
+						B_TABLET_DEVICE_SUBTYPE) == B_OK)
+					fTarget.EnqueueMessage(message);
+				else
+					delete message;
+			}
 		}
 	}
 }
@@ -406,10 +417,10 @@ TabletDevice::_UpdateSettings()
 {
 	TD_CALLED();
 
-	if (get_click_speed(&fSettings.click_speed) != B_OK)
+	if (get_click_speed(fDeviceRef.name, &fSettings.click_speed) != B_OK)
 		LOG_ERR("error when get_click_speed\n");
 	else
-		ioctl(fDevice, MS_SET_CLICKSPEED, &fSettings.click_speed);
+		ioctl(fDevice, MS_SET_CLICKSPEED, &fSettings.click_speed, sizeof(bigtime_t));
 }
 
 
@@ -424,7 +435,9 @@ TabletDevice::_BuildMouseMessage(uint32 what, uint64 when, uint32 buttons,
 	if (message->AddInt64("when", when) < B_OK
 		|| message->AddInt32("buttons", buttons) < B_OK
 		|| message->AddFloat("x", xPosition) < B_OK
-		|| message->AddFloat("y", yPosition) < B_OK) {
+		|| message->AddFloat("y", yPosition) < B_OK
+		|| message->AddInt32("be:device_subtype",
+			B_TABLET_DEVICE_SUBTYPE) < B_OK) {
 		delete message;
 		return NULL;
 	}

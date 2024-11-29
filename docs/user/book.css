@@ -1,5 +1,5 @@
 /*
- * Copyright 2008-2013 Haiku, Inc. All rights reserved.
+ * Copyright 2008-2013, 2020, 2023 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -8,50 +8,216 @@
  *		Braden Ewing, brewin@gmail.com
  *		Humdinger, humdingerb@gmail.com
  *		John Scipione, jscipione@gmail.com
+ *		Niels Sascha Reedijk, niels.reedijk@gmail.com
+ *		Pascal R. G. Abresch <nep@packageloss.eu>
  */
 
 /* color names provided by: https://chir.ag/projects/name-that-color */
 
-html {
-	overflow-x: hidden;
-	overflow-y: scroll;
+/*
+	This stylesheet is designed to override the base style sheet doxygen.css
+	for Doxygen 1.9.6.
+
+	Some principles:
+		* Normal fonts are "Noto Sans",Arial,sans-serif
+		* Fixed space fonts are "Noto Sans Mono", Consolas, "Courier New", monospace, fixed;
+		* No rounded corners (border-radius: 0;)
+		* No box shadows (box-shadow: 0;)
+		* A selection of specific colors for borders, links, and other visual elements
+*/
+
+/* don't use @media (prefers-color-scheme: light) here, so it runs correctly in browsers that don't 
+   understand it and thus expect a light mode as is the default for html */
+:root {
+	color-scheme: light dark;
+
+	--LinkText: #dc3c01; /* grenadier */
+	--VisitedLinkText: #892601; /* peru tan */
+	--TableBackground: #ff4500; /* vermilion */
+	--TableHeaderBackground: #e0e0e0;
+	--MenuColor: #24225e;
+	--ActiveLinkText: #ff4500; /* vermilion */
+	--HeaderText: #0c3762; /* madison */
+	--ButtonBackground: #e8e8e8;
+	--ButtonBorder: #c7c7c7;
+	--InfoBackground: #e4ffde;
+	--WarningBackground: #fffbc6;
+	--StopBackground: #ffeae6;
+	--SecondaryCanvas: #e0e0e0; /* alto */
+	--TertiaryCanvas: #f3f3f3; /* concrete */
+	--TertiaryCanvasText: #c0c0c0; /* silver */
+	
+	--Blue: blue;
 }
 
-body,div,dl,dt,dd,ul,ol,li,h1,h2,h3,h4,h5,h6,pre,form,fieldset,input,textarea,
-	p,blockquote,th,td {
-	margin: 0;
-	padding: 0;
+@media (prefers-color-scheme: dark) {
+	:root {
+		--LinkText: #f24000;
+		--VisitedLinkText: #bf3401;
+		--ActiveLinkText: #ff4500;
+		--HeaderText: #0b95c6;
+		--ButtonBorder: #666;
+		--InfoBackground: #0d2f3f;
+		--WarningBackground: #453b07;
+		--StopBackground: #4d0000;
+		--MenuColor: #5c57f2;
+		--TertiaryCanvasText: #c0c0c0;
+		--ButtonBackground: #444;
+		--SecondaryCanvas: #222;
+		--TertiaryCanvas: #131313;
+		--Blue: #87cefa;
+	}
+
+	@media (prefers-contrast: more) {
+		:root {
+			--ButtonBackground: #222;
+			--SecondaryCanvas: #111;
+			--TertiaryCanvas: #080808;
+		}
+	}
+	@media (prefers-contrast: less) {
+		:root {
+			--ButtonBackground: #444;
+		}
+	}
 }
 
-body {
-	color: #333333; /* mine shaft */
-	background-color: white;
-	font-size: 14.4px;
+
+@media (forced-colors: active) {
+    :root {
+        /* Userguide specific */
+        /* "Normal values" */
+        --HeaderText: LinkText;
+        --LinkText: LinkText;
+        --VisitedLinkText: VisitedText;
+        --ActiveLinkText: ActiveText;
+        --ButtonBackground: ButtonFace;
+        --ButtonBorder: ButtonBorder;
+        --InputBackground: Field;
+        --InputText: FieldText;
+        --HighlightBackground: Highlight;
+        --HighlightText: HighlightText;
+        --SelectedBackground: SelectedItem;
+        --SelectedText: SelectedItemText;
+        --MarkBackground: Mark;
+        --MarkText: MarkText;
+        --DisabledText: GrayText;
+    }
+}
+
+
+
+/* Override font selections */
+
+body, table, div, p, dl {
+	font: 400 14px/22px "Noto Sans",Arial,sans-serif;
+}
+
+p.reference, p.definition {
+	font: 400 14px/22px "Noto Sans",Arial,sans-serif;
+}
+
+pre.fragment {
+	font-family: "Noto Sans Mono", Consolas, "Courier New", monospace, fixed;
+}
+
+div.line {
+	font-family: "Noto Sans Mono", Consolas, "Courier New", monospace, fixed;
+	line-height: 1.4;
+}
+
+.overload {
+	font-family: "Noto Sans Mono", Consolas, "Courier New", monospace, fixed;
+}
+
+.params .paramdir, .tparams .paramdir {
+	font-family: "Noto Sans Mono", Consolas, "Courier New", monospace, fixed;
+}
+
+table.directory {
+    font: 400 14px "Noto Sans", Arial,sans-serif;
+}
+
+.navpath li.navelem a
+{
 	font-family: "Noto Sans", Arial, sans-serif;
 }
 
+div.toc li {
+	font: 10px/1.2 "Noto Sans", Arial,sans-serif;
+}
+
+div.toc h3 {
+	font: bold 12px/1.2 "Noto Sans", Arial,sans-serif;
+}
+
+#powerTip div {
+	font: 12px/16px "Noto Sans", Arial,sans-serif;
+}
+
+/* Remove rounded borders */
+div.ah, span.ah {
+	border-radius: 0;
+}
+
+.memtitle {
+	border-radius: 0;
+}
+
+.memproto, dl.reflist dt {
+	border-radius: 0;
+}
+
+.memdoc, dl.reflist dd {
+	border-radius: 0;
+}
+
+table.fieldtable {
+	border-radius: 0;
+}
+
+.fieldtable th {
+	border-radius: 0;
+}
+
+div.toc {
+	border-radius: 0;
+}
+
+#powerTip {
+	border-radius: 0;
+}
+
+/* Colors and headers */
+
+body {
+	color: CanvasText;
+	background-color: Canvas;
+}
+
 h1, h2, h3, h4, h5, h6 {
-	color: #0c3762; /* madison */
+	color: var(--HeaderText);
 	margin-top: 1em;
 	margin-bottom: 1em;
+	margin-right: 0;
 }
 
 h1 {
 	font-size: 1.3em;
 	font-weight: bold;
-	border-bottom: dotted thin #c0c0c0; /* silver */
+	border-bottom: dotted thin var(--TertiaryCanvasText);
 }
 
 h2 {
 	font-size: 1.3em;
 	font-weight: normal;
-	border-bottom: dotted thin #c0c0c0; /* silver */
+	border-bottom: dotted thin var(--TertiaryCanvasText);
 }
 
 h3 {
 	font-size: 1.2em;
 	font-weight: normal;
-	border-bottom: dotted thin #c0c0c0; /* silver */
+	border-bottom: dotted thin var(--TertiaryCanvasText);
 }
 
 h4 {
@@ -64,75 +230,58 @@ h5, h6 {
 	font-weight: normal;
 }
 
-p {
-	margin-top: 0.5em;
-	margin-bottom: 0.5em;
+.title {
+	color: var(--HeaderText);
+	font-size: 1.3em;
+	font-weight: bold;
+	border-bottom: dotted thin var(--TertiaryCanvasText);
+	margin-top: 1em;
+	margin-bottom: 1em;
 }
 
-table {
-	border-collapse: collapse;
-	border-spacing: 0;
+h2.groupheader, h2.memtitle {
+	font-size: 1.3em;
+	border: none;
+	border-bottom: dotted thin var(--TertiaryCanvasText);
+	color: var(--HeaderText);
+	margin-top: 1em;
+	padding: 0;
+	background: none;
 }
 
-td, th {
-	vertical-align: top;
-	text-align: left;
-	padding: 4px;
+.dirtab {
+	border: 1px solid #84b0c7; /* glacier */
 }
 
-caption {
-	text-align:left;
+th.dirtab {
+	background-color: var(--TertiaryCanvas);
 }
 
-fieldset,img {
-	border: 0;
-}
-
-q:before,q:after {
-	content: '';
-}
-
-abbr,acronym {
-	border: 0;
-}
+/* Links */
 
 a:link {
 	font-weight: bold;
 	text-decoration: none;
-	color: #dc3c01; /* grenadier */
+	color: var(--LinkText);
 }
 
-a:visited {
+.contents a:visited {
 	font-weight: bold;
 	text-decoration: none;
-	color: #892601; /* peru tan */
+	color: var(--VisitedLinkText);
 }
 
 a:hover, a:active {
 	text-decoration: underline;
-	color: #ff4500; /* vermilion */
+	color: var(--ActiveLinkText);
 }
-
-dl.since {
-	margin-top: 1em;
-}
-
-dl.since dt {
-	display: inline;
-	padding-right: 0.5em;
-}
-
-dl.since dd {
-	display: inline;
-}
-
 
 /* Some headers act as anchors, don't give them a hover effect */
 
 h1 a:hover, a:active, h2 a:hover, a:active, h3 a:hover, a:active,
 h4 a:hover, a:active, h5 a:hover, a:active, h6 a:hover, a:active {
 	text-decoration: none;
-	color: #0c3762; /* madison */
+	color: var(--HeaderText);
 }
 
 /* Custom Header */
@@ -142,7 +291,7 @@ h4 a:hover, a:active, h5 a:hover, a:active, h6 a:hover, a:active {
 	top: 0;
 	left: 0;
 	height: 84px;
-	background: #eeeeee; /* gallery */
+	background: var(--TertiaryCanvas);
 }
 
 #banner div.logo {
@@ -153,21 +302,21 @@ h4 a:hover, a:active, h5 a:hover, a:active, h6 a:hover, a:active {
 	margin: 0 auto;
 }
 
+@media (prefers-color-scheme: dark) {
+    #banner div.logo {
+        background: url('/images/HaikuDark.svg') no-repeat scroll 6px 8px, url('/images/LeafDark.png') no-repeat scroll 10px 0;
+    }
+}
+
 #banner span.subtitle {
 	position: relative;
 	top: 48px;
 	left: 272px;
-	color: #333333; /* mine shaft */
+	color: CanvasText;
 	text-transform: uppercase;
 	letter-spacing: 3px;
 	font-family: Myriad Pro,Myriad Web Pro Regular,Lucida Grande,Geneva,Trebuchet MS,sans-serif;
 	font-weight: normal;
-}
-
-#banner span.search {
-	position: relative;
-	top: 48px;
-	left: 600px;
 }
 
 input[type=text], input[type=password] {
@@ -186,6 +335,8 @@ div.header {
 	margin: 10px auto;
 	min-width: 59em;
 	max-width: 70em;
+	border: none;
+	background: none;
 }
 
 div.summary {
@@ -199,13 +350,14 @@ div.summary {
 div.headertitle {
 	min-width: 59em;
 	max-width: 70em;
+	padding: 0;
 }
 
 div.headertitle div.title {
-	color: #0c3762; /* madison */
+	color: var(--HeaderText);
 	font-size: 1.3em;
 	font-weight: bold;
-	border-bottom: dotted thin #c0c0c0; /* silver */
+	border-bottom: dotted thin var(--TertiaryCanvasText);
 	margin-top: 1em;
 	margin-bottom: 1em;
 }
@@ -214,10 +366,26 @@ div.headertitle div.title {
 	margin-top: 10px;
 }
 
-/* Navigation Tabs */
+/* Make the "Since" member docs one line */
+
+dl.since {
+	margin-top: 1em;
+}
+
+dl.since dt {
+	display: inline;
+	padding-right: 0.5em;
+}
+
+dl.since dd {
+	display: inline;
+}
+
+
+/* Navigation Tabs (overrides tabs.css) */
 
 .sm-dox {
-	background: #e0e0e0; /* alto */
+	background: var(--SecondaryCanvas);
 	padding: 0;
 }
 
@@ -235,20 +403,20 @@ div.headertitle div.title {
 .sm-dox a, .sm-dox ul a, .sm-dox a:visited, .sm-dox ul a:visited,
 .sm-dox a:link, .sm-dox ul a:link {
 	background-image: none;
-	color: #dc3c01; /* grenadier */
+	color: var(--LinkText);
 	text-shadow: none;
 }
 
 .sm-dox a:hover, .sm-dox ul a:hover {
-	background-color: #e0e0e0; /* alto */
+	background-color: var(--SecondaryCanvas);
 	background-image: none;
-	color: #ff4500; /* vermilion */
+	color: var(--TableBackground);
 	text-decoration: underline;
 	text-shadow: none;
 }
 
 .sm-dox a:active, .sm-dox ul a:active {
-	color: #0c3762; /* madison */
+	color: var(--HeaderText);
 	text-decoration: none;
 	text-shadow: none;
 }
@@ -256,51 +424,51 @@ div.headertitle div.title {
 .sm-dox a:focus, .sm-dox ul a:focus,
 .sm-dox a.highlighted, .sm-dox ul a.highlighted {
 	background-image: none;
-	color: #ff4500; /* vermilion */
+	color: var(--TableBackground);
 	text-shadow: none;
 }
 
 @media (min-width: 768px) {
 	.sm-dox a span.sub-arrow {
-		border-top-color: #dc3c01; /* grenadier */
+		border-top-color: var(--LinkText);
 	}
 
 	.sm-dox ul a span.sub-arrow {
-		border-left-color: #dc3c01; /* grenadier */
+		border-left-color: var(--LinkText);
 	}
 }
 
 .sm-dox span.scroll-up-arrow {
-	border-bottom-color: #dc3c01; /* grenadier */
+	border-bottom-color: var(--LinkText);
 }
 
 .sm-dox span.scroll-down-arrow {
-	border-top-color: #dc3c01; /* grenadier */
+	border-top-color: var(--LinkText);
 }
 
 @media (min-width: 768px) {
 	.sm-dox a:hover span.sub-arrow {
-		border-top-color: #ff4500; /* vermilion */
+		border-top-color: var(--TableBackground);
 	}
 
 	.sm-dox ul a:hover span.sub-arrow {
-		border-left-color: #ff4500; /* vermilion */
+		border-left-color: var(--TableBackground);
 	}
 }
 
 .sm-dox span.scroll-up-arrow {
-	border-bottom-color: #ff4500; /* vermilion */
+	border-bottom-color: var(--TableBackground);
 }
 
 .sm-dox span.scroll-down-arrow {
-	border-top-color: #ff4500; /* vermilion */
+	border-top-color: var(--TableBackground);
 }
 
 div#main-nav {
 	position: relative;
 	left: 0;
 	top: 0;
-	background: #e0e0e0; /* alto */
+	background: var(--SecondaryCanvas);
 	margin: 0;
 	padding: 0;
 }
@@ -308,24 +476,6 @@ div#main-nav {
 div#main-nav ul#main-menu {
 	margin: 0 auto;
 	list-style: none;
-	max-width: 70em;
-}
-
-div.tabs, div.tabs2, div.tabs3 {
-	position: relative;
-	left: 0;
-	top: 0;
-	background: #e0e0e0; /* alto */
-	margin: 0;
-	padding: 0;
-}
-
-div.tabs ul.tablist, div.tabs2 ul.tablist, div.tabs3 ul.tablist {
-	margin: 0 auto;
-	padding-top: 3px;
-	padding-bottom: 2px;
-	list-style: none;
-	min-width: 59em;
 	max-width: 70em;
 }
 
@@ -355,25 +505,33 @@ div.tabs ul.tablist li span, div.tabs2 ul.tablist li span,
 
 div.tabs ul.tablist li li.current a, div.tabs2 ul.tablist li li.current a,
 	div.tabs3 ul.tablist li li.current a {
-	color: black;
+	color: CanvasText;
 	text-decoration: none;
 }
 
-/* Contents div */
+/* Standard table styling */
 
-div.contents, footer {
+table {
+	border-collapse: collapse;
+	border-spacing: 0;
+}
+
+td, th {
+	vertical-align: top;
+	text-align: left;
+	padding: 4px;
+}
+
+/* Contents & footer: center on page with a maximum width */
+
+div.contents, .footer {
 	line-height: 1.5;
 	margin: 10px auto;
 	min-width: 59em;
 	max-width: 70em;
 }
-footer {
-	font-size: 90%;
-}
 
-div.contents ul, div.contents ol {
-	line-height: 1.3;
-}
+/* Contents: Style the elements on the page */
 
 div.contents em, div.contents code, div.contents .mlabel {
 	font-weight: normal;
@@ -381,22 +539,37 @@ div.contents em, div.contents code, div.contents .mlabel {
 }
 
 div.contents em {
-	color: #dc3c01; /* grenadier */
+	color: var(--LinkText);
 }
 
 div.contents .mlabels-right {
 	vertical-align: middle;
 }
-div.contents code, div.contents .mlabel {
-	color: blue;
-	font-family: "Deja Vu Mono", Consolas, "Courier New", monospace, fixed;
+
+
+div.contents code, span.mlabel {
+	color: var(--Blue);
+	font-family: "Noto Sans Mono", Consolas, "Courier New", monospace, fixed;
 	font-weight: normal;
 	font-style: normal;
+	border:none;
 }
-div.contents .mlabel:before {
+
+div.title span.mlabel {
+	background-color: white;
+	font-size: 14.4px;
+}
+
+div.memproto span.mlabel {
+	background-color: var(--TertiaryCanvas);
+	font-size: 14.4px;
+}
+
+span.mlabel:before {
 	content: "[";
 }
-div.contents .mlabel:after {
+
+span.mlabel:after {
 	content: "]";
 }
 
@@ -413,17 +586,17 @@ div.contents td.desc {
 }
 
 div.contents div.dynheader {
-	color: #0c3762; /* madison */
+	color: var(--HeaderText);
 	font-size: 1.3em;
 	font-weight: normal;
-	border-bottom: dotted thin #c0c0c0; /* silver */
+	border-bottom: dotted thin var(--TertiaryCanvasText);
 	margin-top: 1em;
 	margin-bottom: 1em;
 }
 
 div.contents div.dyncontent {
 	width: 100%;
-	border: 1px solid #c7c7c7; /* silver */
+	border: 1px solid var(--TertiaryCanvasText);
 	overflow: auto;
 }
 
@@ -441,7 +614,7 @@ div.contents span.keycap, div.contents span.keysym {
 	-khtml-border-radius: 3px;
 	-moz-border-radius: 3px;
 	border-radius: 3px;
-	border-color: #c7c7c7; /* silver */
+	border-color: var(--TertiaryCanvasText);
 	border-style: solid;
 	border-width: 1px;
 	padding: 0px 2px 0px 2px;
@@ -465,6 +638,11 @@ div.contents li {
 }
 
 div.contents dt {
+	margin-top: 16px;
+	margin-bottom: 8px;
+}
+
+div.image {
 	margin-top: 16px;
 	margin-bottom: 8px;
 }
@@ -506,24 +684,24 @@ dl.note dd, dl.remark dd, dl.warning dd, dl.attention dd {
 }
 
 dl.note {
-	background: #deebff url('https://www.haiku-os.org/images/alert_info_32.png') 15px 15px no-repeat;
+	background: var(--SecondaryCanvas) url('https://www.haiku-os.org/images/alert_info_32.png') 15px 15px no-repeat;
 	border-color: #183cce;
 }
 
 dl.remark {
-	background: #f3f3f3 url('https://www.haiku-os.org/images/alert_idea_32.png') 15px 15px no-repeat;
-	border-color: #c0c0c0; /* silver */
+	background: var(--TertiaryCanvas) url('https://www.haiku-os.org/images/alert_idea_32.png') 15px 15px no-repeat;
+	border-color: var(--TertiaryCanvasText);
 }
 
 dl.warning {
 	/* lemon chiffon */
-	background: #fffbc6 url('https://www.haiku-os.org/images/alert_warning_32.png') 15px 15px no-repeat;
+	background: var(--WarningBackground) url('https://www.haiku-os.org/images/alert_warning_32.png') 15px 15px no-repeat;
 	border-color: #eed300; /* gold */
 }
 
 dl.attention {
 	/* fair pink */
-	background: #ffeae6 url('https://www.haiku-os.org/images/alert_stop_32.png') 15px 15px no-repeat;
+	background: var(--StopBackground) url('https://www.haiku-os.org/images/alert_stop_32.png') 15px 15px no-repeat;
 	border-color: red;
 }
 
@@ -533,9 +711,8 @@ dl.note dt, dl.remark dt, dl.warning dt, dl.attention dt {
 
 dl.note dd, dl.remark dd, dl.warning dd, dl.attention dd {
 	margin: 10px 10px 10px 60px;
-	color: black; /* pseudo-bold */
+	color: CanvasText; /* pseudo-bold */
 }
-
 
 /* For keyboard shortcuts and the like (also from userguide) */
 
@@ -544,111 +721,41 @@ div.contents span.keycap {
 	-khtml-border-radius: 3px;
 	-moz-border-radius: 3px;
 	border-radius: 3px;
-	border-color: #c7c7c7; /* silver */
+	border-color: var(--TertiaryCanvasText);
 	border-style: solid;
 	border-width: 1px;
 	padding: 0px 2px 0px 2px;
-	background-color: #e8e8e8; /* mercury */
-	font-family: serif;
+	background-color: var(--ButtonBackground);
 	font-variant: small-caps;
 }
 
-
 /* Continue with the rest of the standard Doxygen stuff... */
 
-CAPTION { font-weight: bold }
-div.qindex {
-	width: 100%;
-	background-color: #f3f3f3; /* concrete */
-	border: 1px solid #c0c0c0; /* silver */
-	text-align: center;
-	margin: 2px;
-	padding: 2px;
-	line-height: 1.3;
-}
-div.nav {
-	width: 100%;
-	background-color: #f3f3f3; /* concrete */
-	border: 1px solid #c0c0c0; /* silver */
-	text-align: center;
-	margin: 2px;
-	padding: 2px;
-	line-height: 1.3;
-}
-div.navtab {
-	background-color: #f3f3f3; /* concrete */
-	border: 1px solid #c0c0c0; /* silver */
-	text-align: center;
-	margin: 2px;
-	margin-right: 15px;
-	padding: 2px;
-}
-TD.navtab {
-	;
-}
-A.qindex {
-	text-decoration: none;
-	font-weight: bold;
-	color: #1a419d; /* fun blue */
-}
-A.qindex:visited {
-	text-decoration: none;
-	font-weight: bold;
-	color: #1a419d; /* fun blue */
-}
-A.qindex:hover {
-	text-decoration: none;
-	background-color: #ddddff; /* fog */
-}
-A.qindexHL {
-	text-decoration: none;
-	font-weight: bold;
-	background-color: #6666cc; /* blue marguerite */
-	color: white;
-	border: 1px double #9295c2; /* bell blue */
-}
-A.qindexHL:hover {
-	text-decoration: none;
-	background-color: #6666cc; /* blue marguerite */
-	color: white;
-}
-A.qindexHL:visited {
-	text-decoration: none;
-	background-color: #6666cc; /* blue marguerite */
-	color: white;
-}
-A.elRef {
-	font-weight: bold
-}
-A.code:link {
-	text-decoration: none;
-	font-weight: normal;
-	color: blue;
-}
 A.code:visited {
 	text-decoration: none;
 	font-weight: normal;
-	color: blue;
+	color: var(--Blue);
 }
 A.codeRef:link {
 	font-weight: normal;
-	color: blue;
+	color: var(--Blue);
 }
 A.codeRef:visited {
 	font-weight: normal;
-	color: blue;
+	color: var(--Blue);
 }
 dl.el {
 	margin-left: -1cm
 }
+
+/* Code blocks */
 div.fragment {
-	white-space: pre;
 	width: 99%;
-	background-color: #f3f3f3; /* concrete */
-	border: 1px solid #c0c0c0; /* silver */
+	background-color: var(--TertiaryCanvas);
+	border: 1px solid var(--TertiaryCanvasText);
 	padding: 4px;
-	color: black;
-	font-family: "Deja Vu Mono", Consolas, "Courier New", monospace, fixed;
+	color: CanvasText;
+	font-family: "Noto Sans Mono", Consolas, "Courier New", monospace, fixed;
 	font-weight: normal;
 	font-style: normal;
 	font-size: 13px;
@@ -658,15 +765,15 @@ div.fragment pre.fragment a.code {
 	font-weight: bold;
 }
 div.ah {
-	background-color: black;
+	background-color: CanvasText;
 	font-weight: bold;
-	color: white;
+	color: Canvas;
 	margin-bottom: 3px;
 	margin-top: 3px;
 }
 TD.indexkey {
-	background-color: #f3f3f3; /* concrete */
-	border: 1px solid #c0c0c0; /* silver */
+	background-color: var(--TertiaryCanvas);
+	border: 1px solid var(--TertiaryCanvasText);
 	font-weight: bold;
 	padding-right  : 10px;
 	padding-top    : 2px;
@@ -678,8 +785,8 @@ TD.indexkey {
 	margin-bottom  : 2px;
 }
 TD.indexvalue {
-	background-color: #f3f3f3; /* concrete */
-	border: 1px solid #c0c0c0; /* silver */
+	background-color: var(--TertiaryCanvas);
+	border: 1px solid var(--TertiaryCanvasText);
 	font-style: italic;
 	padding-right  : 10px;
 	padding-top    : 2px;
@@ -693,39 +800,7 @@ TD.indexvalue {
 TR.memlist {
    background-color: #f0f0f0; /* gallery */
 }
-P.formulaDsp { text-align: center; }
-IMG.formulaDsp { }
-IMG.formulaInl { vertical-align: middle; }
-SPAN.keyword       { color: #008000; /* japanese laurel */ }
-SPAN.keywordtype   { color: #5c5f05; /* antique bronze */ }
-SPAN.keywordflow   { color: #e08000; /* mango tango */ }
-SPAN.comment       { color: #008000; /* japanese laurel */ }
-SPAN.preprocessor  { color: #806020; /* kumera */ }
-SPAN.stringliteral { color: gray; }
-SPAN.charliteral   { color: #008080; /* teal */ }
-.search {
-	color: #003399; /* smalt */
-	font-weight: bold;
-}
-FORM.search {
-	margin-bottom: 0px;
-	margin-top: 0px;
-}
-INPUT.search {
-	color: #000080; /* navy blue */
-	font-weight: normal;
-	background-color: #f3f3f3; /* concrete */
-}
-TD.tiny { font-size: 75%; }
-.dirtab {
-	padding: 4px;
-	border-collapse: collapse;
-	border: 1px solid #84b0c7; /* glacier */
-}
-TH.dirtab {
-	background-color: #f3f3f3; /* concrete */
-	font-weight: bold;
-}
+
 
 /* member declaration table */
 
@@ -735,26 +810,26 @@ table.memberdecls {
 
 table.memberdecls td.memItemLeft {
 	font-size: 13px;
-	font-family: "Deja Vu Mono", Consolas, "Courier New", monospace, fixed;
+	font-family: "Noto Sans Mono", Consolas, "Courier New", monospace, fixed;
 	white-space: nowrap;
 	text-align: right;
 	padding: 6px 0px 4px 8px;
 	margin: 4px;
 	vertical-align: top;
-	border-top: 1px solid #c0c0c0; /* silver */
-	border-left: 1px solid #c0c0c0; /* silver */
-	background-color: #f3f3f3; /* concrete */
+	border-top: 1px solid var(--TertiaryCanvasText);
+	border-left: 1px solid var(--TertiaryCanvasText);
+	background-color: var(--TertiaryCanvas);
 }
 
 table.memberdecls td.memItemRight {
 	font-size: 13px;
-	font-family: "Deja Vu Mono", Consolas, "Courier New", monospace, fixed;
+	font-family: "Noto Sans Mono", Consolas, "Courier New", monospace, fixed;
 	padding: 6px 8px 4px 0px;
 	margin: 4px;
 	vertical-align: top;
-	border-top: 1px solid #c0c0c0; /* silver */
-	border-right: 1px solid #c0c0c0; /* silver */
-	background-color: #f3f3f3; /* concrete */
+	border-top: 1px solid var(--TertiaryCanvasText);
+	border-right: 1px solid var(--TertiaryCanvasText);
+	background-color: var(--TertiaryCanvas);
 }
 
 table.memberdecls td.mdescLeft {
@@ -762,9 +837,9 @@ table.memberdecls td.mdescLeft {
 	line-height: 1.3;
 	padding: 1px 0px 4px 8px;
 	margin: 0px;
-	border-bottom: 1px solid #c0c0c0; /* silver */
-	border-left: 1px solid #c0c0c0; /* silver */
-	background-color: #f3f3f3; /* concrete */
+	border-bottom: 1px solid var(--TertiaryCanvasText);
+	border-left: 1px solid var(--TertiaryCanvasText);
+	background-color: var(--TertiaryCanvas);
 }
 
 table.memberdecls td.mdescRight {
@@ -772,9 +847,9 @@ table.memberdecls td.mdescRight {
 	line-height: 1.3;
 	padding: 1px 8px 4px 0px;
 	margin: 0px;
-	border-bottom: 1px solid #c0c0c0; /* silver */
-	border-right: 1px solid #c0c0c0; /* silver */
-	background-color: #f3f3f3; /* concrete */
+	border-bottom: 1px solid var(--TertiaryCanvasText);
+	border-right: 1px solid var(--TertiaryCanvasText);
+	background-color: var(--TertiaryCanvas);
 }
 
 table.memberdecls td.mdescRight p {
@@ -787,36 +862,36 @@ table.memberdecls td.memTemplItemLeft {
 	padding: 1px 0px 0px 8px;
 	margin: 0px;
 	text-align: right;
-	border-left: 1px solid #c0c0c0; /* silver */
-	background-color: #f3f3f3; /* concrete */
+	border-left: 1px solid var(--TertiaryCanvasText);
+	background-color: var(--TertiaryCanvas);
 }
 
 table.memberdecls td.memTemplItemRight {
 	font-size: 13px;
 	padding: 1px 8px 0px 0px;
 	margin: 0px;
-	border-right: 1px solid #c0c0c0; /* silver */
-	background-color: #f3f3f3; /* concrete */
+	border-right: 1px solid var(--TertiaryCanvasText);
+	background-color: var(--TertiaryCanvas);
 }
 
 table.memberdecls td.memTemplParams {
 	font-size: 13px;
 	padding: 1px 0px 0px 8px;
 	margin: 0px;
-	border-top: 1px solid #c0c0c0; /* silver */
-	border-left: 1px solid #c0c0c0; /* silver */
-	border-right: 1px solid #c0c0c0; /* silver */
-	background-color: #f3f3f3; /* concrete */
+	border-top: 1px solid var(--TertiaryCanvasText);
+	border-left: 1px solid var(--TertiaryCanvasText);
+	border-right: 1px solid var(--TertiaryCanvasText);
+	background-color: var(--TertiaryCanvas);
 }
 
 table.memberdecls td div.groupHeader, tr.inherit_header {
 	/* same as h3 */
-	color: #0c3762; /* madison */
+	color: var(--HeaderText);
 	margin-top: 0.5em;
 	margin-bottom: 0.5em;
 	font-size: 1.2em;
 	font-weight: normal;
-	border-bottom: dotted thin #c0c0c0; /* silver */
+	border-bottom: dotted thin var(--TertiaryCanvasText);
 }
 tr.inherit_header {
 	cursor: pointer;
@@ -834,8 +909,8 @@ div.memtemplate {
 }
 
 div.memnav {
-	background-color: #f3f3f3; /* concrete */
-	border: 1px solid #c0c0c0; /* silver */
+	background-color: var(--TertiaryCanvas);
+	border: 1px solid var(--TertiaryCanvasText);
 	text-align: center;
 	margin: 2px;
 	margin-right: 15px;
@@ -847,6 +922,8 @@ div.memnav {
 div.memitem {
 	margin-bottom: 20px;
 	width: 100%;
+	box-shadow: none;
+	transition: none;
 }
 
 div.memitem dl.info, div.memitem dl.note, div.memitem dl.attention,
@@ -859,9 +936,11 @@ div.memitem dl.info, div.memitem dl.note, div.memitem dl.attention,
 
 div.memproto {
 	padding: 4px;
-	background-color: #f3f3f3; /* concrete */
-	border: 1px solid #c0c0c0; /* silver */
-	font-family: "Deja Vu Mono", Consolas, "Courier New", monospace, fixed;
+	background-color: var(--TertiaryCanvas);
+	border: 1px solid var(--TertiaryCanvasText);
+	font-family: "Noto Sans Mono", Consolas, "Courier New", monospace, fixed;
+	box-shadow: none;
+	border-radius: 0;
 }
 
 div.memproto table {
@@ -872,6 +951,7 @@ div.memproto table {
 
 div.memproto table.memname {
 	line-height: 1.3;
+	font-family: "Noto Sans Mono", Consolas, "Courier New", monospace, fixed;
 }
 
 div.memproto table.memname td.paramtype {
@@ -890,10 +970,13 @@ div.memproto table.memname td.memname {
 	white-space: nowrap;
 }
 
-/* member documetation */
+/* member documentation */
 
 div.memdoc {
 	width: 100%;
+	border: none;
+	box-shadow: none;
+	background: none;
 }
 
 div.memdoc div.memproto {
@@ -907,7 +990,7 @@ div.memdoc table {
 div.memdoc table td {
 	vertical-align: middle;
 	padding: 8px;
-	border: 1px solid #d5d5d5; /* silver */
+	border: 1px solid var(--TertiaryCanvasText);
 }
 
 div.memdoc td:first-child {
@@ -921,7 +1004,7 @@ div.memdoc dl dd table {
 div.memdoc dl dd table td {
 	font-size: 14.4px;
 	padding: 8px;
-	border: 1px solid #d5d5d5; /* silver */
+	border: 1px solid var(--TertiaryCanvasText);
 }
 
 div.memdoc dl dd table td ul, table td ol {
@@ -937,7 +1020,7 @@ div.memdoc dl dd div.memdoc table.doxtable td {
 
 div.memdoc dl dd table.params td.paramdir {
 	vertical-align: top;
-	color: black;
+	color: CanvasText;
 	width: 157px;
 }
 
@@ -945,7 +1028,7 @@ div.memdoc dl dd table.params td.paramname {
 	vertical-align: top;
 	font-weight: normal;
 	font-style: normal;
-	color: #dc3c01; /* grenadier */
+	color: var(--LinkText);
 	width: 157px;
 }
 
@@ -953,87 +1036,55 @@ div.memdoc dl dd table.params td.paramname {
 
 div.memdoc dl dd table.retval td.paramname {
 	vertical-align: top;
-	color: blue;
+	color: var(--Blue);
 	width: 157px;
 }
 
 /* End Styling for detailed member documentation */
 
-/* for the tree view */
-.ftvtree {
-	font-family: sans-serif;
-	margin: 0.5em;
+/* Tree View on Directory Pages */
+div.directory {
+	border-top: 1px solid var(--TertiaryCanvasText);
+	border-bottom: 1px solid var(--TertiaryCanvasText);
 }
 
-.directory { font-size: 14.4px; font-weight: bold; }
-.directory h3 { margin: 0px; margin-top: 1em; font-size: 11pt; }
-.directory > h3 { margin-top: 0; }
-.directory p { margin: 0px; white-space: nowrap; }
-.directory div { display: none; margin: 0px; }
-.directory img { vertical-align: -30%; }
+.directory .levels span {
+	color: var(--LinkText);
+}
 
-/* printer only pretty stuff */
-@media print {
-	/* suggest page orientation */
-	@page { size: portrait; }
-	.noprint {
-		display: none;
-	}
+/* Footer: color separator */
 
-	html {
-		background: #FFF;
-	}
+hr.footer {
+	height: 1px;
+	border-top: 1px solid var(--TertiaryCanvasText);
+}
 
-	/* hide header and nav bar */
-	#banner {
-		display:none;
-	}
+/* Search Box */
+#MSearchSelectWindow {
+	border: var(--TertiaryCanvasText);
+	background-color: var(--TertiaryCanvas);
+}
 
-	div.tabs, div.tabs2, div.tabs3 {
-		display:none;
-	}
+#MSearchResultsWindow {
+	width: 500px !important;
+	height: 600px !important;
+	border: var(--TertiaryCanvasText);
+	background-color: var(--TertiaryCanvas);
+}
 
-	div.summary {
-		margin: 0px;
-		padding: 0px;
-	}
 
-	div.headertitle {
-		margin: 0px;
-		padding: 0px;
-	}
+.SRPage .SREntry{
+	font-size: 1em !important;
+}
 
-	div.content {
-		margin: 0px;
-		padding: 0px;
-	}
+.SRScope {
+	font-size: 0.9em !important;
+}
 
-	/* some links we want to print the url along with (CSS2) */
-	a.printurl:after {
-		content: " <" attr(href) ">";
-		font-weight: normal;
-		font-size: small;
-	}
+#NoMatches {
+	font-size: 1.4em
+}
 
-	/* override for those we really don't want to print */
-	a.noprinturl:after {
-		content: "";
-	}
-
-	/* for acronyms we want their definitions inlined at print time */
-	acronym[title]:after {
-		font-size: small;
-		content: " (" attr(title) ")";
-		font-style: italic;
-	}
-
-	/* and not have mozilla dotted underline */
-	acronym {
-		border: none;
-	}
-
-	pre.terminal { /* Terminal output black on white */
-		background-color: #ffffff;
-		color: #000000;
-	}
+a.SelectItem {
+	font-size: 1em;
 }

@@ -18,6 +18,7 @@
 #include <ProtocolUtilities.h>
 #include <net_protocol.h>
 #include <net_stack.h>
+#include <condition_variable.h>
 #include <util/AutoLock.h>
 #include <util/DoublyLinkedList.h>
 #include <util/OpenHashTable.h>
@@ -60,7 +61,6 @@ public:
 			bool		IsLocal() const;
 
 			status_t	DelayedAcknowledge();
-			status_t	SendAcknowledge(bool force);
 
 			int32		SegmentReceived(tcp_segment_header& segment,
 							net_buffer* buffer);
@@ -73,13 +73,16 @@ private:
 			void		_UpdateTimeWait();
 			void		_Close();
 			void		_CancelConnectionTimers();
-			uint8		_CurrentFlags();
+
+			tcp_segment_header _PrepareSendSegment();
 			bool		_ShouldSendSegment(tcp_segment_header& segment,
 							uint32 length, uint32 segmentMaxSize,
 							uint32 flightSize);
+			status_t	_PrepareAndSend(tcp_segment_header& segment, net_buffer* buffer,
+							bool isRetransmit);
+			status_t	_SendAcknowledge(bool force = false);
 			status_t	_SendQueued(bool force = false);
-			status_t	_SendQueued(bool force, uint32 sendWindow);
-			int			_MaxSegmentSize(const struct sockaddr* address) const;
+
 			status_t	_Disconnect(bool closing);
 			ssize_t		_AvailableData() const;
 			void		_NotifyReader();
@@ -97,11 +100,13 @@ private:
 							net_buffer* buffer);
 			void		_UpdateTimestamps(tcp_segment_header& segment,
 							size_t segmentLength);
+			void		_UpdateReceiveBuffer();
 			void		_MarkEstablished();
 			status_t	_WaitForEstablished(MutexLocker& lock,
 							bigtime_t timeout);
 			bool		_AddData(tcp_segment_header& segment,
 							net_buffer* buffer);
+			int			_MaxSegmentSize(const struct sockaddr* address) const;
 			void		_PrepareReceivePath(tcp_segment_header& segment);
 			status_t	_PrepareSendPath(const sockaddr* peer);
 			void		_Acknowledged(tcp_segment_header& segment);
@@ -122,9 +127,9 @@ private:
 private:
 	TCPEndpoint*	fConnectionHashLink;
 	TCPEndpoint*	fEndpointHashLink;
-	friend class EndpointManager;
-	friend class ConnectionHashDefinition;
-	friend class EndpointHashDefinition;
+	friend class	EndpointManager;
+	friend struct	ConnectionHashDefinition;
+	friend class	EndpointHashDefinition;
 
 	mutex			fLock;
 	EndpointManager* fManager;
@@ -175,6 +180,9 @@ private:
 	bigtime_t		fRetransmitTimeout;
 
 	uint32			fReceivedTimestamp;
+
+	tcp_sequence	fReceiveSizingReference;
+	uint32			fReceiveSizingTimestamp;
 
 	uint32			fCongestionWindow;
 	uint32			fSlowStartThreshold;

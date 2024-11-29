@@ -1,3 +1,0 @@
-SubDir HAIKU_TOP src add-ons kernel drivers network ar81xx ;
-
-SubInclude HAIKU_TOP src add-ons kernel drivers network ar81xx dev ;

@@ -9,6 +9,11 @@
 #include <SupportDefs.h>
 
 
+class DebugUART;
+extern DebugUART* gUART;
+extern bool gUARTSkipInit;
+
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -22,7 +27,7 @@ extern void serial_puts(const char *string, size_t size);
 extern void serial_disable(void);
 extern void serial_enable(void);
 
-extern void serial_switch_to_legacy(void);
+extern void serial_kernel_handoff(void);
 
 #ifdef __cplusplus
 }

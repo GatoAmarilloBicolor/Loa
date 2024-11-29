@@ -9,9 +9,13 @@ SubDirHdrs [ FDirName $(SUBDIR) $(DOTDOT) support ] ;
 
 SubDirCcFlags -DCORTEX_NAMESPACE=cortex ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
-
 StaticLibrary cortex_transport_view.a :
 	TransportView.cpp
 	TransportWindow.cpp
+;
+
+DoCatalogs cortex_transport_view.a :
+	x-vnd.Cortex.TransportView
+	:
+	TransportView.cpp
 ;

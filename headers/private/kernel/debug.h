@@ -1,6 +1,6 @@
 /*
  * Copyright 2002-2015, Axel Dörfler, axeld@pinc-software.de
- * Distributed under the terms of the Haiku License.
+ * Distributed under the terms of the MIT License.
  *
  * Copyright 2001-2002, Travis Geiselbrecht. All rights reserved.
  * Distributed under the terms of the NewOS License.
@@ -64,9 +64,11 @@
 #if KDEBUG
 #	define ASSERT(x)						ASSERT_ALWAYS(x)
 #	define ASSERT_PRINT(x, format, args...)	ASSERT_ALWAYS_PRINT(x, format, args)
+#	define ASSERT_UNREACHABLE()				panic("ASSERT UNREACHABLE (%s:%d)", __FILE__, __LINE__)
 #else
 #	define ASSERT(x)						do { } while(0)
 #	define ASSERT_PRINT(x, format, args...)	do { } while(0)
+#	define ASSERT_UNREACHABLE()				__builtin_unreachable()
 #endif
 
 #if __GNUC__ >= 5 && !defined(__cplusplus)
@@ -91,20 +93,21 @@
 
 // Macros for for placing marker functions. They can be used to mark the
 // beginning and end of code sections (e.g. used in the slab code).
+// Note that in order for these to work, the kernel must be built with -fno-toplevel-reorder.
 #define RANGE_MARKER_FUNCTION(functionName) \
-	void functionName() {}
+	void RANGE_MARKER_##functionName() {}
 #define RANGE_MARKER_FUNCTION_BEGIN(scope) \
 	RANGE_MARKER_FUNCTION(scope##_begin)
 #define RANGE_MARKER_FUNCTION_END(scope) \
 	RANGE_MARKER_FUNCTION(scope##_end)
 
 #define RANGE_MARKER_FUNCTION_PROTOTYPE(functionName) \
-	void functionName();
+	void RANGE_MARKER_##functionName();
 #define RANGE_MARKER_FUNCTION_PROTOTYPES(scope)		\
 	RANGE_MARKER_FUNCTION_PROTOTYPE(scope##_begin)	\
 	RANGE_MARKER_FUNCTION_PROTOTYPE(scope##_end)
 #define RANGE_MARKER_FUNCTION_ADDRESS_RANGE(scope) \
-	(addr_t)&scope##_begin, (addr_t)&scope##_end
+	(addr_t)&RANGE_MARKER_##scope##_begin, (addr_t)&RANGE_MARKER_##scope##_end
 
 
 // command return value

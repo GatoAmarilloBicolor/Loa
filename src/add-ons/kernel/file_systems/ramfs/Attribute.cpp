@@ -1,4 +1,7 @@
-// Attribute.cpp
+/*
+ * Copyright 2007, Ingo Weinhold, ingo_weinhold@gmx.de.
+ * All rights reserved. Distributed under the terms of the MIT license.
+ */
 
 #include "AllocationInfo.h"
 #include "Attribute.h"
@@ -69,7 +72,7 @@ Attribute::WriteAt(off_t offset, const void *buffer, size_t size,
 {
 	// get the current key for the attribute
 	uint8 oldKey[kMaxIndexKeyLength];
-	size_t oldLength;
+	size_t oldLength = kMaxIndexKeyLength;
 	GetKey(oldKey, &oldLength);
 
 	// write the new value
@@ -77,13 +80,13 @@ Attribute::WriteAt(off_t offset, const void *buffer, size_t size,
 
 	// If there is an index and a change has been made within the key, notify
 	// the index.
-	if (offset < kMaxIndexKeyLength && size > 0 && fIndex)
+	if (offset < (off_t)kMaxIndexKeyLength && size > 0 && fIndex)
 		fIndex->Changed(this, oldKey, oldLength);
 
 	// update live queries
-	const uint8* newKey;
-	size_t newLength;
-	GetKey(&newKey, &newLength);
+	uint8 newKey[kMaxIndexKeyLength];
+	size_t newLength = kMaxIndexKeyLength;
+	GetKey(newKey, &newLength);
 	GetVolume()->UpdateLiveQueries(NULL, fNode, GetName(), fType, oldKey,
 		oldLength, newKey, newLength);
 
@@ -104,24 +107,10 @@ Attribute::SetIndex(AttributeIndex *index, bool inIndex)
 
 // GetKey
 void
-Attribute::GetKey(const uint8 **key, size_t *length)
-{
-	if (key && length) {
-		GetFirstDataBlock(key, length);
-		*length = min(*length, kMaxIndexKeyLength);
-	}
-}
-
-// GetKey
-void
 Attribute::GetKey(uint8 *key, size_t *length)
 {
-	if (key && length) {
-		const uint8 *originalKey = NULL;
-		GetKey(&originalKey, length);
-		if (length > 0)
-			memcpy(key, originalKey, *length);
-	}
+	*length = min(*length, kMaxIndexKeyLength);
+	ReadAt(0, key, *length, length);
 }
 
 // AttachAttributeIterator

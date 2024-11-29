@@ -27,6 +27,7 @@
 
 static const char* kWatchFolder			= "input/wacom/usb";
 static const char* kDeviceFolder		= "/dev/input/wacom/usb";
+static const char* kDeviceName			= "Wacom Tablet";
 
 //static const char* kPS2MouseThreadName	= "PS/2 Mouse";
 
@@ -48,10 +49,25 @@ MasterServerDevice::MasterServerDevice()
 	  fPS2DisablerThread(B_ERROR),
 	  fDeviceLock("device list lock")
 {
-	get_mouse_speed(&fSpeed);
-	get_mouse_acceleration(&fAcceleration);
-	get_click_speed(&fDblClickSpeed);
+	get_mouse_speed(kDeviceName, &fSpeed);
+	get_mouse_acceleration(kDeviceName, &fAcceleration);
+	get_click_speed(kDeviceName, &fDblClickSpeed);
 	_CalculateAccelerationTable();
+
+	if (_LockDevices()) {
+		// do an initial scan of the devfs folder, after that, we should receive
+		// node monitor messages for hotplugging support
+		_SearchDevices();
+	
+		fActive = true;
+	
+		for (int32 i = 0; PointingDevice* device = (PointingDevice*)fDevices.ItemAt(i); i++) {
+			device->Start();
+		}
+		_UnlockDevices();
+	}
+
+	StartMonitoringDevice(kWatchFolder);
 }
 
 // destructor
@@ -70,12 +86,7 @@ MasterServerDevice::~MasterServerDevice()
 status_t
 MasterServerDevice::InitCheck()
 {
-	input_device_ref device = { (char *)"Wacom Tablets",
-		B_POINTING_DEVICE, (void*)this };
-	input_device_ref* deviceList[2] = { &device, NULL };
-	RegisterDevices(deviceList);
-
-	return B_OK;
+	return BInputServerDevice::InitCheck();
 }
 
 // SystemShuttingDown
@@ -100,23 +111,10 @@ MasterServerDevice::SystemShuttingDown()
 status_t
 MasterServerDevice::Start(const char* device, void* cookie)
 {
-	if (_LockDevices()) {
-		// do an initial scan of the devfs folder, after that, we should receive
-		// node monitor messages for hotplugging support
-		_SearchDevices();
-	
-		fActive = true;
-	
-		for (int32 i = 0; PointingDevice* device = (PointingDevice*)fDevices.ItemAt(i); i++) {
-			device->Start();
-		}
-		_UnlockDevices();
-	}
-
 	// TODO: make this configurable
 //	_StartPS2DisablerThread();
 
-	return StartMonitoringDevice(kWatchFolder);
+	return B_OK;
 }
 
 // Stop
@@ -140,14 +138,14 @@ MasterServerDevice::Control(const char* device, void* cookie, uint32 code, BMess
 	// respond to changes in the system
 	switch (code) {
 		case B_MOUSE_SPEED_CHANGED:
-			get_mouse_speed(&fSpeed);
+			get_mouse_speed(device, &fSpeed);
 			_CalculateAccelerationTable();
 			break;
 		case B_CLICK_SPEED_CHANGED:
-			get_click_speed(&fDblClickSpeed);
+			get_click_speed(device, &fDblClickSpeed);
 			break;
 		case B_MOUSE_ACCELERATION_CHANGED:
-			get_mouse_acceleration(&fAcceleration);
+			get_mouse_acceleration(device, &fAcceleration);
 			_CalculateAccelerationTable();
 			break;
 		case B_NODE_MONITOR:
@@ -218,6 +216,9 @@ MasterServerDevice::_AddDevice(const char* path)
 			// start device polling only if we're started
 			if (fActive)
 				device->Start();
+			input_device_ref device = { (char*)kDeviceName, B_POINTING_DEVICE, (void*)this };
+			input_device_ref* deviceList[2] = { &device, NULL };
+			RegisterDevices(deviceList);
 		} else {
 	
 			PRINT(("pointing device not added (%s)\n", path));

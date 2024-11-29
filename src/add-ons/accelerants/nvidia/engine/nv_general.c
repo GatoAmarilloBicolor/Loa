@@ -92,7 +92,7 @@ status_t nv_general_powerup()
 {
 	status_t status;
 
-	LOG(1,("POWERUP: Haiku nVidia Accelerant 1.10 running.\n"));
+	LOG(1,("POWERUP: Haiku nVidia Accelerant 1.16 running.\n"));
 
 	/* log VBLANK INT usability status */
 	if (si->ps.int_assigned)
@@ -721,6 +721,14 @@ status_t nv_general_powerup()
 		sprintf(si->adi.chipset, "G72");
 		status = nvxx_general_powerup();
 		break;
+	case 0x01da10de: /* Nvidia Quadro NVS 110M */
+		si->ps.card_type = G72;
+		si->ps.card_arch = NV40A;
+		si->ps.laptop = true;
+		sprintf(si->adi.name, "Nvidia Quadro NVS 110M");
+		sprintf(si->adi.chipset, "G72");
+		status = nvxx_general_powerup();
+		break;
 	case 0x01dd10de: /* Nvidia Geforce 7500 LE */
 		si->ps.card_type = G72;
 		si->ps.card_arch = NV40A;
@@ -1282,6 +1290,22 @@ status_t nv_general_powerup()
 		sprintf(si->adi.chipset, "NV44");
 		status = nvxx_general_powerup();
 		break;
+#if 0
+	case 0x06e410de: /* Nvidia Geforce 9200M G98M */
+		si->ps.card_type = G70;
+		si->ps.card_arch = NV40A;
+		sprintf(si->adi.name, "Nvidia Geforce 8400 GS");
+		sprintf(si->adi.chipset, "G98");
+		status = nvxx_general_powerup();
+		break;
+	case 0x06e810de: /* Nvidia Geforce 9200M G98M */
+		si->ps.card_type = G70;
+		si->ps.card_arch = NV40A;
+		sprintf(si->adi.name, "Nvidia Geforce 9200M");
+		sprintf(si->adi.chipset, "G98");
+		status = nvxx_general_powerup();
+		break;
+#endif
 	case 0x07e110de: /* Nvidia Geforce 7100 nForce 630i */
 		si->ps.card_type = NV44;
 		si->ps.card_arch = NV40A;

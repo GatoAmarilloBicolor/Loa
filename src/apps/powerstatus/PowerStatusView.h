@@ -40,7 +40,7 @@ public:
 protected:
 							PowerStatusView(BMessage* archive);
 
-	virtual void			Update(bool force = false);
+	virtual void			Update(bool force = false, bool notify = true);
 
 			void			FromMessage(const BMessage* message);
 			status_t		ToMessage(BMessage* message) const;
@@ -64,10 +64,11 @@ protected:
 
 			battery_info	fBatteryInfo;
 
-			int32			fPercent;
+			double			fPercent;
 			time_t			fTimeLeft;
-			bool			fOnline;
 			bool			fHasBattery;
+
+			bool			fHasNotifiedLowBattery;
 };
 
 

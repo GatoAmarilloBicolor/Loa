@@ -7,6 +7,8 @@
 
 #include <stdio.h>
 
+#include <Directory.h>
+#include <File.h>
 #include <Application.h>
 #include <Catalog.h>
 #include <GroupLayout.h>
@@ -19,6 +21,7 @@
 
 #include "LaunchButton.h"
 #include "MainWindow.h"
+#include "App.h"
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -26,7 +29,7 @@
 
 
 static bigtime_t sActivationDelay = 40000;
-static const uint32 kIconSizes[] = { 16, 20, 24, 32, 40, 48, 64 };
+static const uint32 kIconSizes[] = { 16, 20, 24, 32, 40, 48, 64, 96, 128 };
 
 
 enum {
@@ -379,8 +382,10 @@ PadView::DisplayMenu(BPoint where, LaunchButton* button) const
 		message = new BMessage(MSG_SET_ICON_SIZE);
 		message->AddInt32("size", iconSize);
 		BString label;
-		label << iconSize << " x " << iconSize;
-		item = new BMenuItem(label.String(), message);
+		label.SetToFormat(B_TRANSLATE_COMMENT("%" B_PRId32" × %" B_PRId32,
+			"The '×' is the Unicode multiplication sign U+00D7"),
+			iconSize, iconSize);
+		item = new BMenuItem(label, message);
 		item->SetTarget(this);
 		item->SetMarked(IconSize() == iconSize);
 		iconSizeM->AddItem(item);
@@ -397,6 +402,11 @@ PadView::DisplayMenu(BPoint where, LaunchButton* button) const
 	item = new BMenuItem(B_TRANSLATE("Show window border"), new BMessage(what));
 	item->SetTarget(window);
 	item->SetMarked(what == MSG_HIDE_BORDER);
+	settingsM->AddItem(item);
+
+	item = new BMenuItem(B_TRANSLATE("Autostart"), new BMessage(MSG_TOGGLE_AUTOSTART));
+	item->SetTarget(be_app);
+	item->SetMarked(((App*)be_app)->AutoStart());
 	settingsM->AddItem(item);
 
 	item = new BMenuItem(B_TRANSLATE("Auto-raise"), new BMessage(MSG_TOGGLE_AUTORAISE));
@@ -512,4 +522,3 @@ PadView::_NotifySettingsChanged()
 {
 	be_app->PostMessage(MSG_SETTINGS_CHANGED);
 }
-

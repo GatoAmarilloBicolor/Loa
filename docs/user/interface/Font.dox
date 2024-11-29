@@ -1,13 +1,13 @@
 /*
- * Copyright 2013 Haiku, Inc. All rights reserved.
+ * Copyright 2013-2019 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
  *		John Scipione, jscipione@gmail.com
  *
  * Corresponds to:
- *		headers/os/interface/Font.h	 hrev45178
- *		src/kits/interface/Font.cpp	 hrev45178
+ *		headers/os/interface/Font.h	 hrev52784
+ *		src/kits/interface/Font.cpp	 hrev52784
  */
 
 
@@ -1313,8 +1313,10 @@
 	\brief Returns whether or not the font is fixed-width and contains both
 		full and half-width characters.
 
-	\note This was left unimplemented as of R5. It is a way to work with both
-	      Kanji and Roman characters in the same fixed-width font.
+	A full-and-half-fixed font is one that contains characters of only
+	two sizes, so that CJK languages can be properly supported.
+
+	\note This was unimplemented in BeOS R5, but is implemented in Haiku.
 
 	\since BeOS R4
 */
@@ -1335,12 +1337,17 @@
 	\brief Gets a \c unicode_block object that identifies the Unicode blocks
 	       supported by this font face and family.
 
-	\attention Currently unimplemented, returns an empty \a unicode_block
-	           object.
-
 	\returns A \c unicode_block object containing supported Unicode blocks.
 
 	\since BeOS R4
+*/
+
+
+/*!
+	\fn bool BFont::IncludesBlock(uint32 start, uint32 end) const
+	\brief Gets whether the font includes the specified Unicode block.
+
+	\since Haiku R1
 */
 
 
@@ -1385,6 +1392,7 @@
 	       supplied truncation \a mode.
 
 	The following truncation modes are supported:
+	- \c B_NO_TRUNCATION Does nothing.
 	- \c B_TRUNCATE_BEGINNING Truncate from the beginning of the string.
 	- \c B_TRUNCATE_MIDDLE Truncate from the middle of the string.
 	- \c B_TRUNCATE_END Truncate from the end of the string.
@@ -1732,18 +1740,43 @@
 /*!
 	\fn void BFont::GetHasGlyphs(const char charArray[], int32 numChars,
 		bool hasArray[]) const
-	\brief Fills out \a hasArray with whether or not each characters in
-		\a charArray has a glyph for the font.
+	\brief Fills out \a hasArray with whether or not the font has a glyph
+		for each character in \a charArray.
 
-	\c true is written in \a hasArray if the character has a glyph in the
-	current font and \c false is written in \a hasArray if the character
-	does NOT have a glyph in the current font.
+	\c true is written in \a hasArray if a glyph is found for the character,
+	\c false otherwise.
+
+	\remark After the introduction of fallback fonts for missing glyphs,
+	this is not exaclty what the name or the original desciption imply. As
+	the objective of this method is to know if a string can be presented
+	to the user without getting "no glyph" symbols, it will still write
+	\c true if the queried font does not provide a glyph for a character
+	but a fallback font does.
 
 	\param charArray The source character array.
 	\param numChars The number of characters to consider in \a charArray.
 	\param hasArray The destination array of booleans.
 
 	\since BeOS R4
+*/
+
+
+/*!
+	\fn void BFont::GetHasGlyphs(const char charArray[], int32 numChars,
+		bool hasArray[], bool useFallbacks) const
+	\brief Fills out \a hasArray with whether or not the font has a glyph
+		for each character in \a charArray.
+
+	\c true is written in \a hasArray if the character has a glyph in the
+	current font and \c false otherwise. Fallback fonts are also considered
+	in the search if \a useFallbacks is \c true.
+
+	\param charArray The source character array.
+	\param numChars The number of characters to consider in \a charArray.
+	\param hasArray The destination array of booleans.
+	\param useFallbacks Whether to consider fallback fonts in the answer.
+
+	\since Haiku R1
 */
 
 

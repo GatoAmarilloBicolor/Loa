@@ -19,6 +19,7 @@
 #include "ALMLayout.h"
 #include "ALMLayoutBuilder.h"
 
+#include <ctype.h>
 
 static int
 StringItemComp(const BListItem* first, const BListItem* second)
@@ -278,6 +279,7 @@ MusicCollectionWindow::MessageReceived(BMessage* message)
 
 		default:
 			BWindow::MessageReceived(message);
+			break;
 	}
 }
 
@@ -286,26 +288,22 @@ void
 CaseInsensitiveString(BString &instring,  BString &outstring)
 {
 	outstring = "";
-	int i = 0;
-	while (instring[i])
-	{
-		if (instring[i] >= 65 && instring[i] <= 90) // capital letters   
-		{
-			int ch = instring[i] + 32;
+
+	for (int i = 0; instring[i]; i++) {
+		if (isupper(instring[i])) {
+			int ch = tolower(instring[i]);
 			outstring += "[";
 			outstring += ch;
 			outstring += instring[i];
 			outstring += "]";
-		} else if (instring[i] >= 97 && instring[i] <= 122)
-		{
-			int ch = instring[i]-32;
+		} else if (islower(instring[i])) {
+			int ch = toupper(instring[i]);
 			outstring += "[";
 			outstring += instring[i];
 			outstring += ch;
 			outstring += "]";
 		} else
 			outstring += instring[i];
-		i++;
 	}
 }
 
@@ -346,12 +344,12 @@ MusicCollectionWindow::_CreateQuery(BString& orgString)
 	query->PushAttr("Media:Title");
 	query->PushString(queryString);
 	query->PushOp(B_CONTAINS);
-		
+
 	query->PushAttr("Audio:Album");
 	query->PushString(queryString);
 	query->PushOp(B_CONTAINS);
 	query->PushOp(B_OR);
-	
+
 	query->PushAttr("Audio:Artist");
 	query->PushString(queryString);
 	query->PushOp(B_CONTAINS);
@@ -367,7 +365,7 @@ MusicCollectionWindow::_CreateQuery(BString& orgString)
 	query->PushAttr("BEOS:TYPE");
 	query->PushString("audio/");
 	query->PushOp(B_BEGINS_WITH);
-	
+
 	query->PushAttr("name");
 	query->PushString(queryString);
 	query->PushOp(B_CONTAINS);

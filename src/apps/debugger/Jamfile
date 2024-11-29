@@ -32,8 +32,6 @@ UseBuildFeatureHeaders libedit ;
 
 LINKFLAGS += -Wl,--exclude-libs,ALL ;
 
-SubDirC++Flags [ FDefines _BSD_SOURCE=1 ] ;
-
 SEARCH_SOURCE += [ FDirName $(SUBDIR) settings ] ;
 SEARCH_SOURCE += [ FDirName $(SUBDIR) user_interface cli ] ;
 SEARCH_SOURCE += [ FDirName $(SUBDIR) user_interface cli commands ] ;
@@ -75,6 +73,7 @@ local sources =
 	CliContinueCommand.cpp
 	CliDebugReportCommand.cpp
 	CliDumpMemoryCommand.cpp
+	CliDumpStringCommand.cpp
 	CliPrintVariableCommand.cpp
 	CliQuitCommand.cpp
 	CliStackFrameCommand.cpp
@@ -138,6 +137,7 @@ local sources =
 
 	# user_interface/gui/util
 	ActionMenuItem.cpp
+	AlertWithCheckbox.cpp
 	GuiSettingsUtils.cpp
 	SettingsMenu.cpp
 	SignalDispositionMenu.cpp

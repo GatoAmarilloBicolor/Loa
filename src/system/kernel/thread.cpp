@@ -26,6 +26,7 @@
 #include <OS.h>
 
 #include <util/AutoLock.h>
+#include <util/ThreadAutoLock.h>
 
 #include <arch/debug.h>
 #include <boot/kernel_args.h>
@@ -73,12 +74,12 @@ typedef BKernel::TeamThreadTable<Thread> ThreadHashTable;
 // thread list
 static Thread sIdleThreads[SMP_MAX_CPUS];
 static ThreadHashTable sThreadHash;
-static spinlock sThreadHashLock = B_SPINLOCK_INITIALIZER;
+static rw_spinlock sThreadHashLock = B_RW_SPINLOCK_INITIALIZER;
 static thread_id sNextThreadID = 2;
 	// ID 1 is allocated for the kernel by Team::Team() behind our back
 
 // some arbitrarily chosen limits -- should probably depend on the available
-// memory (the limit is not yet enforced)
+// memory
 static int32 sMaxThreads = 4096;
 static int32 sUsedThreads = 0;
 
@@ -173,6 +174,7 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
 	io_priority(-1),
 	cpu(cpu),
 	previous_cpu(NULL),
+	cpumask(),
 	pinned_to_cpu(0),
 	sig_block_mask(0),
 	sigsuspend_original_unblocked_mask(0),
@@ -227,7 +229,7 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
 	msg.read_sem = -1;
 
 	// add to thread table -- yet invisible
-	InterruptsSpinLocker threadHashLocker(sThreadHashLock);
+	InterruptsWriteSpinLocker threadHashLocker(sThreadHashLock);
 	sThreadHash.Insert(this);
 }
 
@@ -261,7 +263,7 @@ Thread::~Thread()
 	mutex_destroy(&fLock);
 
 	// remove from thread table
-	InterruptsSpinLocker threadHashLocker(sThreadHashLock);
+	InterruptsWriteSpinLocker threadHashLocker(sThreadHashLock);
 	sThreadHash.Remove(this);
 }
 
@@ -287,7 +289,7 @@ Thread::Create(const char* name, Thread*& _thread)
 /*static*/ Thread*
 Thread::Get(thread_id id)
 {
-	InterruptsSpinLocker threadHashLocker(sThreadHashLock);
+	InterruptsReadSpinLocker threadHashLocker(sThreadHashLock);
 	Thread* thread = sThreadHash.Lookup(id);
 	if (thread != NULL)
 		thread->AcquireReference();
@@ -299,7 +301,7 @@ Thread::Get(thread_id id)
 Thread::GetAndLock(thread_id id)
 {
 	// look it up and acquire a reference
-	InterruptsSpinLocker threadHashLocker(sThreadHashLock);
+	InterruptsReadSpinLocker threadHashLocker(sThreadHashLock);
 	Thread* thread = sThreadHash.Lookup(id);
 	if (thread == NULL)
 		return NULL;
@@ -333,7 +335,7 @@ Thread::GetDebug(thread_id id)
 /*static*/ bool
 Thread::IsAlive(thread_id id)
 {
-	InterruptsSpinLocker threadHashLocker(sThreadHashLock);
+	InterruptsReadSpinLocker threadHashLocker(sThreadHashLock);
 	return sThreadHash.Lookup(id) != NULL;
 }
 
@@ -395,7 +397,7 @@ Thread::Init(bool idleThread)
 bool
 Thread::IsAlive() const
 {
-	InterruptsSpinLocker threadHashLocker(sThreadHashLock);
+	InterruptsReadSpinLocker threadHashLocker(sThreadHashLock);
 
 	return sThreadHash.Lookup(id) != NULL;
 }
@@ -486,7 +488,7 @@ Thread::DeactivateCPUTimeUserTimers()
 ThreadListIterator::ThreadListIterator()
 {
 	// queue the entry
-	InterruptsSpinLocker locker(sThreadHashLock);
+	InterruptsWriteSpinLocker locker(sThreadHashLock);
 	sThreadHash.InsertIteratorEntry(&fEntry);
 }
 
@@ -494,7 +496,7 @@ ThreadListIterator::ThreadListIterator()
 ThreadListIterator::~ThreadListIterator()
 {
 	// remove the entry
-	InterruptsSpinLocker locker(sThreadHashLock);
+	InterruptsWriteSpinLocker locker(sThreadHashLock);
 	sThreadHash.RemoveIteratorEntry(&fEntry);
 }
 
@@ -503,7 +505,7 @@ Thread*
 ThreadListIterator::Next()
 {
 	// get the next team -- if there is one, get reference for it
-	InterruptsSpinLocker locker(sThreadHashLock);
+	InterruptsWriteSpinLocker locker(sThreadHashLock);
 	Thread* thread = sThreadHash.NextElement(&fEntry);
 	if (thread != NULL)
 		thread->AcquireReference();
@@ -649,18 +651,37 @@ enter_userspace(Thread* thread, UserThreadEntryArguments* args)
 
 	// init the thread's user_thread
 	user_thread* userThread = thread->user_thread;
-	set_ac();
+	arch_cpu_enable_user_access();
 	userThread->pthread = args->pthread;
 	userThread->flags = 0;
 	userThread->wait_status = B_OK;
 	userThread->defer_signals
 		= (args->flags & THREAD_CREATION_FLAG_DEFER_SIGNALS) != 0 ? 1 : 0;
 	userThread->pending_signals = 0;
-	clear_ac();
+	arch_cpu_disable_user_access();
 
-	if (args->forkArgs != NULL) {
-		// This is a fork()ed thread. Copy the fork args onto the stack and
-		// free them.
+	// initialize default TLS fields
+	addr_t tls[TLS_FIRST_FREE_SLOT];
+	memset(tls, 0, sizeof(tls));
+	tls[TLS_BASE_ADDRESS_SLOT] = thread->user_local_storage;
+	tls[TLS_THREAD_ID_SLOT] = thread->id;
+	tls[TLS_USER_THREAD_SLOT] = (addr_t)thread->user_thread;
+
+	if (args->forkArgs == NULL) {
+		if (user_memcpy((void*)thread->user_local_storage, tls, sizeof(tls)) != B_OK)
+			return B_BAD_ADDRESS;
+	} else {
+		// This is a fork()ed thread.
+
+		// Update select TLS values, do not clear the whole array.
+		arch_cpu_enable_user_access();
+		addr_t* userTls = (addr_t*)thread->user_local_storage;
+		ASSERT(userTls[TLS_BASE_ADDRESS_SLOT] == thread->user_local_storage);
+		userTls[TLS_THREAD_ID_SLOT] = tls[TLS_THREAD_ID_SLOT];
+		userTls[TLS_USER_THREAD_SLOT] = tls[TLS_USER_THREAD_SLOT];
+		arch_cpu_disable_user_access();
+
+		// Copy the fork args onto the stack and free them.
 		arch_fork_arg archArgs = *args->forkArgs;
 		free(args->forkArgs);
 
@@ -1016,7 +1037,7 @@ thread_create_thread(const ThreadCreationAttributes& attributes, bool kernel)
 	ThreadLocker threadLocker(thread);
 
 	InterruptsSpinLocker threadCreationLocker(gThreadCreationLock);
-	SpinLocker threadHashLocker(sThreadHashLock);
+	WriteSpinLocker threadHashLocker(sThreadHashLock);
 
 	// check the thread limit
 	if (sUsedThreads >= sMaxThreads) {
@@ -1029,6 +1050,7 @@ thread_create_thread(const ThreadCreationAttributes& attributes, bool kernel)
 		thread->user_thread = NULL;
 
 		threadLocker.Unlock();
+		teamLocker.Unlock();
 
 		if (userThread != NULL)
 			team_free_user_thread(team, userThread);
@@ -1200,6 +1222,13 @@ fill_thread_info(Thread *thread, thread_info *info, size_t size)
 	InterruptsSpinLocker threadTimeLocker(thread->time_lock);
 	info->user_time = thread->user_time;
 	info->kernel_time = thread->kernel_time;
+	if (thread->last_time != 0) {
+		const bigtime_t current = system_time() - thread->last_time;
+		if (thread->in_kernel)
+			info->kernel_time += current;
+		else
+			info->user_time += current;
+	}
 }
 
 
@@ -1373,6 +1402,13 @@ static status_t
 common_snooze_etc(bigtime_t timeout, clockid_t clockID, uint32 flags,
 	bigtime_t* _remainingTime)
 {
+#if KDEBUG
+	if (!are_interrupts_enabled()) {
+		panic("common_snooze_etc(): called with interrupts disabled, timeout "
+			"%" B_PRIdBIGTIME, timeout);
+	}
+#endif
+
 	switch (clockID) {
 		case CLOCK_REALTIME:
 			// make sure the B_TIMEOUT_REAL_TIME_BASE flag is set and fall
@@ -1551,10 +1587,12 @@ make_thread_resumed(int argc, char **argv)
 		if (thread->id != id)
 			continue;
 
-		if (thread->state == B_THREAD_SUSPENDED) {
+		if (thread->state == B_THREAD_SUSPENDED || thread->state == B_THREAD_ASLEEP
+				|| thread->state == B_THREAD_WAITING) {
 			scheduler_enqueue_in_run_queue(thread);
 			kprintf("thread %" B_PRId32 " resumed\n", thread->id);
-		}
+		} else
+			kprintf("thread %" B_PRId32 " is already running\n", thread->id);
 		found = true;
 		break;
 	}
@@ -1671,8 +1709,16 @@ _dump_thread_info(Thread *thread, bool shortInfo)
 				}
 
 				case THREAD_BLOCK_TYPE_CONDITION_VARIABLE:
-					kprintf("cvar      %p   ", thread->wait.object);
+				{
+					char name[5];
+					ssize_t length = ConditionVariable::DebugGetType(
+						(ConditionVariable*)thread->wait.object, name, sizeof(name));
+					if (length > 0)
+						kprintf("cvar:%*s %p   ", 4, name, thread->wait.object);
+					else
+						kprintf("cvar      %p   ", thread->wait.object);
 					break;
+				}
 
 				case THREAD_BLOCK_TYPE_SNOOZE:
 					kprintf("%*s", B_PRINTF_POINTER_WIDTH + 15, "");
@@ -1690,8 +1736,16 @@ _dump_thread_info(Thread *thread, bool shortInfo)
 					kprintf("rwlock    %p   ", thread->wait.object);
 					break;
 
+				case THREAD_BLOCK_TYPE_USER:
+					kprintf("user%*s", B_PRINTF_POINTER_WIDTH + 11, "");
+					break;
+
 				case THREAD_BLOCK_TYPE_OTHER:
 					kprintf("other%*s", B_PRINTF_POINTER_WIDTH + 10, "");
+					break;
+
+				case THREAD_BLOCK_TYPE_OTHER_OBJECT:
+					kprintf("other     %p   ", thread->wait.object);
 					break;
 
 				default:
@@ -1708,8 +1762,7 @@ _dump_thread_info(Thread *thread, bool shortInfo)
 			kprintf(" -");
 
 		kprintf("%4" B_PRId32 "  %p%5" B_PRId32 "  %s\n", thread->priority,
-			(void *)thread->kernel_stack_base, thread->team->id,
-			thread->name != NULL ? thread->name : "<NULL>");
+			(void *)thread->kernel_stack_base, thread->team->id, thread->name);
 
 		return;
 	}
@@ -1733,6 +1786,7 @@ _dump_thread_info(Thread *thread, bool shortInfo)
 		kprintf("(%d)\n", thread->cpu->cpu_num);
 	else
 		kprintf("\n");
+	kprintf("cpumask:            %#" B_PRIx32 "\n", thread->cpumask.Bits(0));
 	kprintf("sig_pending:        %#" B_PRIx64 " (blocked: %#" B_PRIx64
 		", before sigsuspend(): %#" B_PRIx64 ")\n",
 		(int64)thread->ThreadPendingSignals(),
@@ -1774,8 +1828,16 @@ _dump_thread_info(Thread *thread, bool shortInfo)
 				kprintf("rwlock %p\n", thread->wait.object);
 				break;
 
+			case THREAD_BLOCK_TYPE_USER:
+				kprintf("user\n");
+				break;
+
 			case THREAD_BLOCK_TYPE_OTHER:
 				kprintf("other (%s)\n", (char*)thread->wait.object);
+				break;
+
+			case THREAD_BLOCK_TYPE_OTHER_OBJECT:
+				kprintf("other (%p)\n", thread->wait.object);
 				break;
 
 			default:
@@ -1918,6 +1980,16 @@ dump_thread_list(int argc, char **argv)
 		_dump_thread_info(thread, true);
 	}
 	return 0;
+}
+
+
+static void
+update_thread_sigmask_on_exit(Thread* thread)
+{
+	if ((thread->flags & THREAD_FLAGS_OLD_SIGMASK) != 0) {
+		thread->flags &= ~THREAD_FLAGS_OLD_SIGMASK;
+		sigprocmask(SIG_SETMASK, &thread->old_sig_block_mask, NULL);
+	}
 }
 
 
@@ -2122,17 +2194,8 @@ thread_exit(void)
 				threadDeathEntry->thread = thread->id;
 				threadDeathEntry->status = thread->exit.status;
 
-				// add entry -- remove an old one, if we hit the limit
+				// add entry to dead thread list
 				list_add_item(&team->dead_threads, threadDeathEntry);
-				team->dead_threads_count++;
-				threadDeathEntry = NULL;
-
-				if (team->dead_threads_count > MAX_DEAD_THREADS) {
-					threadDeathEntry
-						= (thread_death_entry*)list_remove_head_item(
-							&team->dead_threads);
-					team->dead_threads_count--;
-				}
 			}
 
 			threadCreationLocker.Unlock();
@@ -2146,8 +2209,6 @@ thread_exit(void)
 		TRACE(("thread_exit: thread %" B_PRId32 " now a kernel thread!\n",
 			thread->id));
 	}
-
-	free(threadDeathEntry);
 
 	// delete the team if we're its main thread
 	if (deleteTeam) {
@@ -2163,7 +2224,7 @@ thread_exit(void)
 	SpinLocker threadCreationLocker(gThreadCreationLock);
 
 	// mark invisible in global hash/list, so it's no longer accessible
-	SpinLocker threadHashLocker(sThreadHashLock);
+	WriteSpinLocker threadHashLocker(sThreadHashLock);
 	thread->visible = false;
 	sUsedThreads--;
 	threadHashLocker.Unlock();
@@ -2190,9 +2251,10 @@ thread_exit(void)
 	while (info != NULL) {
 		select_sync* sync = info->sync;
 
+		select_info* next = info->next;
 		notify_select_events(info, B_EVENT_INVALID);
-		info = info->next;
 		put_select_sync(sync);
+		info = next;
 	}
 
 	// notify listeners
@@ -2253,7 +2315,7 @@ thread_exit(void)
 
 	// notify the debugger
 	if (teamID != kernelTeam->id)
-		user_debug_thread_deleted(teamID, thread->id);
+		user_debug_thread_deleted(teamID, thread->id, thread->exit.status);
 
 	// enqueue in the undertaker list and reschedule for the last time
 	UndertakerEntry undertakerEntry(thread, teamID);
@@ -2312,6 +2374,8 @@ thread_at_kernel_exit(void)
 
 	disable_interrupts();
 
+	update_thread_sigmask_on_exit(thread);
+
 	// track kernel time
 	bigtime_t now = system_time();
 	SpinLocker threadTimeLocker(thread->time_lock);
@@ -2332,6 +2396,8 @@ thread_at_kernel_exit_no_signals(void)
 
 	TRACE(("thread_at_kernel_exit_no_signals: exit thread %" B_PRId32 "\n",
 		thread->id));
+
+	update_thread_sigmask_on_exit(thread);
 
 	// track kernel time
 	bigtime_t now = system_time();
@@ -2374,7 +2440,7 @@ thread_reset_for_exec(void)
 thread_id
 allocate_thread_id()
 {
-	InterruptsSpinLocker threadHashLocker(sThreadHashLock);
+	InterruptsWriteSpinLocker threadHashLocker(sThreadHashLock);
 
 	// find the next unused ID
 	thread_id id;
@@ -2395,7 +2461,7 @@ allocate_thread_id()
 thread_id
 peek_next_thread_id()
 {
-	InterruptsSpinLocker threadHashLocker(sThreadHashLock);
+	InterruptsReadSpinLocker threadHashLocker(sThreadHashLock);
 	return sNextThreadID;
 }
 
@@ -2422,7 +2488,7 @@ thread_yield(void)
 void
 thread_map(void (*function)(Thread* thread, void* data), void* data)
 {
-	InterruptsSpinLocker threadHashLocker(sThreadHashLock);
+	InterruptsWriteSpinLocker threadHashLocker(sThreadHashLock);
 
 	for (ThreadHashTable::Iterator it = sThreadHash.GetIterator();
 		Thread* thread = it.Next();) {
@@ -2449,6 +2515,8 @@ wait_for_thread_etc(thread_id id, uint32 flags, bigtime_t timeout,
 {
 	if (id < 0)
 		return B_BAD_THREAD_ID;
+	if (id == thread_get_current_thread_id())
+		return EDEADLK;
 
 	// get the thread, queue our death entry, and fetch the semaphore we have to
 	// wait on
@@ -2488,7 +2556,6 @@ wait_for_thread_etc(thread_id id, uint32 flags, bigtime_t timeout,
 					&team->dead_threads, threadDeathEntry)) != NULL) {
 				if (threadDeathEntry->thread == id) {
 					list_remove_item(&team->dead_threads, threadDeathEntry);
-					team->dead_threads_count--;
 					death.status = threadDeathEntry->status;
 					free(threadDeathEntry);
 					break;
@@ -2562,7 +2629,7 @@ select_thread(int32 id, struct select_info* info, bool kernel)
 		thread->select_infos = info;
 
 		// we need a sync reference
-		atomic_add(&info->sync->ref_count, 1);
+		acquire_select_sync(info->sync);
 	}
 
 	return B_OK;
@@ -2608,7 +2675,7 @@ thread_max_threads(void)
 int32
 thread_used_threads(void)
 {
-	InterruptsSpinLocker threadHashLocker(sThreadHashLock);
+	InterruptsReadSpinLocker threadHashLocker(sThreadHashLock);
 	return sUsedThreads;
 }
 
@@ -2663,9 +2730,9 @@ thread_init(kernel_args *args)
 		panic("thread_init(): failed to init thread hash table!");
 
 	// create the thread structure object cache
-	sThreadCache = create_object_cache("threads", sizeof(Thread), 16, NULL,
+	sThreadCache = create_object_cache("threads", sizeof(Thread), 64, NULL,
 		NULL, NULL);
-		// Note: The x86 port requires 16 byte alignment of thread structures.
+		// Note: The x86 port requires 64 byte alignment of thread structures.
 	if (sThreadCache == NULL)
 		panic("thread_init(): failed to allocate thread object cache!");
 
@@ -2694,6 +2761,7 @@ thread_init(kernel_args *args)
 		thread->team = team_get_kernel_team();
 		thread->priority = B_IDLE_PRIORITY;
 		thread->state = B_THREAD_RUNNING;
+
 		sprintf(name, "idle thread %" B_PRIu32 " kstack", i + 1);
 		thread->kernel_stack_area = find_area(name);
 
@@ -2810,12 +2878,13 @@ thread_preboot_init_percpu(struct kernel_args *args, int32 cpuNum)
 //	#pragma mark - thread blocking API
 
 
-static status_t
+static int32
 thread_block_timeout(timer* timer)
 {
 	Thread* thread = (Thread*)timer->user_data;
 	thread_unblock(thread, B_TIMED_OUT);
 
+	timer->user_data = NULL;
 	return B_HANDLED_INTERRUPT;
 }
 
@@ -2866,15 +2935,14 @@ thread_block()
 
 /*!	Blocks the current thread with a timeout.
 
-	The thread is blocked until someone else unblock it or the specified timeout
-	occurs. Must be called after a call to thread_prepare_to_block(). If the
-	thread has already been unblocked after the previous call to
+	The current thread is blocked until someone else unblock it or the specified
+	timeout occurs. Must be called after a call to thread_prepare_to_block(). If
+	the thread has already been unblocked after the previous call to
 	thread_prepare_to_block(), this function will return immediately. See
 	thread_prepare_to_block() for more details.
 
 	The caller must not hold the scheduler lock.
 
-	\param thread The current thread.
 	\param timeoutFlags The standard timeout flags:
 		- \c B_RELATIVE_TIMEOUT: \a timeout specifies the time to wait.
 		- \c B_ABSOLUTE_TIMEOUT: \a timeout specifies the absolute end time when
@@ -2901,7 +2969,7 @@ thread_block_with_timeout(uint32 timeoutFlags, bigtime_t timeout)
 	if (thread->wait.status != 1)
 		return thread->wait.status;
 
-	bool useTimer = (timeoutFlags & (B_RELATIVE_TIMEOUT | B_ABSOLUTE_TIMEOUT))
+	bool useTimer = (timeoutFlags & (B_RELATIVE_TIMEOUT | B_ABSOLUTE_TIMEOUT)) != 0
 		&& timeout != B_INFINITE_TIMEOUT;
 
 	if (useTimer) {
@@ -2921,13 +2989,12 @@ thread_block_with_timeout(uint32 timeoutFlags, bigtime_t timeout)
 			timerFlags);
 	}
 
-	// block
 	status_t error = thread_block_locked(thread);
 
 	locker.Unlock();
 
 	// cancel timer, if it didn't fire
-	if (error != B_TIMED_OUT && useTimer)
+	if (useTimer && thread->wait.unblock_timer.user_data != NULL)
 		cancel_timer(&thread->wait.unblock_timer);
 
 	return error;
@@ -2965,15 +3032,66 @@ user_unblock_thread(thread_id threadID, status_t status)
 
 	InterruptsSpinLocker locker(thread->scheduler_lock);
 
-	set_ac();
-	if (thread->user_thread->wait_status > 0) {
-		thread->user_thread->wait_status = status;
-		clear_ac();
-		thread_unblock_locked(thread, status);
-	} else
-		clear_ac();
+	status_t waitStatus;
+	if (user_memcpy(&waitStatus, &thread->user_thread->wait_status,
+			sizeof(waitStatus)) < B_OK) {
+		return B_BAD_ADDRESS;
+	}
+	if (waitStatus > 0) {
+		if (user_memcpy(&thread->user_thread->wait_status, &status,
+				sizeof(status)) < B_OK) {
+			return B_BAD_ADDRESS;
+		}
 
+		// Even if the user_thread->wait_status was > 0, it may be the
+		// case that this thread is actually blocked on something else.
+		if (thread->wait.status > 0
+				&& thread->wait.type == THREAD_BLOCK_TYPE_USER) {
+			thread_unblock_locked(thread, status);
+		}
+	}
 	return B_OK;
+}
+
+
+static bool
+thread_check_permissions(const Thread* currentThread, const Thread* thread,
+	bool kernel)
+{
+	if (kernel)
+		return true;
+
+	if (thread->team->id == team_get_kernel_team_id())
+		return false;
+
+	if (thread->team == currentThread->team
+			|| currentThread->team->effective_uid == 0
+			|| thread->team->real_uid == currentThread->team->real_uid)
+		return true;
+
+	return false;
+}
+
+
+static status_t
+thread_send_signal(thread_id id, uint32 number, int32 signalCode,
+	int32 errorCode, bool kernel)
+{
+	if (id <= 0)
+		return B_BAD_VALUE;
+
+	Thread* currentThread = thread_get_current_thread();
+	Thread* thread = Thread::Get(id);
+	if (thread == NULL)
+		return B_BAD_THREAD_ID;
+	BReference<Thread> threadReference(thread, true);
+
+	// check whether sending the signal is allowed
+	if (!thread_check_permissions(currentThread, thread, kernel))
+		return B_NOT_ALLOWED;
+
+	Signal signal(number, signalCode, errorCode, currentThread->team->id);
+	return send_signal_to_thread(thread, signal, 0);
 }
 
 
@@ -3014,16 +3132,17 @@ exit_thread(status_t returnValue)
 }
 
 
+static status_t
+thread_kill_thread(thread_id id, bool kernel)
+{
+	return thread_send_signal(id, SIGKILLTHR, SI_USER, B_OK, kernel);
+}
+
+
 status_t
 kill_thread(thread_id id)
 {
-	if (id <= 0)
-		return B_BAD_VALUE;
-
-	Thread* currentThread = thread_get_current_thread();
-
-	Signal signal(SIGKILLTHR, SI_USER, B_OK, currentThread->team->id);
-	return send_signal_to_thread_id(id, signal, 0);
+	return thread_kill_thread(id, true);
 }
 
 
@@ -3041,17 +3160,37 @@ receive_data(thread_id *sender, void *buffer, size_t bufferSize)
 }
 
 
-bool
-has_data(thread_id thread)
+static bool
+thread_has_data(thread_id id, bool kernel)
 {
-	// TODO: The thread argument is ignored.
-	int32 count;
+	Thread* currentThread = thread_get_current_thread();
+	Thread* thread;
+	BReference<Thread> threadReference;
+	if (id == currentThread->id) {
+		thread = currentThread;
+	} else {
+		thread = Thread::Get(id);
+		if (thread == NULL)
+			return false;
 
-	if (get_sem_count(thread_get_current_thread()->msg.read_sem,
-			&count) != B_OK)
+		threadReference.SetTo(thread, true);
+	}
+
+	if (!kernel && thread->team != currentThread->team)
+		return false;
+
+	int32 count;
+	if (get_sem_count(thread->msg.read_sem, &count) != B_OK)
 		return false;
 
 	return count == 0 ? false : true;
+}
+
+
+bool
+has_data(thread_id thread)
+{
+	return thread_has_data(thread, true);
 }
 
 
@@ -3133,10 +3272,11 @@ find_thread(const char* name)
 	if (name == NULL)
 		return thread_get_current_thread_id();
 
-	InterruptsSpinLocker threadHashLocker(sThreadHashLock);
+	InterruptsReadSpinLocker threadHashLocker(sThreadHashLock);
 
-	// TODO: Scanning the whole hash with the thread hash lock held isn't
-	// exactly cheap -- although this function is probably used very rarely.
+	// Scanning the whole hash with the thread hash lock held isn't exactly
+	// cheap, but since this function is probably used very rarely, and we
+	// only need a read lock, it's probably acceptable.
 
 	for (ThreadHashTable::Iterator it = sThreadHash.GetIterator();
 			Thread* thread = it.Next();) {
@@ -3182,8 +3322,8 @@ rename_thread(thread_id id, const char* name)
 }
 
 
-status_t
-set_thread_priority(thread_id id, int32 priority)
+static status_t
+thread_set_thread_priority(thread_id id, int32 priority, bool kernel)
 {
 	// make sure the passed in priority is within bounds
 	if (priority > THREAD_MAX_SET_PRIORITY)
@@ -3199,10 +3339,18 @@ set_thread_priority(thread_id id, int32 priority)
 	ThreadLocker threadLocker(thread, true);
 
 	// check whether the change is allowed
-	if (thread_is_idle_thread(thread))
+	if (thread_is_idle_thread(thread) || !thread_check_permissions(
+			thread_get_current_thread(), thread, kernel))
 		return B_NOT_ALLOWED;
 
 	return scheduler_set_thread_priority(thread, priority);
+}
+
+
+status_t
+set_thread_priority(thread_id id, int32 priority)
+{
+	return thread_set_thread_priority(id, priority, true);
 }
 
 
@@ -3238,33 +3386,34 @@ wait_for_thread(thread_id thread, status_t *_returnCode)
 }
 
 
+static status_t
+thread_suspend_thread(thread_id id, bool kernel)
+{
+	return thread_send_signal(id, SIGSTOP, SI_USER, B_OK, kernel);
+}
+
+
 status_t
 suspend_thread(thread_id id)
 {
-	if (id <= 0)
-		return B_BAD_VALUE;
+	return thread_suspend_thread(id, true);
+}
 
-	Thread* currentThread = thread_get_current_thread();
 
-	Signal signal(SIGSTOP, SI_USER, B_OK, currentThread->team->id);
-	return send_signal_to_thread_id(id, signal, 0);
+static status_t
+thread_resume_thread(thread_id id, bool kernel)
+{
+	// Using the kernel internal SIGNAL_CONTINUE_THREAD signal retains
+	// compatibility to BeOS which documents the combination of suspend_thread()
+	// and resume_thread() to interrupt threads waiting on semaphores.
+	return thread_send_signal(id, SIGNAL_CONTINUE_THREAD, SI_USER, B_OK, kernel);
 }
 
 
 status_t
 resume_thread(thread_id id)
 {
-	if (id <= 0)
-		return B_BAD_VALUE;
-
-	Thread* currentThread = thread_get_current_thread();
-
-	// Using the kernel internal SIGNAL_CONTINUE_THREAD signal retains
-	// compatibility to BeOS which documents the combination of suspend_thread()
-	// and resume_thread() to interrupt threads waiting on semaphores.
-	Signal signal(SIGNAL_CONTINUE_THREAD, SI_USER, B_OK,
-		currentThread->team->id);
-	return send_signal_to_thread_id(id, signal, 0);
+	return thread_resume_thread(id, true);
 }
 
 
@@ -3317,8 +3466,7 @@ _user_exit_thread(status_t returnValue)
 status_t
 _user_kill_thread(thread_id thread)
 {
-	// TODO: Don't allow kernel threads to be killed!
-	return kill_thread(thread);
+	return thread_kill_thread(thread, false);
 }
 
 
@@ -3353,16 +3501,14 @@ _user_cancel_thread(thread_id threadID, void (*cancelFunction)(int))
 status_t
 _user_resume_thread(thread_id thread)
 {
-	// TODO: Don't allow kernel threads to be resumed!
-	return resume_thread(thread);
+	return thread_resume_thread(thread, false);
 }
 
 
 status_t
 _user_suspend_thread(thread_id thread)
 {
-	// TODO: Don't allow kernel threads to be suspended!
-	return suspend_thread(thread);
+	return thread_suspend_thread(thread, false);
 }
 
 
@@ -3376,7 +3522,8 @@ _user_rename_thread(thread_id thread, const char *userName)
 		|| user_strlcpy(name, userName, B_OS_NAME_LENGTH) < B_OK)
 		return B_BAD_ADDRESS;
 
-	// TODO: Don't allow kernel threads to be renamed!
+	// rename_thread() forbids thread renames across teams, so we don't
+	// need a "kernel" flag here.
 	return rename_thread(thread, name);
 }
 
@@ -3384,8 +3531,7 @@ _user_rename_thread(thread_id thread, const char *userName)
 int32
 _user_set_thread_priority(thread_id thread, int32 newPriority)
 {
-	// TODO: Don't allow setting priority of kernel threads!
-	return set_thread_priority(thread, newPriority);
+	return thread_set_thread_priority(thread, newPriority, false);
 }
 
 
@@ -3578,10 +3724,32 @@ _user_wait_for_thread(thread_id id, status_t *userReturnCode)
 }
 
 
+status_t
+_user_wait_for_thread_etc(thread_id id, uint32 flags, bigtime_t timeout, status_t *userReturnCode)
+{
+	status_t returnCode;
+	status_t status;
+
+	if (userReturnCode != NULL && !IS_USER_ADDRESS(userReturnCode))
+		return B_BAD_ADDRESS;
+
+	syscall_restart_handle_timeout_pre(flags, timeout);
+
+	status = wait_for_thread_etc(id, flags | B_CAN_INTERRUPT, timeout, &returnCode);
+
+	if (status == B_OK && userReturnCode != NULL
+		&& user_memcpy(userReturnCode, &returnCode, sizeof(status_t)) < B_OK) {
+		return B_BAD_ADDRESS;
+	}
+
+	return syscall_restart_handle_timeout_post(status, timeout);
+}
+
+
 bool
 _user_has_data(thread_id thread)
 {
-	return has_data(thread);
+	return thread_has_data(thread, false);
 }
 
 
@@ -3589,7 +3757,7 @@ status_t
 _user_send_data(thread_id thread, int32 code, const void *buffer,
 	size_t bufferSize)
 {
-	if (!IS_USER_ADDRESS(buffer))
+	if (buffer != NULL && !IS_USER_ADDRESS(buffer))
 		return B_BAD_ADDRESS;
 
 	return send_data_etc(thread, code, buffer, bufferSize,
@@ -3605,8 +3773,9 @@ _user_receive_data(thread_id *_userSender, void *buffer, size_t bufferSize)
 	status_t code;
 
 	if ((!IS_USER_ADDRESS(_userSender) && _userSender != NULL)
-		|| !IS_USER_ADDRESS(buffer))
+		|| (!IS_USER_ADDRESS(buffer) && buffer != NULL)) {
 		return B_BAD_ADDRESS;
+	}
 
 	code = receive_data_etc(&sender, buffer, bufferSize, B_KILL_CAN_INTERRUPT);
 		// supports userland buffers
@@ -3629,16 +3798,22 @@ _user_block_thread(uint32 flags, bigtime_t timeout)
 	ThreadLocker threadLocker(thread);
 
 	// check, if already done
-	set_ac();
-	if (thread->user_thread->wait_status <= 0) {
-		status_t status = thread->user_thread->wait_status;
-		clear_ac();
-		return status;
+	status_t waitStatus;
+	if (user_memcpy(&waitStatus, &thread->user_thread->wait_status,
+			sizeof(waitStatus)) < B_OK) {
+		return B_BAD_ADDRESS;
 	}
-	clear_ac();
+	if (waitStatus <= 0)
+		return waitStatus;
 
 	// nope, so wait
-	thread_prepare_to_block(thread, flags, THREAD_BLOCK_TYPE_OTHER, "user");
+	// Note: GCC 13 marks the following call as potentially overflowing, since it thinks `thread`
+	//       may be `nullptr`. This cannot be the case in reality, therefore ignore this specific
+	//       error.
+	#pragma GCC diagnostic push
+	#pragma GCC diagnostic ignored "-Wstringop-overflow"
+	thread_prepare_to_block(thread, flags, THREAD_BLOCK_TYPE_USER, NULL);
+	#pragma GCC diagnostic pop
 
 	threadLocker.Unlock();
 
@@ -3649,13 +3824,17 @@ _user_block_thread(uint32 flags, bigtime_t timeout)
 	// Interruptions or timeouts can race with other threads unblocking us.
 	// Favor a wake-up by another thread, i.e. if someone changed the wait
 	// status, use that.
-	set_ac();
-	status_t oldStatus = thread->user_thread->wait_status;
+	status_t oldStatus;
+	if (user_memcpy(&oldStatus, &thread->user_thread->wait_status,
+		sizeof(oldStatus)) < B_OK) {
+		return B_BAD_ADDRESS;
+	}
 	if (oldStatus > 0) {
-		thread->user_thread->wait_status = status;
-		clear_ac();
+		if (user_memcpy(&thread->user_thread->wait_status, &status,
+				sizeof(status)) < B_OK) {
+			return B_BAD_ADDRESS;
+		}
 	} else {
-		clear_ac();
 		status = oldStatus;
 	}
 
@@ -3745,4 +3924,78 @@ _user_setrlimit(int resource, const struct rlimit *userResourceLimit)
 		return B_BAD_ADDRESS;
 
 	return common_setrlimit(resource, &resourceLimit);
+}
+
+
+int
+_user_get_cpu()
+{
+	Thread* thread = thread_get_current_thread();
+	return thread->cpu->cpu_num;
+}
+
+
+status_t
+_user_get_thread_affinity(thread_id id, void* userMask, size_t size)
+{
+	if (userMask == NULL || id < B_OK)
+		return B_BAD_VALUE;
+
+	if (!IS_USER_ADDRESS(userMask))
+		return B_BAD_ADDRESS;
+
+	CPUSet mask;
+
+	if (id == 0)
+		id = thread_get_current_thread_id();
+	// get the thread
+	Thread* thread = Thread::GetAndLock(id);
+	if (thread == NULL)
+		return B_BAD_THREAD_ID;
+	BReference<Thread> threadReference(thread, true);
+	ThreadLocker threadLocker(thread, true);
+	memcpy(&mask, &thread->cpumask, sizeof(mask));
+
+	if (user_memcpy(userMask, &mask, min_c(sizeof(mask), size)) < B_OK)
+		return B_BAD_ADDRESS;
+
+	return B_OK;
+}
+
+status_t
+_user_set_thread_affinity(thread_id id, const void* userMask, size_t size)
+{
+	if (userMask == NULL || id < B_OK || size < sizeof(CPUSet))
+		return B_BAD_VALUE;
+
+	if (!IS_USER_ADDRESS(userMask))
+		return B_BAD_ADDRESS;
+
+	CPUSet mask;
+	if (user_memcpy(&mask, userMask, min_c(sizeof(CPUSet), size)) < B_OK)
+		return B_BAD_ADDRESS;
+
+	CPUSet cpus;
+	cpus.SetAll();
+	for (int i = 0; i < smp_get_num_cpus(); i++)
+		cpus.ClearBit(i);
+	if (mask.Matches(cpus))
+		return B_BAD_VALUE;
+
+	if (id == 0)
+		id = thread_get_current_thread_id();
+
+	// get the thread
+	Thread* thread = Thread::GetAndLock(id);
+	if (thread == NULL)
+		return B_BAD_THREAD_ID;
+	BReference<Thread> threadReference(thread, true);
+	ThreadLocker threadLocker(thread, true);
+	memcpy(&thread->cpumask, &mask, sizeof(mask));
+
+	// check if running on masked cpu
+	if (!thread->cpumask.GetBit(thread->cpu->cpu_num))
+		thread_yield();
+
+	return B_OK;
 }

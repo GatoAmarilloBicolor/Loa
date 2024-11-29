@@ -250,7 +250,7 @@ ReplaceChange::Apply(off_t bufferOffset, uint8 *buffer, size_t bufferSize)
 		return;
 
 #ifdef TRACE_DATA_EDITOR
-	printf("Apply %p (buffer offset = %Ld):\n", this, bufferOffset);
+	printf("Apply %p (buffer offset = %lld):\n", this, bufferOffset);
 	dump_block(buffer + offset - bufferOffset, size, "old:");
 	dump_block(fNewData + dataOffset, size, "new:");
 #endif
@@ -279,7 +279,7 @@ ReplaceChange::Revert(off_t bufferOffset, uint8 *buffer, size_t bufferSize)
 		return;
 
 #ifdef TRACE_DATA_EDITOR
-	printf("Revert %p (buffer offset = %Ld):\n", this, bufferOffset);
+	printf("Revert %p (buffer offset = %lld):\n", this, bufferOffset);
 	dump_block(buffer + offset - bufferOffset, size, "old:");
 	dump_block(fOldData + dataOffset, size, "new:");
 #endif
@@ -303,7 +303,7 @@ ReplaceChange::Merge(DataChange *_change)
 		// in hex mode editing.
 		fNewData[fSize - 1] = change->fNewData[0];
 #ifdef TRACE_DATA_EDITOR
-		printf("Merge one byte %p (offset = %Ld, size = %lu):\n", this, fOffset,
+		printf("Merge one byte %p (offset = %lld, size = %lu):\n", this, fOffset,
 			fSize);
 		dump_block(fOldData, fSize, "old:");
 		dump_block(fNewData, fSize, "new:");
@@ -349,7 +349,7 @@ ReplaceChange::Merge(DataChange *_change)
 	fSize = size;
 
 #ifdef TRACE_DATA_EDITOR
-	printf("Merge %p (offset = %Ld, size = %lu):\n", this, fOffset, fSize);
+	printf("Merge %p (offset = %lld, size = %lu):\n", this, fOffset, fSize);
 	dump_block(fOldData, fSize, "old:");
 	dump_block(fNewData, fSize, "new:");
 #endif
@@ -499,7 +499,8 @@ DataEditor::SetTo(BEntry &entry, const char *attribute)
 	} else if (fIsDevice) {
 		device_geometry geometry;
 		int device = fFile.Dup();
-		if (device < 0 || ioctl(device, B_GET_GEOMETRY, &geometry) < 0) {
+		if (device < 0 || ioctl(device, B_GET_GEOMETRY, &geometry,
+				sizeof(geometry)) < 0) {
 			if (device >= 0)
 				close(device);
 			fFile.Unset();
@@ -1061,8 +1062,10 @@ DataEditor::GetViewBuffer(const uint8 **_buffer)
 		debugger("DataEditor: view not locked");
 
 	status_t status = UpdateIfNeeded();
-	if (status < B_OK)
+	if (status != B_OK)
 		return status;
+	if (fView == NULL)
+		return B_NO_INIT;
 
 	*_buffer = fView + fViewOffset - fRealViewOffset;
 	return B_OK;

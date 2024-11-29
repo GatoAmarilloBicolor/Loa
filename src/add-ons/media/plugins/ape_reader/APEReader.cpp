@@ -68,10 +68,10 @@ TAPEReader::GetFileFormatInfo(media_file_format* oMFF)
 			| media_file_format::B_KNOWS_ENCODED_AUDIO;
 	oMFF->family = B_ANY_FORMAT_FAMILY;
 	oMFF->version = MEDIA_FILE_FORMAT_VERSION;
-	strcpy(oMFF->mime_type, MIME_TYPE_APE);
-	strcpy(oMFF->pretty_name, MIME_TYPE_APE_LONG_DESCRIPTION);
-	strcpy(oMFF->short_name, MIME_TYPE_APE_SHORT_DESCRIPTION);
-	strcpy(oMFF->file_extension, MIME_TYPE_APE_EXTENSION);
+	strlcpy(oMFF->mime_type, MIME_TYPE_APE, sizeof(oMFF->mime_type));
+	strlcpy(oMFF->pretty_name, MIME_TYPE_APE_LONG_DESCRIPTION, sizeof(oMFF->pretty_name));
+	strlcpy(oMFF->short_name, MIME_TYPE_APE_SHORT_DESCRIPTION, sizeof(oMFF->short_name));
+	strlcpy(oMFF->file_extension, MIME_TYPE_APE_EXTENSION, sizeof(oMFF->file_extension));
 }
 
 
@@ -167,11 +167,11 @@ TAPEReader::FindKeyFrame(void* cookie, uint32 flags, int64* frame,
 	if (flags & B_MEDIA_SEEK_TO_FRAME) {
 		*time = *frame * 1000 /  mDecomp->GetInfo(APE_DECOMPRESS_TOTAL_BLOCKS)
 			* mDecomp->GetInfo(APE_DECOMPRESS_LENGTH_MS);
-		printf("FindKeyFrame for frame %Ld: %Ld\n", *frame, *time);
+		printf("FindKeyFrame for frame %lld: %lld\n", *frame, *time);
 	} else if (flags & B_MEDIA_SEEK_TO_TIME) {
 		*frame = (*time) / 1000 * mDecomp->GetInfo(APE_DECOMPRESS_TOTAL_BLOCKS)
 			/ mDecomp->GetInfo(APE_DECOMPRESS_LENGTH_MS);
-		printf("FindKeyFrame for time %Ld: %Ld\n", *time, *frame);
+		printf("FindKeyFrame for time %lld: %lld\n", *time, *frame);
 	} else
 		return B_ERROR;
 
@@ -185,10 +185,10 @@ TAPEReader::Seek(void *cookie, uint32 flags, int64 *frame, bigtime_t *time)
 	int32 aNewBlock;
 
 	if (flags & B_MEDIA_SEEK_TO_FRAME) {
-		printf("Seek to frame %Ld\n", *frame);
+		printf("Seek to frame %lld\n", *frame);
 		aNewBlock = *frame;
 	} else if (flags & B_MEDIA_SEEK_TO_TIME) {
-		printf("Seek for time %Ld\n", *time);
+		printf("Seek for time %lld\n", *time);
 		aNewBlock = (*time) / 1000 * mDecomp->GetInfo(APE_DECOMPRESS_TOTAL_BLOCKS)
 			/ mDecomp->GetInfo(APE_DECOMPRESS_LENGTH_MS);
 	} else

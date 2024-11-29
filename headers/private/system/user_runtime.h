@@ -15,7 +15,7 @@
 
 #define MAGIC_APP_NAME	"_APP_"
 
-#define MAX_PROCESS_ARGS_SIZE	(128 * 1024)
+#define MAX_PROCESS_ARGS_SIZE	(256 * 1024)
 	// maximal total size needed for process arguments and environment strings
 
 
@@ -29,6 +29,7 @@ struct user_space_program_args {
 	char	**args;
 	char	**env;
 	mode_t	umask;	// (mode_t)-1 means not set
+	bool	disable_user_addons;
 };
 
 #endif	/* KERNEL_USER_RUNTIME_H_ */

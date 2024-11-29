@@ -25,7 +25,7 @@ using namespace BPackageKit::BPrivate;
 
 static const char* const kShortUsage =
 	"  %command%\n"
-	"    Synchronizes the installed packages with the repositories.\n";
+	"    Synchronizes the installed packages with the repositories (even by downgrading).\n";
 
 static const char* const kLongUsage =
 	"Usage: %program% %command%\n"
@@ -47,7 +47,7 @@ static const char* const kLongUsage =
 
 
 DEFINE_COMMAND(FullSyncCommand, "full-sync", kShortUsage, kLongUsage,
-	kCommandCategoryPackages)
+	COMMAND_CATEGORY_PACKAGES)
 
 
 int

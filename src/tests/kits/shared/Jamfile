@@ -1,6 +1,5 @@
 SubDir HAIKU_TOP src tests kits shared ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
 AddSubDirSupportedPlatforms libbe_test ;
 
 UsePrivateHeaders shared ;
@@ -9,12 +8,16 @@ UnitTestLib libsharedtest.so :
 	SharedTestAddon.cpp
 
 	CalendarViewTest.cpp
+	ChecksumJsonEventListener.cpp
 	DriverSettingsMessageAdapterTest.cpp
+	FakeJsonDataGenerator.cpp
 	JsonEndToEndTest.cpp
 	JsonErrorHandlingTest.cpp
 	JsonTextWriterTest.cpp
 	JsonToMessageTest.cpp
-	GeolocationTest.cpp
+	KeymapTest.cpp
+	LRUCacheTest.cpp
+	MemoryRingIOTest.cpp
 	NaturalCompareTest.cpp
 
 	: be shared bnetapi [ TargetLibstdc++ ] [ TargetLibsupc++ ]

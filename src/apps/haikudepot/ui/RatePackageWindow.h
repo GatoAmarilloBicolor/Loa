@@ -1,11 +1,14 @@
 /*
  * Copyright 2014, Stephan Aßmus <superstippi@gmx.de>.
- * Copyright 2018, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2018-2024, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #ifndef RATE_PACKAGE_WINDOW_H
 #define RATE_PACKAGE_WINDOW_H
 
+#include <vector>
+
+#include <PopUpMenu.h>
 #include <Window.h>
 
 #include "Model.h"
@@ -27,13 +30,15 @@ public:
 									Model& model);
 	virtual						~RatePackageWindow();
 
-	virtual	void				DispatchMessage(BMessage* message,
-									BHandler *handler);
 	virtual	void				MessageReceived(BMessage* message);
 
 			void				SetPackage(const PackageInfoRef& package);
 
 private:
+			void				_InitLanguagesMenu(BPopUpMenu* menu);
+			void				_InitStabilitiesMenu(BPopUpMenu* menu);
+			void				_MarkStabilityInMenu(BString* code);
+
 			void				_RelayServerDataToUI(BMessage& result);
 
 			void				_SendRating();
@@ -53,9 +58,9 @@ private:
 			TextDocumentRef		fRatingText;
 			TextEditorRef		fTextEditor;
 			float				fRating;
-			BString				fStability;
-			StabilityRatingList	fStabilityCodes;
-			BString				fCommentLanguage;
+			bool				fRatingDeterminate;
+			BString				fStabilityCode;
+			BString				fCommentLanguageId;
 			BString				fRatingID;
 			bool				fRatingActive;
 			PackageInfoRef		fPackage;

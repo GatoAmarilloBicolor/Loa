@@ -23,6 +23,9 @@
 // name of the ACPI namespace device
 #define ACPI_NS_DUMP_DEVICE_MODULE_NAME "bus_managers/acpi/namespace/device_v1"
 
+// name of the ACPI call device
+#define ACPI_CALL_DEVICE_MODULE_NAME "bus_managers/acpi/call/device_v1"
+
 
 __BEGIN_DECLS
 
@@ -112,8 +115,8 @@ typedef struct acpi_root_info {
 	status_t	(*get_device)(const char *hid, uint32 index, char *result,
 					size_t resultLength);
 
-	status_t	(*get_device_hid)(const char *path, char *hid,
-					size_t hidLength);
+	status_t	(*get_device_info)(const char *path, char **hid,
+					char** cidList, size_t cidListCount, char** uid, char** cls);
 	uint32		(*get_object_type)(const char *path);
 	status_t	(*get_object)(const char *path,
 					acpi_object_type **_returnValue);
@@ -166,6 +169,8 @@ extern struct device_module_info embedded_controller_device_module;
 
 extern acpi_device_module_info gACPIDeviceModule;
 
+extern struct device_module_info gAcpiCallDeviceModule;
+
 
 status_t get_handle(acpi_handle parent, const char* pathname,
 	acpi_handle* retHandle);
@@ -213,12 +218,18 @@ status_t get_next_object(uint32 object_type, acpi_handle parent,
 status_t get_device(const char* hid, uint32 index, char* result,
 	size_t resultLength);
 
-status_t get_device_hid(const char* path, char* hid, size_t hidLength);
+status_t get_device_info(const char* path, char** hid, char** cidList,
+	size_t cidListCount, char** uniqueId, char** cls);
+status_t get_device_addr(const char* path, uint32* addr);
 uint32 get_object_type(const char* path);
 status_t get_object(const char* path, acpi_object_type** _returnValue);
 status_t get_object_typed(const char* path, acpi_object_type** _returnValue,
 	uint32 object_type);
 status_t ns_handle_to_pathname(acpi_handle targetHandle, acpi_data* buffer);
+status_t walk_namespace(acpi_handle busDeviceHandle, uint32 objectType,
+	uint32 maxDepth, acpi_walk_callback descendingCallback,
+	acpi_walk_callback ascendingCallback, void* context, void** returnValue);
+
 
 status_t evaluate_object(acpi_handle handle, const char* object,
 	acpi_objects* args, acpi_object_type* returnValue, size_t bufferLength);

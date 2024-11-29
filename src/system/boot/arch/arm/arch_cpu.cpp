@@ -1,12 +1,13 @@
 /*
- * Copyright 2012, Haiku, Inc.
+ * Copyright 2012-2022, Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
  *		Ithamar R. Adema <ithamar@upgrade-android.com>
  */
 
-#include "cpu.h"
+#include <boot/arch/arm/arch_cpu.h>
+#include <kernel/arch/arm/arch_cpu.h>
 
 #include <OS.h>
 #include <boot/platform.h>
@@ -16,15 +17,16 @@
 #include <arch/cpu.h>
 #include <arch_kernel.h>
 #include <arch_system_info.h>
-#include <arch_cpu.h>
 #include <string.h>
+
 
 #define TRACE_CPU
 #ifdef TRACE_CPU
-#	define TRACE(x) dprintf x
+#	define TRACE(x...) dprintf(x)
 #else
-#	define TRACE(x) ;
+#	define TRACE(x...) ;
 #endif
+
 
 /*! Detect ARM core version and features.
     Please note the fact that ARM7 and ARMv7 are two different things ;)
@@ -82,55 +84,14 @@ check_cpu_features()
 			break;
 	}
 
-	// TODO actually check for VFP support, and maybe there is a better place
-	// to do this.
-	if (arch >= ARCH_ARM_v7)
-	{
-		// Enable VFP/NEON. We HAVE to do this before the trace call below,
-		// which is the first time we call vprintf. Otherwise, it will crash
-		// when trying to push floating point registers on the stack.
-		asm volatile(
-		"	MRC p15, #0, r1, c1, c0, #2\n" // r1 = Access Control Register
-		"	ORR r1, r1, #(0xf << 20)\n" // enable full access for p10,11
-		"	MCR p15, #0, r1, c1, c0, #2\n" // Access Control Register = r1
-		"	MOV r1, #0\n"
-		"	MCR p15, #0, r1, c7, c5, #4\n" // flush prefetch buffer because of
-			// FMXR below and CP 10 & 11 were only just enabled
-		"	MOV r0,#0x40000000	\n" // Enable VFP itself
-		"	FMXR FPEXC, r0" //FPEXC = r0
-		:::"r0", "r1");
-	}
-
-
-	TRACE(("%s: implementor=0x%x('%c'), arch=%d, variant=0x%x, part=0x%x, revision=0x%x\n",
-		__func__, implementor, implementor, arch, variant, part, revision));
+	TRACE("%s: implementor=0x%x('%c'), arch=%d, variant=0x%x, part=0x%x, revision=0x%x\n",
+		__func__, implementor, implementor, arch, variant, part, revision);
 
 	return (arch < ARCH_ARM_v5) ? B_ERROR : B_OK;
 }
 
 
-extern "C" void
-arch_cpu_memory_read_barrier(void)
-{
-	asm volatile ("" : : : "memory");
-}
-
-
-extern "C" void
-arch_cpu_memory_write_barrier(void)
-{
-	asm volatile ("" : : : "memory");
-}
-
-
-extern "C" void
-arch_spin(bigtime_t microseconds)
-{
-	panic("No timing support in bootloader yet!");
-}
-
-
-extern "C" status_t
+status_t
 boot_arch_cpu_init(void)
 {
 	status_t err = check_cpu_features();
@@ -139,8 +100,12 @@ boot_arch_cpu_init(void)
 		return err;
 	}
 
-	gKernelArgs.num_cpus = 1;
-		// this will eventually be corrected later on
-
 	return B_OK;
+}
+
+
+void
+arch_ucode_load(BootVolume& volume)
+{
+	// NOP on arm currently
 }

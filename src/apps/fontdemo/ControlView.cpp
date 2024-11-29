@@ -294,10 +294,12 @@ ControlView::MessageReceived(BMessage* msg)
 					const_cast<char*>(currentFamilyItem->Label()));
 
 				BMenu* submenu = currentFamilyItem->Submenu();
-				if (submenu) {
-					BMenuItem* markedStyle = submenu->FindMarked();
-					fFontStyleindex = submenu->IndexOf(markedStyle);
+				if (submenu == NULL) {
+					printf("Failed to get style.\n");
+					return;
 				}
+				BMenuItem* markedStyle = submenu->FindMarked();
+				fFontStyleindex = submenu->IndexOf(markedStyle);
 
 				if (fFontStyleindex < installedStyles - 1)
 					fFontStyleindex++;
@@ -361,7 +363,7 @@ ControlView::_UpdateFontmenus(bool setInitialfont)
 
 	for (int32 i = 0; i < fontfamilies; i++) {
 		if (get_font_family(i, &fontFamilyName) == B_OK) {
-			stylemenu = new BPopUpMenu(fontFamilyName);
+			stylemenu = new BMenu(fontFamilyName);
 			stylemenu->SetLabelFromMarked(false);
 			const int32 styles = count_font_styles(fontFamilyName);
 
@@ -473,10 +475,10 @@ ControlView::_UpdateAndSendFamily(const BMessage* message)
 {
 	_DeselectOldItems();
 
-	font_family family;
+	const char* family;
 	font_style style;
 
-	if (message->FindString("_family", (const char **)&family) == B_OK) {
+	if (message->FindString("_family", &family) == B_OK) {
 		char* name;
 		type_code typeFound = 0;
 		int32 countFound = 0;
@@ -495,7 +497,7 @@ ControlView::_UpdateAndSendFamily(const BMessage* message)
 
 		markedItem->SetMarked(true);
 
-		get_font_style(family, 0, &style);
+		get_font_style((char*)family, 0, &style);
 
 		BString string;
 		string << family << " " << style;

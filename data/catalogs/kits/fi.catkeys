@@ -1,42 +1,50 @@
-1	finnish	x-vnd.Haiku-libbe	3337473349
+1	finnish	x-vnd.Haiku-libbe	1445751563
+All Rights Reserved.	AboutWindow		All Rights Reserved.
+gold master	AboutWindow		gold master
+Undo	TextView		Peru
+OK	PrintJob		Valmis
+OK	Dragger		Valmis
 gamma	AboutWindow		gamma
-beta	AboutWindow		beeta
-%3.2f GiB	StringForSize		%3.2f gibitavua
-Written by:	AboutWindow		Tekijä:
+development	AboutWindow		ohjelmakehitys
+{0, plural, one{%s byte/s} other{%s bytes/s}}	StringForRate	units per second	{0, plural, one{%s tavu/s} other{%s tavua/s}}
+Print Server is not responding.	PrintJob		Tulostuspalvelin ei vastaa.
 About %app%	AboutMenuItem		Ohjelmasta %app%
+Warning	Dragger		Varoitus
+Green:	ColorControl		Vihreä:
+Redo	TextView		Tee uudelleen
+No pages to print!	PrintJob		Ei ole tulostettavia sivuja!
+beta	AboutWindow		beeta
+%s MiB	StringForSize	size unit	%s Mebitavua
+OK	ZombieReplicantView		Valmis
 Cut	TextView		Leikkaa
+Default	Default decorator about box		Oletus
+Can't delete this replicant from its original application. Life goes on.	Dragger		Alkuperäisen sovelluksen tämän kopion poistaminen epäonnistui. Elämä jatkuu.
+%s KiB	StringForSize	size unit	%s Kibitavua
+Error	ZombieReplicantView		Virhe
+Paste	TextView		Liitä
+OK	AboutWindow		Valmis
+%s MiB/s	StringForRate	units per second	%s Mebitavua/s
+Special Thanks:	AboutWindow		Erityiskiitokset:
+%s TiB	StringForSize	size unit	%s Tebitavua
+Default Haiku window decorator.	Default decorator about box		Oletus Haiku-ikkunakoristemaalari.
+%s GiB	StringForSize	size unit	%s Gibitavua
+%s B	StringForSize	size unit, narrow space	%s tavua
+Remove replicant	Dragger		Poista kopio
 Version	AboutWindow		Versio
-Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Kohteen ”%description” kopion luominen epäonnistui.\n%error
+Red:	ColorControl		Punainen:
+<empty>	Menu		<tyhjä>
 Copy	TextView		Kopioi
-%3.2f KiB	StringForSize		%3.2f kibitavua
+Select all	TextView		Valitse kaikki
 alpha	AboutWindow		alfa
 Error	PrintJob		Virhe
-All Rights Reserved.	AboutWindow		All Rights Reserved.
-{0, plural, one{# byte} other{# bytes}}	StringForSize		{0, plural, one{# merkki} other{# merkkiä}
-About %app%	AboutWindow		Ohjelmasta %app%
-No pages to print!	PrintJob		Ei ole tulostettavia sivuja!
-OK	Dragger		Valmis
-OK	PrintJob		Valmis
-Green:	ColorControl		Vihreä:
-Version history:	AboutWindow		Versiohistoria:
-Remove replicant	Dragger		Poista kopio
-Select all	TextView		Valitse kaikki
-OK	AboutWindow		Valmis
-OK	ZombieReplicantView		Valmis
-Print Server is not responding.	PrintJob		Tulostuspalvelin ei vastaa.
-Paste	TextView		Liitä
-Special Thanks:	AboutWindow		Erityiskiitokset:
-%.2f TiB	StringForSize		%.2f tebitavua
-Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		Kopion sovelluksen paikantaminen epäonnistui. Sovellusallekirjoitusta ei ole tarjottu.\n%error
-Redo	TextView		Tee uudelleen
-<empty>	Menu		<tyhjä>
-Warning	Dragger		Varoitus
-Undo	TextView		Peru
-Red:	ColorControl		Punainen:
-%3.2f MiB	StringForSize		%3.2f mebitavua
+%s TiB/s	StringForRate	units per second	%s Tebitavua/s
 About %app…	Dragger		Ohjelmasta %app...
-development	AboutWindow		ohjelmakehitys
-Error	ZombieReplicantView		Virhe
+About %app%	AboutWindow		Ohjelmasta %app%
+{0, plural, one{%s byte} other{%s bytes}}	StringForSize	size unit	{0, plural, one{%s tavu} other{%s tavut}}
+%s GiB/s	StringForRate	units per second	%s Gibitavua/s
+Version history:	AboutWindow		Versiohistoria:
+Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		Kopion sovelluksen paikantaminen epäonnistui. Sovellusallekirjoitusta ei ole tarjottu.\n%error
+%s KiB/s	StringForRate	units per second	%s Kibitavua/s
 Blue:	ColorControl		Sininen:
-gold master	AboutWindow		gold master
-Can't delete this replicant from its original application. Life goes on.	Dragger		Alkuperäisen sovelluksen tämän kopion poistaminen epäonnistui. Elämä jatkuu.
+Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Kohteen ”%description” kopion luominen epäonnistui.\n%error
+Written by:	AboutWindow		Tekijä:

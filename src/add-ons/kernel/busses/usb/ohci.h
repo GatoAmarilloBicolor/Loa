@@ -16,8 +16,8 @@
 #include <lock.h>
 
 struct pci_info;
-struct pci_module_info;
-struct pci_x86_module_info;
+struct pci_device_module_info;
+struct pci_device;
 class OHCIRootHub;
 
 typedef struct transfer_data {
@@ -34,7 +34,8 @@ typedef struct transfer_data {
 
 class OHCI : public BusManager {
 public:
-									OHCI(pci_info *info, Stack *stack);
+									OHCI(pci_info *info, pci_device_module_info* pci,
+										pci_device* device, Stack *stack, device_node* node);
 									~OHCI();
 
 		status_t					Start();
@@ -44,8 +45,6 @@ virtual status_t					CancelQueuedTransfers(Pipe *pipe,
 
 virtual	status_t					NotifyPipeChange(Pipe *pipe,
 										usb_change change);
-
-static	status_t					AddTo(Stack *stack);
 
 		// Port operations
 		uint8						PortCount() { return fPortCount; };
@@ -136,17 +135,21 @@ static	int32						_FinishThread(void *data);
 
 		size_t						_WriteDescriptorChain(
 										ohci_general_td *topDescriptor,
-										iovec *vector, size_t vectorCount);
+										generic_io_vec *vector, size_t vectorCount,
+										bool physical);
 		size_t						_ReadDescriptorChain(
 										ohci_general_td *topDescriptor,
-										iovec *vector, size_t vectorCount);
+										generic_io_vec *vector, size_t vectorCount,
+										bool physical);
 
 		size_t						_WriteIsochronousDescriptorChain(
 										ohci_isochronous_td *topDescriptor,
-										iovec *vector, size_t vectorCount);
+										generic_io_vec *vector, size_t vectorCount,
+										bool physical);
 		void						_ReadIsochronousDescriptorChain(
 										ohci_isochronous_td *topDescriptor,
-										iovec *vector, size_t vectorCount);
+										generic_io_vec *vector, size_t vectorCount,
+										bool physical);
 
 		size_t						_ReadActualLength(
 										ohci_general_td *topDescriptor);
@@ -181,10 +184,9 @@ inline	uint32						_ReadReg(uint32 reg);
 		void						_PrintDescriptorChain(
 										ohci_isochronous_td *topDescriptor);
 
-static	pci_module_info *			sPCIModule;
-static	pci_x86_module_info *		sPCIx86Module;
-
 		pci_info *					fPCIInfo;
+		pci_device_module_info*		fPci;
+		pci_device*					fDevice;
 		Stack *						fStack;
 
 		uint8 *						fOperationalRegisters;
@@ -218,7 +220,7 @@ static	pci_x86_module_info *		sPCIx86Module;
 		// Port management
 		uint8						fPortCount;
 
-		uint8						fIRQ;
+		uint32						fIRQ;
 		bool						fUseMSI;
 };
 

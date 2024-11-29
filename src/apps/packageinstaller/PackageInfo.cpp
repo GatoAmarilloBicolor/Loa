@@ -46,17 +46,17 @@ enum {
 };
 
 typedef enum {
-    B_BEBOX_PLATFORM = 0,
-    B_MAC_PLATFORM,
-    B_AT_CLONE_PLATFORM,
-    B_ENIAC_PLATFORM,
-    B_APPLE_II_PLATFORM,
-    B_CRAY_PLATFORM,
-    B_LISA_PLATFORM,
-    B_TI_994A_PLATFORM,
-    B_TIMEX_SINCLAIR_PLATFORM,
-    B_ORAC_1_PLATFORM,
-    B_HAL_PLATFORM,
+	B_BEBOX_PLATFORM = 0,
+	B_MAC_PLATFORM,
+	B_AT_CLONE_PLATFORM,
+	B_ENIAC_PLATFORM,
+	B_APPLE_II_PLATFORM,
+	B_CRAY_PLATFORM,
+	B_LISA_PLATFORM,
+	B_TI_994A_PLATFORM,
+	B_TIMEX_SINCLAIR_PLATFORM,
+	B_ORAC_1_PLATFORM,
+	B_HAL_PLATFORM,
 	B_INVALID_PLATFORM
 } platform_type;
 
@@ -600,7 +600,7 @@ PackageInfo::Parse()
 					}
 					swap_data(B_UINT64_TYPE, &size, sizeof(uint64),
 						B_SWAP_BENDIAN_TO_HOST);
-					parser_debug("DQSz - %Ld\n", size);
+					parser_debug("DQSz - %lld\n", size);
 				} else if (!memcmp(buffer, "DQMi", 5)) {
 					// TODO actually check if the query finds a file with
 					// size found previously

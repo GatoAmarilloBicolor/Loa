@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2008-2009 Atheros Communications Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
@@ -12,8 +14,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ah_eeprom_9287.h 223615 2011-06-28 00:01:55Z adrian $
  */
 
 #ifndef	__AH_EEPROM_9287_H__
@@ -163,6 +163,5 @@ typedef struct {
 
 typedef struct modal_eep_ar9287_header MODAL_EEP_9287_HEADER;
 typedef struct base_eep_ar9287_header BASE_EEP_9287_HEADER;
-
 
 #endif /* __AH_EEPROM_9287_H__ */

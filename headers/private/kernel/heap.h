@@ -20,7 +20,12 @@
 // ... and a lot of reserves to keep running.
 #define HEAP_GROW_SIZE				128 * 1024 * 1024
 
-#else // USE_GUARDED_HEAP_FOR_MALLOC && USE_GUARDED_HEAP_FOR_OBJECT_CACHE
+#elif USE_GUARDED_HEAP_FOR_MALLOC
+
+#define INITIAL_HEAP_SIZE			32 * 1024 * 1024
+#define HEAP_GROW_SIZE				32 * 1024 * 1024
+
+#else
 
 // allocate 16MB initial heap for the kernel
 #define INITIAL_HEAP_SIZE			16 * 1024 * 1024
@@ -31,7 +36,7 @@
 // use areas for allocations bigger than 1MB
 #define HEAP_AREA_USE_THRESHOLD		1 * 1024 * 1024
 
-#endif // !(USE_GUARDED_HEAP_FOR_MALLOC && USE_GUARDED_HEAP_FOR_OBJECT_CACHE)
+#endif
 
 
 // allocation/deallocation flags for {malloc,free}_etc()
@@ -59,22 +64,19 @@ extern "C" {
 #endif
 
 
-void* memalign_etc(size_t alignment, size_t size, uint32 flags);
+void* memalign_etc(size_t alignment, size_t size, uint32 flags) _ALIGNED_BY_ARG(1);
+void* realloc_etc(void* address, size_t newSize, uint32 flags);
 void free_etc(void* address, uint32 flags);
 
-void* memalign(size_t alignment, size_t size);
+void* memalign(size_t alignment, size_t size) _ALIGNED_BY_ARG(1);
 
 void deferred_free(void* block);
-
-void* malloc_referenced(size_t size);
-void* malloc_referenced_acquire(void* data);
-void malloc_referenced_release(void* data);
 
 void heap_add_area(heap_allocator* heap, area_id areaID, addr_t base,
 	size_t size);
 heap_allocator*	heap_create_allocator(const char* name, addr_t base,
 	size_t size, const heap_class* heapClass, bool allocateOnHeap);
-void* heap_memalign(heap_allocator* heap, size_t alignment, size_t size);
+void* heap_memalign(heap_allocator* heap, size_t alignment, size_t size) _ALIGNED_BY_ARG(2);
 status_t heap_free(heap_allocator* heap, void* address);
 
 #if KERNEL_HEAP_LEAK_CHECK

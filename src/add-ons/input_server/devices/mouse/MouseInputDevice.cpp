@@ -34,6 +34,8 @@
 #include <keyboard_mouse_driver.h>
 #include <touchpad_settings.h>
 
+#include "movement_maker.h"
+
 
 #undef TRACE
 //#define TRACE_MOUSE_DEVICE
@@ -120,8 +122,7 @@ private:
 			void				_UpdateSettings();
 
 			status_t			_GetTouchpadSettingsPath(BPath& path);
-			status_t			_ReadTouchpadSettingsMsg(BMessage* message);
-			status_t			_UpdateTouchpadSettings();
+			status_t			_UpdateTouchpadSettings(BMessage* message);
 
 			BMessage*			_BuildMouseMessage(uint32 what,
 									uint64 when, uint32 buttons,
@@ -147,7 +148,7 @@ private:
 	volatile bool				fUpdateSettings;
 
 			bool				fIsTouchpad;
-			touchpad_settings	fTouchpadSettings;
+			TouchpadMovement	fTouchpadMovementMaker;
 			BMessage*			fTouchpadSettingsMessage;
 			BLocker				fTouchpadSettingsLock;
 };
@@ -183,9 +184,8 @@ MouseDevice::MouseDevice(MouseInputDevice& target, const char* driverPath)
 	fDeviceRef.cookie = this;
 
 #ifdef HAIKU_TARGET_PLATFORM_HAIKU
-	fSettings.map.button[0] = B_PRIMARY_MOUSE_BUTTON;
-	fSettings.map.button[1] = B_SECONDARY_MOUSE_BUTTON;
-	fSettings.map.button[2] = B_TERTIARY_MOUSE_BUTTON;
+	for (int i = 0; i < B_MAX_MOUSE_BUTTONS; i++)
+		fSettings.map.button[i] = B_MOUSE_BUTTON(i + 1);
 #endif
 };
 
@@ -300,12 +300,18 @@ MouseDevice::UpdateTouchpadSettings(const BMessage* message)
 char*
 MouseDevice::_BuildShortName() const
 {
+	// TODO It would be simpler and better to use B_GET_DEVICE_NAME, but...
+	// - This is currently called before the device is open
+	// - We need to implement that in our input drivers first
 	BString string(fPath);
+	BString deviceName;
 	BString name;
 
 	int32 slash = string.FindLast("/");
-	string.CopyInto(name, slash + 1, string.Length() - slash);
-	int32 index = atoi(name.String()) + 1;
+	string.CopyInto(deviceName, slash + 1, string.Length() - slash);
+	// FIXME the device name may be more than just a number (for example
+	// ibm_trackpoint_0)
+	int32 index = atoi(deviceName.String()) + 1;
 
 	int32 previousSlash = string.FindLast("/", slash);
 	string.CopyInto(name, previousSlash + 1, slash - previousSlash - 1);
@@ -313,15 +319,21 @@ MouseDevice::_BuildShortName() const
 	if (name == "ps2")
 		name = "PS/2";
 
-	if (name.Length() < 4)
+	if (name.Length() <= 4)
 		name.ToUpper();
 	else
 		name.Capitalize();
 
+	// Check the whole string for "touchpad" because it's a different directory
+	// FIXME use MS_IS_TOUCHPAD ioctl instead (or fIsTouchpad which caches its
+	// result) but this can only be done after the control thread is running
 	if (string.FindFirst("touchpad") >= 0) {
 		name << " Touchpad ";
+	} else if (deviceName.FindFirst("trackpoint") >= 0) {
+		// That's always PS/2, so don't keep the bus name
+		name = "Trackpoint ";
 	} else {
-		if (string.FindFirst("intelli") >= 0)
+		if (deviceName.FindFirst("intelli") >= 0)
 			name.Prepend("Extended ");
 
 		name << " Mouse ";
@@ -356,22 +368,26 @@ MouseDevice::_ControlThread()
 	}
 
 	// touchpad settings
-	if (ioctl(fDevice, MS_IS_TOUCHPAD, NULL) == B_OK) {
+	touchpad_specs touchpadSpecs;
+	if (ioctl(fDevice, MS_IS_TOUCHPAD, &touchpadSpecs, sizeof(touchpadSpecs)) == B_OK) {
 		TRACE("is touchpad %s\n", fPath.String());
 		fIsTouchpad = true;
 
-		fTouchpadSettings = kDefaultTouchpadSettings;
+		touchpad_settings settings;
+		settings = kDefaultTouchpadSettings;
 
 		BPath path;
 		status_t status = _GetTouchpadSettingsPath(path);
 		BFile settingsFile(path.Path(), B_READ_ONLY);
 		if (status == B_OK && settingsFile.InitCheck() == B_OK) {
-			if (settingsFile.Read(&fTouchpadSettings, sizeof(touchpad_settings))
+			if (settingsFile.Read(&settings, sizeof(touchpad_settings))
 					!= sizeof(touchpad_settings)) {
 				TRACE("failed to load settings\n");
 			}
 		}
-		_UpdateTouchpadSettings();
+
+		fTouchpadMovementMaker.SetSpecs(touchpadSpecs);
+		fTouchpadMovementMaker.SetSettings(settings);
 	}
 
 	_UpdateSettings();
@@ -387,6 +403,10 @@ MouseDevice::_ControlThread()
 	bigtime_t nextTransferTime = system_time() + kTransferDelay;
 #endif
 
+	// touchpads only
+	touchpad_movement lastTouchpadMovement;
+	bigtime_t touchpadEventTimeout = B_INFINITE_TIMEOUT;
+
 	while (fActive) {
 		mouse_movement movements;
 
@@ -395,11 +415,41 @@ MouseDevice::_ControlThread()
 		nextTransferTime += kTransferDelay;
 #endif
 
-		if (ioctl(fDevice, MS_READ, &movements, sizeof(movements)) != B_OK) {
-			LOG_ERR("Mouse device exiting, %s\n", strerror(errno));
-			_ControlThreadCleanup();
-			// TOAST!
-			return;
+		if (!fIsTouchpad) {
+			if (ioctl(fDevice, MS_READ, &movements, sizeof(movements)) != B_OK) {
+				LOG_ERR("Mouse device exiting, %s\n", strerror(errno));
+				_ControlThreadCleanup();
+				// TOAST!
+				return;
+			}
+		} else {
+			touchpad_read read;
+			read.timeout = touchpadEventTimeout;
+
+			status_t status = ioctl(fDevice, MS_READ_TOUCHPAD, &read, sizeof(read));
+			if (status < 0)
+				status = errno;
+			if (status != B_OK && status != B_TIMED_OUT) {
+				LOG_ERR("Mouse (touchpad) device exiting, %s\n", strerror(errno));
+				_ControlThreadCleanup();
+				// TOAST!
+				return;
+			} else if (status == B_TIMED_OUT) {
+				read.event = MS_READ_TOUCHPAD;
+				read.u.touchpad = lastTouchpadMovement;
+			}
+
+			if (read.event == MS_READ_TOUCHPAD) {
+				lastTouchpadMovement = read.u.touchpad;
+				status = fTouchpadMovementMaker.EventToMovement(&read.u.touchpad,
+					&movements, touchpadEventTimeout);
+			} else if (read.event == MS_READ) {
+				movements = read.u.mouse;
+				touchpadEventTimeout = -1;
+			}
+
+			if (status != B_OK)
+				continue;
 		}
 
 		// take care of updating the settings first, if necessary
@@ -408,8 +458,7 @@ MouseDevice::_ControlThread()
 			if (fIsTouchpad) {
 				BAutolock _(fTouchpadSettingsLock);
 				if (fTouchpadSettingsMessage != NULL) {
-					_ReadTouchpadSettingsMsg(fTouchpadSettingsMessage);
-					_UpdateTouchpadSettings();
+					_UpdateTouchpadSettings(fTouchpadSettingsMessage);
 					delete fTouchpadSettingsMessage;
 					fTouchpadSettingsMessage = NULL;
 				} else
@@ -468,7 +517,11 @@ MouseDevice::_ControlThread()
 				&& message->AddFloat("be:wheel_delta_x",
 					movements.wheel_xdelta) == B_OK
 				&& message->AddFloat("be:wheel_delta_y",
-					movements.wheel_ydelta) == B_OK)
+					movements.wheel_ydelta) == B_OK
+				&& message->AddInt32("be:device_subtype",
+					fIsTouchpad
+						? B_TOUCHPAD_DEVICE_SUBTYPE
+						: B_MOUSE_DEVICE_SUBTYPE) == B_OK)
 				fTarget.EnqueueMessage(message);
 			else
 				delete message;
@@ -504,25 +557,24 @@ void
 MouseDevice::_UpdateSettings()
 {
 	MD_CALLED();
-
 	// retrieve current values
 
-	if (get_mouse_map(&fSettings.map) != B_OK)
+	if (get_mouse_map(fDeviceRef.name, &fSettings.map) != B_OK)
 		LOG_ERR("error when get_mouse_map\n");
-	else {
-		fDeviceRemapsButtons
-			= ioctl(fDevice, MS_SET_MAP, &fSettings.map) == B_OK;
-	}
-
-	if (get_click_speed(&fSettings.click_speed) != B_OK)
-		LOG_ERR("error when get_click_speed\n");
 	else
-		ioctl(fDevice, MS_SET_CLICKSPEED, &fSettings.click_speed);
+		fDeviceRemapsButtons = ioctl(fDevice, MS_SET_MAP, &fSettings.map) == B_OK;
 
-	if (get_mouse_speed(&fSettings.accel.speed) != B_OK)
+	if (get_click_speed(fDeviceRef.name, &fSettings.click_speed) == B_OK) {
+		if (fIsTouchpad)
+			fTouchpadMovementMaker.click_speed = fSettings.click_speed;
+		ioctl(fDevice, MS_SET_CLICKSPEED, &fSettings.click_speed);
+	} else
+		LOG_ERR("error when get_click_speed\n");
+
+	if (get_mouse_speed(fDeviceRef.name, &fSettings.accel.speed) != B_OK)
 		LOG_ERR("error when get_mouse_speed\n");
 	else {
-		if (get_mouse_acceleration(&fSettings.accel.accel_factor) != B_OK)
+		if (get_mouse_acceleration(fDeviceRef.name, &fSettings.accel.accel_factor) != B_OK)
 			LOG_ERR("error when get_mouse_acceleration\n");
 		else {
 			mouse_accel accel;
@@ -533,7 +585,7 @@ MouseDevice::_UpdateSettings()
 		}
 	}
 
-	if (get_mouse_type(&fSettings.type) != B_OK)
+	if (get_mouse_type(fDeviceRef.name, &fSettings.type) != B_OK)
 		LOG_ERR("error when get_mouse_type\n");
 	else
 		ioctl(fDevice, MS_SET_TYPE, &fSettings.type);
@@ -551,37 +603,30 @@ MouseDevice::_GetTouchpadSettingsPath(BPath& path)
 
 
 status_t
-MouseDevice::_ReadTouchpadSettingsMsg(BMessage* message)
+MouseDevice::_UpdateTouchpadSettings(BMessage* message)
 {
-	message->FindBool("scroll_twofinger", &fTouchpadSettings.scroll_twofinger);
+	touchpad_settings settings;
+	message->FindBool("scroll_twofinger", &settings.scroll_twofinger);
 	message->FindBool("scroll_twofinger_horizontal",
-		&fTouchpadSettings.scroll_twofinger_horizontal);
+		&settings.scroll_twofinger_horizontal);
 	message->FindFloat("scroll_rightrange",
-		&fTouchpadSettings.scroll_rightrange);
+		&settings.scroll_rightrange);
 	message->FindFloat("scroll_bottomrange",
-		&fTouchpadSettings.scroll_bottomrange);
+		&settings.scroll_bottomrange);
 
 	message->FindInt16("scroll_xstepsize",
-		(int16*)&fTouchpadSettings.scroll_xstepsize);
+		(int16*)&settings.scroll_xstepsize);
 	message->FindInt16("scroll_ystepsize",
-		(int16*)&fTouchpadSettings.scroll_ystepsize);
+		(int16*)&settings.scroll_ystepsize);
 	message->FindInt8("scroll_acceleration",
-		(int8*)&fTouchpadSettings.scroll_acceleration);
+		(int8*)&settings.scroll_acceleration);
 	message->FindInt8("tapgesture_sensibility",
-		(int8*)&fTouchpadSettings.tapgesture_sensibility);
+		(int8*)&settings.tapgesture_sensibility);
+
+	if (fIsTouchpad)
+		fTouchpadMovementMaker.SetSettings(settings);
 
 	return B_OK;
-}
-
-
-status_t
-MouseDevice::_UpdateTouchpadSettings()
-{
-	if (fIsTouchpad) {
-		ioctl(fDevice, MS_SET_TOUCHPAD_SETTINGS, &fTouchpadSettings);
-		return B_OK;
-	}
-	return B_ERROR;
 }
 
 
@@ -596,7 +641,9 @@ MouseDevice::_BuildMouseMessage(uint32 what, uint64 when, uint32 buttons,
 	if (message->AddInt64("when", when) < B_OK
 		|| message->AddInt32("buttons", buttons) < B_OK
 		|| message->AddInt32("x", deltaX) < B_OK
-		|| message->AddInt32("y", deltaY) < B_OK) {
+		|| message->AddInt32("y", deltaY) < B_OK
+		|| message->AddInt32("be:device_subtype",
+			fIsTouchpad ? B_TOUCHPAD_DEVICE_SUBTYPE : B_MOUSE_DEVICE_SUBTYPE) < B_OK) {
 		delete message;
 		return NULL;
 	}
@@ -738,7 +785,7 @@ MouseInputDevice::Control(const char* name, void* cookie,
 	if (command == B_NODE_MONITOR)
 		return _HandleMonitor(message);
 
-	if (command == MS_SET_TOUCHPAD_SETTINGS)
+	if (command == B_SET_TOUCHPAD_SETTINGS)
 		return device->UpdateTouchpadSettings(message);
 
 	if (command >= B_MOUSE_TYPE_CHANGED

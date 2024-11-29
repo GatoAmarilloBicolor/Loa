@@ -6,6 +6,7 @@
 
 #include "ICUCollateData.h"
 
+#include <assert.h>
 #include <string.h>
 #include <strings.h>
 #include <wchar.h>
@@ -13,6 +14,9 @@
 #include <unicode/unistr.h>
 
 #include <AutoDeleter.h>
+
+
+U_NAMESPACE_USE
 
 
 namespace BPrivate {
@@ -111,12 +115,18 @@ ICUCollateData::Strcoll(const char* a, const char* b, int& result)
 
 
 status_t
-ICUCollateData::Strxfrm(char* out, const char* in, size_t size, size_t& outSize)
+ICUCollateData::Strxfrm(char* out, const char* in,
+	size_t outSize, size_t& requiredSize)
 {
+	if (in == NULL) {
+		requiredSize = 0;
+		return B_OK;
+	}
+
 	if (fCollator == NULL || strcmp(fPosixLocaleName, "POSIX") == 0) {
 		// handle POSIX here as the collator ICU uses for that (english) is
 		// incompatible in too many ways
-		outSize = strlcpy(out, in, size);
+		requiredSize = strlcpy(out, in, outSize);
 		for (const char* inIter = in; *inIter != 0; ++inIter) {
 			if (*inIter < 0)
 				return B_BAD_VALUE;
@@ -124,16 +134,18 @@ ICUCollateData::Strxfrm(char* out, const char* in, size_t size, size_t& outSize)
 		return B_OK;
 	}
 
-	if (in == NULL) {
-		outSize = 0;
-		return B_OK;
-	}
-
 	UnicodeString unicodeIn;
 	if (_ToUnicodeString(in, unicodeIn) != B_OK)
 		return B_BAD_VALUE;
 
-	outSize = fCollator->getSortKey(unicodeIn, (uint8_t*)out, size);
+	requiredSize = fCollator->getSortKey(unicodeIn, (uint8_t*)out, outSize);
+
+	// Do not include terminating NULL byte in the required-size.
+	if (requiredSize > 0) {
+		if (outSize >= requiredSize)
+			assert(out[requiredSize - 1] == '\0');
+		requiredSize--;
+	}
 
 	return B_OK;
 }
@@ -171,18 +183,18 @@ ICUCollateData::Wcscoll(const wchar_t* a, const wchar_t* b, int& result)
 
 
 status_t
-ICUCollateData::Wcsxfrm(wchar_t* out, const wchar_t* in, size_t size,
-	size_t& outSize)
+ICUCollateData::Wcsxfrm(wchar_t* out, const wchar_t* in, size_t outSize,
+	size_t& requiredSize)
 {
 	if (in == NULL) {
-		outSize = 0;
+		requiredSize = 0;
 		return B_OK;
 	}
 
 	if (fCollator == NULL || strcmp(fPosixLocaleName, "POSIX") == 0) {
 		// handle POSIX here as the collator ICU uses for that (english) is
 		// incompatible in too many ways
-		outSize = wcslcpy(out, in, size);
+		requiredSize = wcslcpy(out, in, outSize);
 		for (const wchar_t* inIter = in; *inIter != 0; ++inIter) {
 			if (*inIter > 127)
 				return B_BAD_VALUE;
@@ -191,14 +203,24 @@ ICUCollateData::Wcsxfrm(wchar_t* out, const wchar_t* in, size_t size,
 	}
 
 	UnicodeString unicodeIn = UnicodeString::fromUTF32((UChar32*)in, -1);
-	size_t requiredSize = fCollator->getSortKey(unicodeIn, NULL, 0);
+	requiredSize = fCollator->getSortKey(unicodeIn, NULL, 0);
+
+	if (outSize == 0)
+		return B_OK;
 
 	uint8_t* buffer = (uint8_t*)out;
-	outSize = fCollator->getSortKey(unicodeIn, buffer, requiredSize);
+	fCollator->getSortKey(unicodeIn, buffer, outSize);
 
 	// convert 1-byte characters to 4-byte wide characters:
 	for (size_t i = 0; i < outSize; ++i)
 		out[outSize - 1 - i] = buffer[outSize - 1 - i];
+
+	// Do not include terminating NULL character in the required-size.
+	if (requiredSize > 0) {
+		if (outSize >= requiredSize)
+			assert(out[requiredSize - 1] == 0);
+		requiredSize--;
+	}
 
 	return B_OK;
 }

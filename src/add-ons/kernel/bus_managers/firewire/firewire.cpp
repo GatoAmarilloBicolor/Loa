@@ -1107,7 +1107,7 @@ fw_tl2xfer(struct firewire_comm *fc, int node, int tlabel, int tcode)
 		if((uint)xfer->send.hdr.mode.hdr.dst == (uint)node) {
 			mtx_unlock(&fc->tlabel_lock);
 			splx(s);
-			KASSERT(xfer->tl == tlabel,
+			KASSERT((xfer->tl == tlabel),
 				("xfer->tl 0x%x != 0x%x", xfer->tl, tlabel));
 			/* extra sanity check */
 			req = xfer->send.hdr.mode.hdr.tcode;
@@ -1174,7 +1174,7 @@ fw_xfer_alloc_buf(int send_len, int recv_len)
 			return(NULL);
 		}
 		xfer->send.payload = (uint32_t *)send_virt;
-		xfer->send.bus_addr = (bus_addr_t)send_phy;
+		xfer->send.bus_addr = (bus_addr_t)(addr_t)send_phy;
 	}
 	if (recv_len > 0) {
 /*		xfer->recv.payload = malloc(recv_len);
@@ -1196,7 +1196,7 @@ fw_xfer_alloc_buf(int send_len, int recv_len)
 			return(NULL);
 		}
 		xfer->recv.payload = (uint32_t *)recv_virt;
-		xfer->recv.bus_addr = (bus_addr_t)recv_phy;
+		xfer->recv.bus_addr = (bus_addr_t)(addr_t)recv_phy;
 	}
 	return(xfer);
 }
@@ -2102,7 +2102,7 @@ fw_rcv(struct fw_rcv_buf *rb)
 		if(bind == NULL){
 			device_printf(rb->fc->bdev, "%s: "
 				"Unknown service addr 0x%04x:0x%08x %s(%x)"
-			    " src=0x%x data=%u\n",
+			    " src=0x%x data=%" B_PRIu32 "\n",
 				__func__,
 				fp->mode.wreqq.dest_hi,
 				fp->mode.wreqq.dest_lo,

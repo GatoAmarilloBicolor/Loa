@@ -14,6 +14,7 @@
 #include <DataIO.h>
 
 #include <Array.h>
+#include <util/BumpAllocator.h>
 #include <util/SinglyLinkedList.h>
 
 #include <package/hpkg/ErrorOutput.h>
@@ -219,6 +220,8 @@ public:
 
 			BHPKGPackageSectionID	section;
 
+			BumpAllocator<>			handlersAllocator;
+
 public:
 								AttributeHandlerContext(
 									BErrorOutput* errorOutput,
@@ -232,6 +235,7 @@ public:
 										lowLevelHandler,
 									BHPKGPackageSectionID section,
 									bool ignoreUnknownAttributes);
+								~AttributeHandlerContext();
 
 			void				ErrorOccurred();
 };
@@ -240,6 +244,9 @@ public:
 class ReaderImplBase::AttributeHandler
 	: public SinglyLinkedListLinkImpl<AttributeHandler> {
 public:
+			void*				operator new(size_t size, AttributeHandlerContext* context);
+			void				operator delete(void* pointer);
+
 	virtual						~AttributeHandler();
 
 			void				SetLevel(int level);
@@ -254,6 +261,9 @@ public:
 
 protected:
 			int					fLevel;
+
+private:
+			bool				fDeleting;
 };
 
 
@@ -449,6 +459,13 @@ ReaderImplBase::Init(BPositionIO* file, bool keepFile, Header& header, uint32 fl
 		// Might be a stream. We only use the file size for checking the total
 		// heap size, which we don't have to do.
 		fileSize = -1;
+	}
+
+	// validate file is longer than header (when not a stream)
+	if (fileSize >= 0 && fileSize < (off_t)sizeof(header)) {
+		ErrorOutput()->PrintError("Error: Invalid %s file: Length shorter than "
+			"header!\n", fFileType);
+		return B_BAD_DATA;
 	}
 
 	// read the header

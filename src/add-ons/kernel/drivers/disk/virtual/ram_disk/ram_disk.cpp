@@ -19,6 +19,7 @@
 #include <Drivers.h>
 
 #include <AutoDeleter.h>
+#include <StackOrHeapArray.h>
 #include <util/AutoLock.h>
 #include <util/DoublyLinkedList.h>
 
@@ -29,6 +30,7 @@
 #include <vm/VMCache.h>
 #include <vm/vm_page.h>
 
+#include "cache_support.h"
 #include "dma_resources.h"
 #include "io_requests.h"
 #include "IOSchedulerSimple.h"
@@ -196,10 +198,10 @@ struct ControlDevice : Device {
 
 		device_attr attrs[] = {
 			{B_DEVICE_PRETTY_NAME, B_STRING_TYPE,
-				{string: "RAM Disk Raw Device"}},
-			{kDeviceSizeItem, B_UINT64_TYPE, {ui64: deviceSize}},
-			{kDeviceIDItem, B_UINT32_TYPE, {ui32: (uint32)id}},
-			{kFilePathItem, B_STRING_TYPE, {string: filePath}},
+				{.string = "RAM Disk Raw Device"}},
+			{kDeviceSizeItem, B_UINT64_TYPE, {.ui64 = deviceSize}},
+			{kDeviceIDItem, B_UINT32_TYPE, {.ui32 = (uint32)id}},
+			{kFilePathItem, B_STRING_TYPE, {.string = filePath}},
 			{NULL}
 		};
 
@@ -319,7 +321,9 @@ struct RawDevice : Device, DoublyLinkedListLinkImpl<RawDevice> {
 		fCache->temporary = 1;
 		fCache->virtual_end = fDeviceSize;
 
-		error = fCache->Commit(fDeviceSize, VM_PRIORITY_SYSTEM);
+		fCache->Lock();
+		error = fCache->Commit(fDeviceSize, VM_PRIORITY_USER);
+		fCache->Unlock();
 		if (error != B_OK) {
 			Unprepare();
 			return error;
@@ -395,10 +399,9 @@ struct RawDevice : Device, DoublyLinkedListLinkImpl<RawDevice> {
 		static const size_t kPageCountPerIteration = 1024;
 		static const size_t kMaxGapSize = 15;
 
-		int fd = open(fFilePath, O_WRONLY);
-		if (fd < 0)
+		FileDescriptorCloser fd(open(fFilePath, O_WRONLY));
+		if (!fd.IsSet())
 			return errno;
-		FileDescriptorCloser fdCloser(fd);
 
 		vm_page** pages = new(std::nothrow) vm_page*[kPageCountPerIteration];
 		ArrayDeleter<vm_page*> pagesDeleter(pages);
@@ -491,7 +494,7 @@ struct RawDevice : Device, DoublyLinkedListLinkImpl<RawDevice> {
 
 			// write the buffer
 			if (error == B_OK) {
-				ssize_t bytesWritten = pwrite(fd, buffer,
+				ssize_t bytesWritten = pwrite(fd.Get(), buffer,
 					pagesToWrite * B_PAGE_SIZE, offset);
 				if (bytesWritten < 0) {
 					dprintf("ramdisk: error writing pages to file: %s\n",
@@ -531,57 +534,78 @@ struct RawDevice : Device, DoublyLinkedListLinkImpl<RawDevice> {
 	{
 		TRACE("trim_device()\n");
 
+		trimData->trimmed_size = 0;
+
+		const off_t deviceSize = fDeviceSize; // in bytes
+		if (deviceSize < 0)
+			return B_BAD_VALUE;
+
+		STATIC_ASSERT(sizeof(deviceSize) <= sizeof(uint64));
+		ASSERT(deviceSize >= 0);
+
+		// Do not trim past device end
+		for (uint32 i = 0; i < trimData->range_count; i++) {
+			uint64 offset = trimData->ranges[i].offset;
+			uint64& size = trimData->ranges[i].size;
+
+			if (offset >= (uint64)deviceSize)
+				return B_BAD_VALUE;
+			size = min_c(size, (uint64)deviceSize - offset);
+		}
+
+		status_t result = B_OK;
 		uint64 trimmedSize = 0;
 		for (uint32 i = 0; i < trimData->range_count; i++) {
-			trimmedSize += trimData->ranges[i].size;
-
-			off_t offset = trimData->ranges[i].offset;
-			off_t length = trimData->ranges[i].size;
+			uint64 offset = trimData->ranges[i].offset;
+			uint64 length = trimData->ranges[i].size;
 
 			// Round up offset and length to multiple of the page size
 			// The offset is rounded up, so some space may be left
 			// (not trimmed) at the start of the range.
 			offset = (offset + B_PAGE_SIZE - 1) & ~(B_PAGE_SIZE - 1);
 			// Adjust the length for the possibly skipped range
-			length -= trimData->ranges[i].offset - offset;
+			length -= offset - trimData->ranges[i].offset;
 			// The length is rounded down, so some space at the end may also
 			// be left (not trimmed).
 			length &= ~(B_PAGE_SIZE - 1);
 
-			TRACE("ramdisk: trim %" B_PRIdOFF " bytes from %" B_PRIdOFF "\n",
+			if (length == 0)
+				continue;
+
+			TRACE("ramdisk: trim %" B_PRIu64 " bytes from %" B_PRIu64 "\n",
 				length, offset);
 
 			ASSERT(offset % B_PAGE_SIZE == 0);
 			ASSERT(length % B_PAGE_SIZE == 0);
-	
-			vm_page** pages = new(std::nothrow) vm_page*[length / B_PAGE_SIZE];
-			if (pages == NULL)
-				return B_NO_MEMORY;
-			ArrayDeleter<vm_page*> pagesDeleter(pages);
 
-			_GetPages(offset, length, false, pages);
-			
+			BStackOrHeapArray<vm_page*, 16> pages(length / B_PAGE_SIZE);
+			if (!pages.IsValid()) {
+				result = B_NO_MEMORY;
+				break;
+			}
+
+			cache_get_pages(fCache, (off_t)offset, (off_t)length, false, pages);
+
 			AutoLocker<VMCache> locker(fCache);
-			uint32 j;
+			uint64 j;
 			for (j = 0; j < length / B_PAGE_SIZE; j++) {
 				// If we run out of pages (some may already be trimmed), stop.
 				if (pages[j] == NULL)
 					break;
 
-				TRACE("free range %" B_PRIu32 ", page %" B_PRIu32 ", offset %"
-					B_PRIdOFF "\n", i, j, offset);
+				TRACE("free range %" B_PRIu32 ", page %" B_PRIu64 ", offset %"
+					B_PRIu64 "\n", i, j, offset);
 				if (pages[j]->Cache())
 					fCache->RemovePage(pages[j]);
 				vm_page_free(NULL, pages[j]);
+				trimmedSize += B_PAGE_SIZE;
 			}
 		}
 
 		trimData->trimmed_size = trimmedSize;
 
-		return B_OK;
+		return result;
 	}
-
-
 
 	status_t DoIO(IORequest* request)
 	{
@@ -612,12 +636,11 @@ private:
 		generic_size_t vecOffset = 0;
 		bool isWrite = operation->IsWrite();
 
-		vm_page** pages = new(std::nothrow) vm_page*[length / B_PAGE_SIZE];
-		if (pages == NULL)
+		BStackOrHeapArray<vm_page*, 16> pages(length / B_PAGE_SIZE);
+		if (!pages.IsValid())
 			return B_NO_MEMORY;
-		ArrayDeleter<vm_page*> pagesDeleter(pages);
 
-		_GetPages(offset, length, isWrite, pages);
+		cache_get_pages(fCache, offset, length, isWrite, pages);
 
 		status_t error = B_OK;
 		size_t index = 0;
@@ -637,7 +660,7 @@ private:
 			index++;
 		}
 
-		_PutPages(operation->Offset(), operation->Length(), pages,
+		cache_put_pages(fCache, operation->Offset(), operation->Length(), pages,
 			error == B_OK);
 
 		if (error != B_OK) {
@@ -647,84 +670,6 @@ private:
 
 		fIOScheduler->OperationCompleted(operation, B_OK, operation->Length());
 		return B_OK;
-	}
-
-	void _GetPages(off_t offset, off_t length, bool isWrite, vm_page** pages)
-	{
-		// get the pages, we already have
-		AutoLocker<VMCache> locker(fCache);
-
-		size_t pageCount = length / B_PAGE_SIZE;
-		size_t index = 0;
-		size_t missingPages = 0;
-
-		while (length > 0) {
-			vm_page* page = fCache->LookupPage(offset);
-			if (page != NULL) {
-				if (page->busy) {
-					fCache->WaitForPageEvents(page, PAGE_EVENT_NOT_BUSY, true);
-					continue;
-				}
-
-				DEBUG_PAGE_ACCESS_START(page);
-				page->busy = true;
-			} else
-				missingPages++;
-
-			pages[index++] = page;
-			offset += B_PAGE_SIZE;
-			length -= B_PAGE_SIZE;
-		}
-
-		locker.Unlock();
-
-		// For a write we need to reserve the missing pages.
-		if (isWrite && missingPages > 0) {
-			vm_page_reservation reservation;
-			vm_page_reserve_pages(&reservation, missingPages,
-				VM_PRIORITY_SYSTEM);
-
-			for (size_t i = 0; i < pageCount; i++) {
-				if (pages[i] != NULL)
-					continue;
-
-				pages[i] = vm_page_allocate_page(&reservation,
-					PAGE_STATE_WIRED | VM_PAGE_ALLOC_BUSY);
-
-				if (--missingPages == 0)
-					break;
-			}
-
-			vm_page_unreserve_pages(&reservation);
-		}
-	}
-
-	void _PutPages(off_t offset, off_t length, vm_page** pages, bool success)
-	{
-		AutoLocker<VMCache> locker(fCache);
-
-		// Mark all pages unbusy. On error free the newly allocated pages.
-		size_t index = 0;
-
-		while (length > 0) {
-			vm_page* page = pages[index++];
-			if (page != NULL) {
-				if (page->CacheRef() == NULL) {
-					if (success) {
-						fCache->InsertPage(page, offset);
-						fCache->MarkPageUnbusy(page);
-						DEBUG_PAGE_ACCESS_END(page);
-					} else
-						vm_page_free(NULL, page);
-				} else {
-					fCache->MarkPageUnbusy(page);
-					DEBUG_PAGE_ACCESS_END(page);
-				}
-			}
-
-			offset += B_PAGE_SIZE;
-			length -= B_PAGE_SIZE;
-		}
 	}
 
 	status_t _CopyData(vm_page* page, const generic_io_vec*& vecs,
@@ -787,21 +732,20 @@ private:
 	{
 		static const size_t kPageCountPerIteration = 1024;
 
-		int fd = open(fFilePath, O_RDONLY);
-		if (fd < 0)
+		FileDescriptorCloser fd(open(fFilePath, O_RDONLY));
+		if (!fd.IsSet())
 			return errno;
-		FileDescriptorCloser fdCloser(fd);
 
-		vm_page** pages = new(std::nothrow) vm_page*[kPageCountPerIteration];
-		ArrayDeleter<vm_page*> pagesDeleter(pages);
+		ArrayDeleter<vm_page*> pages(
+			new(std::nothrow) vm_page*[kPageCountPerIteration]);
 
-		uint8* buffer = (uint8*)malloc(kPageCountPerIteration * B_PAGE_SIZE);
-		MemoryDeleter bufferDeleter(buffer);
+		ArrayDeleter<uint8> buffer(
+			new(std::nothrow) uint8[kPageCountPerIteration * B_PAGE_SIZE]);
 			// TODO: Ideally we wouldn't use a buffer to read the file content,
 			// but read into the pages we allocated directly. Unfortunately
 			// there's no API to do that yet.
 
-		if (pages == NULL || buffer == NULL)
+		if (!pages.IsSet() || !buffer.IsSet())
 			return B_NO_MEMORY;
 
 		status_t error = B_OK;
@@ -830,7 +774,8 @@ private:
 
 			// read from the file
 			size_t bytesToRead = pagesToRead * B_PAGE_SIZE;
-			ssize_t bytesRead = pread(fd, buffer, bytesToRead, offset);
+			ssize_t bytesRead = pread(fd.Get(), buffer.Get(), bytesToRead,
+				offset);
 			if (bytesRead < 0) {
 				error = bytesRead;
 				break;
@@ -843,7 +788,7 @@ private:
 
 			// clear the last read page, if partial
 			if ((size_t)bytesRead < pagesRead * B_PAGE_SIZE) {
-				memset(buffer + bytesRead, 0,
+				memset(buffer.Get() + bytesRead, 0,
 					pagesRead * B_PAGE_SIZE - bytesRead);
 			}
 
@@ -852,7 +797,7 @@ private:
 				vm_page* page = pages[i];
 				error = vm_memcpy_to_physical(
 					page->physical_page_number * B_PAGE_SIZE,
-					buffer + i * B_PAGE_SIZE, B_PAGE_SIZE, false);
+					buffer.Get() + i * B_PAGE_SIZE, B_PAGE_SIZE, false);
 				if (error != B_OK)
 					break;
 			}
@@ -867,7 +812,7 @@ private:
 
 			size_t clearPages = 0;
 			for (size_t i = 0; i < pagesRead; i++) {
-				uint64* pageData = (uint64*)(buffer + i * B_PAGE_SIZE);
+				uint64* pageData = (uint64*)(buffer.Get() + i * B_PAGE_SIZE);
 				bool isClear = true;
 				for (size_t k = 0; isClear && k < B_PAGE_SIZE / 8; k++)
 					isClear = pageData[k] == 0;
@@ -886,7 +831,7 @@ private:
 			// and compute the new allocated pages count.
 			if (pagesRead < allocatedPages) {
 				size_t count = allocatedPages - pagesRead;
-				memcpy(pages + clearPages, pages + pagesRead,
+				memcpy(pages.Get() + clearPages, pages.Get() + pagesRead,
 					count * sizeof(vm_page*));
 				clearPages += count;
 			}
@@ -1111,7 +1056,7 @@ ram_disk_driver_register_device(device_node* parent)
 {
 	device_attr attrs[] = {
 		{B_DEVICE_PRETTY_NAME, B_STRING_TYPE,
-			{string: "RAM Disk Control Device"}},
+			{.string = "RAM Disk Control Device"}},
 		{NULL}
 	};
 
@@ -1406,6 +1351,9 @@ ram_disk_raw_device_control(void* _cookie, uint32 op, void* buffer,
 		case B_GET_GEOMETRY:
 		case B_GET_BIOS_GEOMETRY:
 		{
+			if (buffer == NULL || length > sizeof(device_geometry))
+				return B_BAD_VALUE;
+
 			device_geometry geometry;
 			geometry.bytes_per_sector = B_PAGE_SIZE;
 			geometry.sectors_per_track = 1;
@@ -1417,8 +1365,9 @@ ram_disk_raw_device_control(void* _cookie, uint32 op, void* buffer,
 			geometry.removable = true;
 			geometry.read_only = false;
 			geometry.write_once = false;
+			geometry.bytes_per_physical_sector = B_PAGE_SIZE;
 
-			return user_memcpy(buffer, &geometry, sizeof(device_geometry));
+			return user_memcpy(buffer, &geometry, length);
 		}
 
 		case B_GET_MEDIA_STATUS:
@@ -1468,18 +1417,10 @@ ram_disk_raw_device_control(void* _cookie, uint32 op, void* buffer,
 
 		case B_TRIM_DEVICE:
 		{
-			fs_trim_data* trimData;
-			MemoryDeleter deleter;
-			status_t status = get_trim_data_from_user(buffer, length, deleter,
-				trimData);
-			if (status != B_OK)
-				return status;
-
-			status = device->Trim(trimData);
-			if (status != B_OK)
-				return status;
-
-			return copy_trim_data_to_user(buffer, trimData);
+			// We know the buffer is kernel-side because it has been
+			// preprocessed in devfs
+			ASSERT(IS_KERNEL_ADDRESS(buffer));
+			return device->Trim((fs_trim_data*)buffer);
 		}
 
 		case RAM_DISK_IOCTL_INFO:

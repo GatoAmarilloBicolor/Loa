@@ -55,7 +55,7 @@ scsi_free_device(scsi_device_info *device)
 
 	scsi_dma_buffer_free(&device->dma_buffer);
 
-	DELETE_BEN(&device->dma_buffer_lock);
+	mutex_destroy(&device->dma_buffer_lock);
 	delete_sem(device->dma_buffer_owner);
 
 	free(device);
@@ -114,29 +114,29 @@ scsi_register_device(scsi_bus_info *bus, uchar target_id,
 		char product_rev[sizeof( inquiry_data->product_rev ) + 1];
 		device_attr attrs[] = {
 			// connection
-			{ SCSI_DEVICE_TARGET_ID_ITEM, B_UINT8_TYPE, { ui8: target_id }},
-			{ SCSI_DEVICE_TARGET_LUN_ITEM, B_UINT8_TYPE, { ui8: target_lun }},
+			{ SCSI_DEVICE_TARGET_ID_ITEM, B_UINT8_TYPE, { .ui8 = target_id }},
+			{ SCSI_DEVICE_TARGET_LUN_ITEM, B_UINT8_TYPE, { .ui8 = target_lun }},
 
 			// inquiry data (used for both identification and information)
 			{ SCSI_DEVICE_INQUIRY_ITEM, B_RAW_TYPE,
-				{ raw: { inquiry_data, sizeof( *inquiry_data ) }}},
+				{ .raw = { inquiry_data, sizeof( *inquiry_data ) }}},
 
 			// some more info for driver loading
-			{ SCSI_DEVICE_TYPE_ITEM, B_UINT8_TYPE, { ui8: inquiry_data->device_type }},
-			{ SCSI_DEVICE_VENDOR_ITEM, B_STRING_TYPE, { string: vendor_ident }},
-			{ SCSI_DEVICE_PRODUCT_ITEM, B_STRING_TYPE, { string: product_ident }},
-			{ SCSI_DEVICE_REVISION_ITEM, B_STRING_TYPE, { string: product_rev }},
+			{ SCSI_DEVICE_TYPE_ITEM, B_UINT8_TYPE, { .ui8 = inquiry_data->device_type }},
+			{ SCSI_DEVICE_VENDOR_ITEM, B_STRING_TYPE, { .string = vendor_ident }},
+			{ SCSI_DEVICE_PRODUCT_ITEM, B_STRING_TYPE, { .string = product_ident }},
+			{ SCSI_DEVICE_REVISION_ITEM, B_STRING_TYPE, { .string = product_rev }},
 
 			// description of peripheral drivers
-			{ B_DEVICE_BUS, B_STRING_TYPE, { string: "scsi" }},
+			{ B_DEVICE_BUS, B_STRING_TYPE, { .string = "scsi" }},
 
 			// extra restriction of maximum number of blocks per transfer
-			{ B_DMA_MAX_TRANSFER_BLOCKS, B_UINT32_TYPE, { ui32: max_blocks }},
+			{ B_DMA_MAX_TRANSFER_BLOCKS, B_UINT32_TYPE, { .ui32 = max_blocks }},
 
 			// atapi emulation
-			{ SCSI_DEVICE_IS_ATAPI_ITEM, B_UINT8_TYPE, { ui8: is_atapi }},
+			{ SCSI_DEVICE_IS_ATAPI_ITEM, B_UINT8_TYPE, { .ui8 = is_atapi }},
 			// manual autosense
-			{ SCSI_DEVICE_MANUAL_AUTOSENSE_ITEM, B_UINT8_TYPE, { ui8: manual_autosense }},
+			{ SCSI_DEVICE_MANUAL_AUTOSENSE_ITEM, B_UINT8_TYPE, { .ui8 = manual_autosense }},
 			{ NULL }
 		};
 
@@ -178,20 +178,18 @@ scsi_create_device(device_node *node, scsi_bus_info *bus,
 
 	scsi_dma_buffer_init(&device->dma_buffer);
 
-	if (INIT_BEN(&device->dma_buffer_lock, "dma_buffer") < 0)
-		goto err;
+	mutex_init(&device->dma_buffer_lock, "dma_buffer");
 
 	device->dma_buffer_owner = create_sem(1, "dma_buffer");
 	if (device->dma_buffer_owner < 0)
-		goto err2;
+		goto err;
 
 	register_kernel_daemon(scsi_dma_buffer_daemon, device, 5 * 10);
 
 	return device;
 
-err2:
-	DELETE_BEN(&device->dma_buffer_lock);
 err:
+	mutex_destroy(&device->dma_buffer_lock);
 	free(device);
 	return NULL;
 }
@@ -221,7 +219,8 @@ scsi_create_autosense_request(scsi_device_info *device)
 
 	// allocate buffer for space sense data and S/G list
 	device->auto_sense_area = create_area("auto_sense", (void**)&buffer,
-		B_ANY_KERNEL_ADDRESS, B_PAGE_SIZE, B_32_BIT_FULL_LOCK, 0);
+		B_ANY_KERNEL_ADDRESS, B_PAGE_SIZE, B_32_BIT_FULL_LOCK,
+		B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA);
 		// TODO: Use B_FULL_LOCK, if addresses >= 4 GB are supported!
 	if (device->auto_sense_area < 0)
 		goto err;
@@ -383,8 +382,8 @@ scsi_force_get_device(scsi_bus_info *bus, uchar target_id,
 	uchar target_lun, scsi_device_info **res_device)
 {
 	device_attr attrs[] = {
-		{ SCSI_DEVICE_TARGET_ID_ITEM, B_UINT8_TYPE, { ui8: target_id }},
-		{ SCSI_DEVICE_TARGET_LUN_ITEM, B_UINT8_TYPE, { ui8: target_lun }},
+		{ SCSI_DEVICE_TARGET_ID_ITEM, B_UINT8_TYPE, { .ui8 = target_id }},
+		{ SCSI_DEVICE_TARGET_LUN_ITEM, B_UINT8_TYPE, { .ui8 = target_lun }},
 		{ NULL }
 	};
 	device_node *node;

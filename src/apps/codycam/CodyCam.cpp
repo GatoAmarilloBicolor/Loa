@@ -1,3 +1,10 @@
+/*
+ * Copyright 1998-1999 Be, Inc. All Rights Reserved.
+ * Copyright 2003-2019 Haiku, Inc. All rights reserved.
+ * Distributed under the terms of the MIT License.
+ */
+
+
 #include "CodyCam.h"
 
 #include <stdio.h>
@@ -23,6 +30,7 @@
 #include <TextControl.h>
 #include <TimeSource.h>
 #include <TranslationUtils.h>
+#include <TranslatorFormats.h>
 
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "CodyCam"
@@ -147,7 +155,7 @@ CodyCam::QuitRequested()
 
 
 void
-CodyCam::MessageReceived(BMessage *message)
+CodyCam::MessageReceived(BMessage* message)
 {
 	switch (message->what) {
 		case msg_start:
@@ -179,6 +187,7 @@ CodyCam::MessageReceived(BMessage *message)
 			status_t err = fMediaRoster->GetParameterWebFor(node, &web);
 			if (err >= B_OK && web != NULL) {
 				view = BMediaTheme::ViewFor(web);
+				view->SetResizingMode(B_FOLLOW_ALL_SIDES);
 				fVideoControlWindow = new ControlWindow(view, node);
 				fMediaRoster->StartWatching(BMessenger(NULL,
 					fVideoControlWindow), node,	B_MEDIA_WEB_CHANGED);
@@ -233,7 +242,7 @@ CodyCam::_SetUpNodes()
 	fVideoConsumer = new VideoConsumer("CodyCam",
 		((VideoWindow*)fWindow)->VideoView(),
 		((VideoWindow*)fWindow)->StatusLine(), NULL, 0);
-	if (!fVideoConsumer) {
+	if (fVideoConsumer == NULL) {
 		fWindow->ErrorAlert(B_TRANSLATE("Cannot create a video window"),
 			B_ERROR);
 		return B_ERROR;
@@ -254,8 +263,8 @@ CodyCam::_SetUpNodes()
 		&cnt, B_MEDIA_RAW_VIDEO);
 	if (status != B_OK || cnt < 1) {
 		status = B_RESOURCE_UNAVAILABLE;
-		fWindow->ErrorAlert(B_TRANSLATE("Cannot find an available video stream"),
-			status);
+		fWindow->ErrorAlert(
+			B_TRANSLATE("Cannot find an available video stream"), status);
 		return status;
 	}
 
@@ -369,7 +378,7 @@ void
 CodyCam::_TearDownNodes()
 {
 	CALL("CodyCam::_TearDownNodes\n");
-	if (!fMediaRoster)
+	if (fMediaRoster == NULL)
 		return;
 
 	if (fVideoConsumer) {
@@ -497,7 +506,7 @@ void
 VideoWindow::MessageReceived(BMessage* message)
 {
 	BControl* control = NULL;
-	message->FindPointer((const char*)"source", (void **)&control);
+	message->FindPointer((const char*)"source", (void**)&control);
 
 	switch (message->what) {
 		case msg_filename:
@@ -515,7 +524,7 @@ VideoWindow::MessageReceived(BMessage* message)
 				FTPINFO("never\n");
 				fFtpInfo.rate = (bigtime_t)(B_INFINITE_TIMEOUT);
 			} else {
-				FTPINFO("%ld seconds\n", (long)seconds);
+				FTPINFO("%" B_PRId32 " seconds\n", seconds);
 				fFtpInfo.rate = (bigtime_t)(seconds * 1000000LL);
 			}
 			break;
@@ -609,7 +618,7 @@ VideoWindow::_BuildCaptureControls()
 	fErrorView->SetViewColor(ui_color(B_PANEL_BACKGROUND_COLOR));
 
 	// Capture controls
-	BGridLayout *controlsLayout = new BGridLayout(B_USE_DEFAULT_SPACING,
+	BGridLayout* controlsLayout = new BGridLayout(B_USE_DEFAULT_SPACING,
 		B_USE_SMALL_SPACING);
 	controlsLayout->SetInsets(B_USE_SMALL_SPACING);
 
@@ -627,7 +636,8 @@ VideoWindow::_BuildCaptureControls()
 
 	// format menu
 	fImageFormatMenu = new BPopUpMenu(B_TRANSLATE("Image Format Menu"));
-	BTranslationUtils::AddTranslationItems(fImageFormatMenu, B_TRANSLATOR_BITMAP);
+	BTranslationUtils::AddTranslationItems(fImageFormatMenu,
+		B_TRANSLATOR_BITMAP);
 	fImageFormatMenu->SetTargetForItems(this);
 
 	if (fImageFormatSettings->Value()
@@ -679,7 +689,7 @@ VideoWindow::_BuildCaptureControls()
 
 	fUploadClientMenu = new BPopUpMenu(B_TRANSLATE("Send to" B_UTF8_ELLIPSIS));
 	for (int i = 0; i < kUploadClientsCount; i++) {
-		BMessage *m = new BMessage(msg_upl_client);
+		BMessage* m = new BMessage(msg_upl_client);
 		m->AddInt32("client", i);
 		fUploadClientMenu->AddItem(new BMenuItem(kUploadClients[i], m));
 	}
@@ -843,7 +853,8 @@ VideoWindow::_QuitSettings()
 	fFilenameSetting->ValueChanged(fFileName->Text());
 	fImageFormatSettings->ValueChanged(fImageFormatMenu->FindMarked()->Label());
 	fCaptureRateSetting->ValueChanged(fCaptureRateMenu->FindMarked()->Label());
-	fUploadClientSetting->ValueChanged(fUploadClientMenu->FindMarked()->Label());
+	fUploadClientSetting->ValueChanged(
+		fUploadClientMenu->FindMarked()->Label());
 
 	fSettings->SaveSettings();
 	delete fSettings;
@@ -870,7 +881,8 @@ VideoWindow::ToggleMenuOnOff()
 ControlWindow::ControlWindow(BView* controls,
 	media_node node)
 	:
-	BWindow(BRect(), B_TRANSLATE("Video settings"), B_TITLED_WINDOW,
+	BWindow(controls->Bounds().OffsetToSelf(100, 100),
+		B_TRANSLATE("Video settings"), B_TITLED_WINDOW,
 		B_ASYNCHRONOUS_CONTROLS)
 {
 	fView = controls;
@@ -917,6 +929,7 @@ ControlWindow::MessageReceived(BMessage* message)
 
 		default:
 			BWindow::MessageReceived(message);
+			break;
 	}
 }
 
@@ -932,9 +945,9 @@ ControlWindow::QuitRequested()
 //	#pragma mark -
 
 
-int main() {
+int main()
+{
 	CodyCam app;
 	app.Run();
 	return 0;
 }
-

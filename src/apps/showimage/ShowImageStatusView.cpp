@@ -14,9 +14,11 @@
 #include <ControlLook.h>
 #include <Entry.h>
 #include <MenuItem.h>
+#include <NumberFormat.h>
 #include <Path.h>
 #include <PopUpMenu.h>
 #include <ScrollView.h>
+#include <StatusView.h>
 
 #include <tracker_private.h>
 #include "DirMenu.h"
@@ -27,10 +29,9 @@
 const float kHorzSpacing = 5.f;
 
 
-ShowImageStatusView::ShowImageStatusView(BScrollView* scrollView)
+ShowImageStatusView::ShowImageStatusView()
 	:
-	BView(BRect(), "statusview", B_FOLLOW_BOTTOM | B_FOLLOW_LEFT, B_WILL_DRAW),
-	fScrollView(scrollView),
+	BView("statusview", B_WILL_DRAW),
 	fPreferredSize(0.0, 0.0)
 {
 	memset(fCellWidth, 0, sizeof(fCellWidth));
@@ -41,10 +42,7 @@ void
 ShowImageStatusView::AttachedToWindow()
 {
 	SetFont(be_plain_font);
-	SetFontSize(10.0);
-
-	BScrollBar* scrollBar = fScrollView->ScrollBar(B_HORIZONTAL);
-	MoveTo(0.0, scrollBar->Frame().top);
+	BPrivate::AdoptScrollBarFontSize(this);
 
 	AdoptParentColors();
 
@@ -177,7 +175,11 @@ ShowImageStatusView::_SetFrameText(const BString& text)
 void
 ShowImageStatusView::_SetZoomText(float zoom)
 {
-	fCellText[kZoomCell].SetToFormat("%.0f%%", zoom * 100);
+	BNumberFormat numberFormat;
+	BString data;
+	numberFormat.FormatPercent(data, zoom);
+
+	fCellText[kZoomCell] = data;
 }
 
 
@@ -198,7 +200,6 @@ ShowImageStatusView::_SetImageTypeText(const BString& imageType)
 void
 ShowImageStatusView::_ValidatePreferredSize()
 {
-	float orgWidth = fPreferredSize.width;
 	// width
 	fPreferredSize.width = 0.f;
 	for (size_t i = 0; i < kStatusCellCount; i++) {
@@ -220,12 +221,10 @@ ShowImageStatusView::_ValidatePreferredSize()
 	fPreferredSize.height = ceilf(fontHeight.ascent + fontHeight.descent
 		+ fontHeight.leading);
 
-	if (fPreferredSize.height < B_H_SCROLL_BAR_HEIGHT)
-		fPreferredSize.height = B_H_SCROLL_BAR_HEIGHT;
+	float scrollBarSize = be_control_look->GetScrollBarWidth(B_HORIZONTAL);
+	if (fPreferredSize.height < scrollBarSize)
+		fPreferredSize.height = scrollBarSize;
 
-	float delta = fPreferredSize.width - orgWidth;
-	ResizeBy(delta, 0);
-	BScrollBar* scrollBar = fScrollView->ScrollBar(B_HORIZONTAL);
-	scrollBar->ResizeBy(-delta, 0);
-	scrollBar->MoveBy(delta, 0);
+	SetExplicitMinSize(fPreferredSize);
+	SetExplicitMaxSize(fPreferredSize);
 }

@@ -1,82 +1,61 @@
 /*
-
-	IconMenuItem.cpp
-
-	ProcessController
-	(c) 2000, Georges-Edouard Berenger, All Rights Reserved.
-	Copyright (C) 2004 beunited.org
-
-	This library is free software; you can redistribute it and/or
-	modify it under the terms of the GNU Lesser General Public
-	License as published by the Free Software Foundation; either
-	version 2.1 of the License, or (at your option) any later version.
-
-	This library is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-	Lesser General Public License for more details.
-
-	You should have received a copy of the GNU Lesser General Public
-	License along with this library; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-
-*/
-
+ * Copyright 2000, Georges-Edouard Berenger. All rights reserved.
+ * Copyright 2022, Haiku, Inc. All rights reserved.
+ * Distributed under the terms of the MIT License.
+ */
 #include "IconMenuItem.h"
-#include <Application.h>
-#include <NodeInfo.h>
+
+#include <ControlLook.h>
 #include <Bitmap.h>
-#include <Roster.h>
 
 
 IconMenuItem::IconMenuItem(BBitmap* icon, const char* title,
 	BMessage* msg, bool drawText, bool purge)
-	: BMenuItem(title, msg),
+	:
+	BMenuItem(title, msg),
 	fIcon(icon),
 	fDrawText(drawText),
 	fPurge(purge)
 {
-	if (!fIcon)
-		DefaultIcon(NULL);
 }
 
 
 IconMenuItem::IconMenuItem(BBitmap* icon, BMenu* menu, bool drawText, bool purge)
-	: BMenuItem(menu),
+	:
+	BMenuItem(menu),
 	fIcon(icon),
 	fDrawText(drawText),
 	fPurge(purge)
-
 {
-	if (!fIcon)
-		DefaultIcon(NULL);
-}
-
-
-IconMenuItem::IconMenuItem(const char* mime, const char* title, BMessage* msg, bool drawText)
-	: BMenuItem(title, msg),
-	fIcon(NULL),
-	fDrawText(drawText)
-{
-	DefaultIcon(mime);
 }
 
 
 IconMenuItem::~IconMenuItem()
 {
-	if (fPurge && fIcon)
+	if (fPurge)
 		delete fIcon;
 }
 
 
-void IconMenuItem::DrawContent()
+void
+IconMenuItem::Reset(BBitmap* icon, bool purge)
 {
-	BPoint	loc;
+	if (fPurge)
+		delete fIcon;
 
+	fPurge = purge;
+	fIcon = icon;
+}
+
+
+void
+IconMenuItem::DrawContent()
+{
 	DrawIcon();
+
 	if (fDrawText) {
-		loc = ContentLocation();
-		loc.x += 20;
+		BPoint loc = ContentLocation();
+		loc.x += ceilf(be_control_look->DefaultLabelSpacing() * 3.3f);
 		Menu()->MovePenTo(loc);
 		BMenuItem::DrawContent();
 	}
@@ -94,14 +73,13 @@ IconMenuItem::Highlight(bool hilited)
 void
 IconMenuItem::DrawIcon()
 {
-	// TODO: exact code duplication with TeamBarMenuItem::DrawIcon()
-	if (!fIcon)
+	if (fIcon == NULL)
 		return;
 
 	BPoint loc = ContentLocation();
 	BRect frame = Frame();
 
-	loc.y = frame.top + (frame.bottom - frame.top - 15) / 2;
+	loc.y = frame.top + (frame.bottom - frame.top - fIcon->Bounds().Height()) / 2;
 
 	BMenu* menu = Menu();
 
@@ -121,39 +99,15 @@ void
 IconMenuItem::GetContentSize(float* width, float* height)
 {
 	BMenuItem::GetContentSize(width, height);
-	int	limit = IconMenuItem::MinHeight();
+	if (fIcon == NULL)
+		return;
+
+	const float limit = ceilf(fIcon->Bounds().Height() +
+		(be_control_look->DefaultLabelSpacing() / 3.0f));
 	if (*height < limit)
 		*height = limit;
 	if (fDrawText)
-		*width += 20;
+		*width += fIcon->Bounds().Width() + be_control_look->DefaultLabelSpacing();
 	else
-		*width = 16;
-}
-
-
-void
-IconMenuItem::DefaultIcon(const char* mime)
-{
-	BRect rect(0, 0, 15, 15);
-	fIcon = new BBitmap(rect, B_COLOR_8_BIT);
-	if (mime) {
-		BMimeType mimeType(mime);
-		if (mimeType.GetIcon(fIcon, B_MINI_ICON) != B_OK)
-			fDrawText = true;
-	} else {
-		app_info info;
-		be_app->GetAppInfo(&info);
-		if (BNodeInfo::GetTrackerIcon(&info.ref, fIcon, B_MINI_ICON) != B_OK)
-			fDrawText = true;
-	}
-	fPurge = true;
-}
-
-
-int IconMenuItem::MinHeight()
-{
-	static int	minheight = -1;
-	if (minheight < 0)
-		minheight = 17;
-	return minheight;
+		*width = fIcon->Bounds().Width() + 1;
 }

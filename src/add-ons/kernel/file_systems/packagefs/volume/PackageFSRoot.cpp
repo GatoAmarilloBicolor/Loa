@@ -6,7 +6,7 @@
 
 #include "PackageFSRoot.h"
 
-#include <AutoDeleter.h>
+#include <AutoDeleterDrivers.h>
 
 #include <vfs.h>
 
@@ -68,7 +68,7 @@ PackageFSRoot::Init()
 	if (fPackageLinksDirectory == NULL)
 		return B_NO_MEMORY;
 
-	status_t error = fPackageLinksDirectory->Init(NULL,
+	status_t error = fPackageLinksDirectory->Init(
 		StringConstants::Get().kPackageLinksDirectoryName);
 	if (error != B_OK)
 		RETURN_ERROR(error);
@@ -114,7 +114,7 @@ PackageFSRoot::RegisterVolume(Volume* volume)
 				relativeRootPath, strerror(error));
 			RETURN_ERROR(error);
 		}
-		CObjectDeleter<struct vnode> vnodePutter(vnode, &vfs_put_vnode);
+		VnodePutter vnodePutter(vnode);
 
 		// stat it
 		struct stat st;

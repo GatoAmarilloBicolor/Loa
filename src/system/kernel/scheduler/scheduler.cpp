@@ -108,19 +108,20 @@ enqueue(Thread* thread, bool newOne)
 		ASSERT(thread->previous_cpu != NULL);
 		ASSERT(threadData->Core() != NULL);
 		targetCPU = &gCPUEntries[thread->previous_cpu->cpu_num];
-	} else if (gSingleCore)
+	} else if (gSingleCore) {
 		targetCore = &gCoreEntries[0];
-	else if (threadData->Core() != NULL
+	} else if (threadData->Core() != NULL
 		&& (!newOne || !threadData->HasCacheExpired())) {
 		targetCore = threadData->Rebalance();
 	}
 
-	bool rescheduleNeeded = threadData->ChooseCoreAndCPU(targetCore, targetCPU);
+	const bool rescheduleNeeded = threadData->ChooseCoreAndCPU(targetCore, targetCPU);
 
-	TRACE("enqueueing thread %ld with priority %ld on CPU %ld (core %ld)\n",
-		thread->id, threadPriority, targetCPU->fCPUNumber, targetCore->fCoreID);
+	TRACE("enqueueing thread %" B_PRId32 " with priority %" B_PRId32 " on CPU %" B_PRId32 " (core %" B_PRId32 ")\n",
+		thread->id, threadPriority, targetCPU->ID(), targetCore->ID());
 
-	threadData->Enqueue();
+	bool wasRunQueueEmpty = false;
+	threadData->Enqueue(wasRunQueueEmpty);
 
 	// notify listeners
 	NotifySchedulerListeners(&SchedulerListener::ThreadEnqueuedInRunQueue,
@@ -128,11 +129,12 @@ enqueue(Thread* thread, bool newOne)
 
 	int32 heapPriority = CPUPriorityHeap::GetKey(targetCPU);
 	if (threadPriority > heapPriority
-		|| (threadPriority == heapPriority && rescheduleNeeded)) {
+		|| (threadPriority == heapPriority && rescheduleNeeded)
+		|| wasRunQueueEmpty) {
 
-		if (targetCPU->ID() == smp_get_current_cpu())
+		if (targetCPU->ID() == smp_get_current_cpu()) {
 			gCPU[targetCPU->ID()].invoke_scheduler = true;
-		else {
+		} else {
 			smp_send_ici(targetCPU->ID(), SMP_MSG_RESCHEDULE, 0, 0, 0,
 				NULL, SMP_MSG_FLAG_ASYNC);
 		}
@@ -151,7 +153,7 @@ scheduler_enqueue_in_run_queue(Thread *thread)
 
 	SchedulerModeLocker _;
 
-	TRACE("enqueueing new thread %ld with static priority %ld\n", thread->id,
+	TRACE("enqueueing new thread %" B_PRId32 " with static priority %" B_PRId32 "\n", thread->id,
 		thread->priority);
 
 	ThreadData* threadData = thread->scheduler_data;
@@ -178,7 +180,7 @@ scheduler_set_thread_priority(Thread *thread, int32 priority)
 	ThreadData* threadData = thread->scheduler_data;
 	int32 oldPriority = thread->priority;
 
-	TRACE("changing thread %ld priority to %ld (old: %ld, effective: %ld)\n",
+	TRACE("changing thread %" B_PRId32 " priority to %" B_PRId32 " (old: %" B_PRId32 ", effective: %" B_PRId32 ")\n",
 		thread->id, priority, oldPriority, threadData->GetEffectivePriority());
 
 	thread->priority = priority;
@@ -319,6 +321,7 @@ reschedule(int32 nextState)
 	SCHEDULER_ENTER_FUNCTION();
 
 	int32 thisCPU = smp_get_current_cpu();
+	gCPU[thisCPU].invoke_scheduler = false;
 
 	CPUEntry* cpu = CPUEntry::GetCPU(thisCPU);
 	CoreEntry* core = CoreEntry::GetCore(thisCPU);
@@ -326,11 +329,14 @@ reschedule(int32 nextState)
 	Thread* oldThread = thread_get_current_thread();
 	ThreadData* oldThreadData = oldThread->scheduler_data;
 
+	CPUSet oldThreadMask;
+	bool useOldThreadMask, fetchedOldThreadMask = false;
+
 	oldThreadData->StopCPUTime();
 
 	SchedulerModeLocker modeLocker;
 
-	TRACE("reschedule(): cpu %ld, current thread = %ld\n", thisCPU,
+	TRACE("reschedule(): cpu %" B_PRId32 ", current thread = %" B_PRId32 "\n", thisCPU,
 		oldThread->id);
 
 	oldThread->state = nextState;
@@ -345,7 +351,11 @@ reschedule(int32 nextState)
 		case B_THREAD_READY:
 			enqueueOldThread = true;
 
-			if (!oldThreadData->IsIdle()) {
+			oldThreadMask = oldThreadData->GetCPUMask();
+			useOldThreadMask = !oldThreadMask.IsEmpty();
+			fetchedOldThreadMask = true;
+
+			if (!oldThreadData->IsIdle() && (!useOldThreadMask || oldThreadMask.GetBit(thisCPU))) {
 				oldThreadData->Continues();
 				if (oldThreadData->HasQuantumEnded(oldThread->cpu->preempted,
 						oldThread->has_yielded)) {
@@ -378,8 +388,12 @@ reschedule(int32 nextState)
 	ThreadData* nextThreadData;
 	if (gCPU[thisCPU].disabled) {
 		if (!oldThreadData->IsIdle()) {
-			putOldThreadAtBack = oldThread->pinned_to_cpu == 0;
-			oldThreadData->UnassignCore(true);
+			if (oldThread->pinned_to_cpu == 0) {
+				putOldThreadAtBack = true;
+				oldThreadData->UnassignCore(true);
+			} else {
+				putOldThreadAtBack = false;
+			}
 
 			CPURunQueueLocker cpuLocker(cpu);
 			nextThreadData = cpu->PeekIdleThread();
@@ -387,9 +401,25 @@ reschedule(int32 nextState)
 		} else
 			nextThreadData = oldThreadData;
 	} else {
+		if (!fetchedOldThreadMask) {
+			oldThreadMask = oldThreadData->GetCPUMask();
+			useOldThreadMask = !oldThreadMask.IsEmpty();
+			fetchedOldThreadMask = true;
+		}
+		bool oldThreadShouldMigrate = useOldThreadMask && !oldThreadMask.GetBit(thisCPU);
+		if (oldThreadShouldMigrate)
+			enqueueOldThread = false;
+
 		nextThreadData
 			= cpu->ChooseNextThread(enqueueOldThread ? oldThreadData : NULL,
 				putOldThreadAtBack);
+
+		if (oldThreadShouldMigrate) {
+			enqueue(oldThread, true);
+			// replace with the idle thread, if no other thread could be found
+			if (oldThreadData == nextThreadData)
+				nextThreadData = cpu->PeekIdleThread();
+		}
 
 		// update CPU heap
 		CoreCPUHeapLocker cpuLocker(core);
@@ -410,7 +440,7 @@ reschedule(int32 nextState)
 		acquire_spinlock(&nextThread->scheduler_lock);
 	}
 
-	TRACE("reschedule(): cpu %ld, next thread = %ld\n", thisCPU,
+	TRACE("reschedule(): cpu %" B_PRId32 ", next thread = %" B_PRId32 "\n", thisCPU,
 		nextThread->id);
 
 	T(ScheduleThread(nextThread, oldThread));
@@ -565,6 +595,10 @@ scheduler_set_cpu_enabled(int32 cpuID, bool enabled)
 	}
 
 	gCPU[cpuID].disabled = !enabled;
+	if (enabled)
+		gCPUEnabled.SetBitAtomic(cpuID);
+	else
+		gCPUEnabled.ClearBitAtomic(cpuID);
 
 	if (!enabled) {
 		cpu->Stop();
@@ -654,12 +688,7 @@ init()
 
 	// disable parts of the scheduler logic that are not needed
 	gSingleCore = coreCount == 1;
-	gTrackCPULoad = increase_cpu_performance(0) == B_OK;
-	gTrackCoreLoad = !gSingleCore || gTrackCPULoad;
-	dprintf("scheduler switches: single core: %s, cpu load tracking: %s,"
-		" core load tracking: %s\n", gSingleCore ? "true" : "false",
-		gTrackCPULoad ? "true" : "false",
-		gTrackCoreLoad ? "true" : "false");
+	scheduler_update_policy();
 
 	gCoreCount = coreCount;
 	gPackageCount = packageCount;
@@ -737,6 +766,18 @@ void
 scheduler_enable_scheduling()
 {
 	sSchedulerEnabled = true;
+}
+
+
+void
+scheduler_update_policy()
+{
+	gTrackCPULoad = increase_cpu_performance(0) == B_OK;
+	gTrackCoreLoad = !gSingleCore || gTrackCPULoad;
+	dprintf("scheduler switches: single core: %s, cpu load tracking: %s,"
+		" core load tracking: %s\n", gSingleCore ? "true" : "false",
+		gTrackCPULoad ? "true" : "false",
+		gTrackCoreLoad ? "true" : "false");
 }
 
 

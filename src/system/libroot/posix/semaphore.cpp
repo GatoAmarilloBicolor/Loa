@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 #include <OS.h>
 
@@ -18,11 +19,13 @@
 #include <posix/realtime_sem_defs.h>
 #include <syscall_utils.h>
 #include <syscalls.h>
+#include <time_private.h>
 #include <user_mutex_defs.h>
 
 
 #define SEM_TYPE_NAMED		1
 #define SEM_TYPE_UNNAMED	2
+#define SEM_TYPE_UNNAMED_SHARED 3
 
 
 static int32
@@ -113,7 +116,7 @@ sem_unlink(const char* name)
 int
 sem_init(sem_t* semaphore, int shared, unsigned value)
 {
-	semaphore->type = SEM_TYPE_UNNAMED;
+	semaphore->type = shared ? SEM_TYPE_UNNAMED_SHARED : SEM_TYPE_UNNAMED;
 	semaphore->u.unnamed_sem = value;
 	return 0;
 }
@@ -122,7 +125,7 @@ sem_init(sem_t* semaphore, int shared, unsigned value)
 int
 sem_destroy(sem_t* semaphore)
 {
-	if (semaphore->type != SEM_TYPE_UNNAMED)
+	if (semaphore->type != SEM_TYPE_UNNAMED && semaphore->type != SEM_TYPE_UNNAMED_SHARED)
 		RETURN_AND_SET_ERRNO(EINVAL);
 
 	return 0;
@@ -130,18 +133,24 @@ sem_destroy(sem_t* semaphore)
 
 
 static int
-unnamed_sem_post(sem_t* semaphore) {
+unnamed_sem_post(sem_t* semaphore)
+{
 	int32* sem = (int32*)&semaphore->u.unnamed_sem;
 	int32 oldValue = atomic_add_if_greater(sem, 1, -1);
 	if (oldValue > -1)
 		return 0;
 
-	return _kern_mutex_sem_release(sem);
+	uint32 flags = 0;
+	if (semaphore->type == SEM_TYPE_UNNAMED_SHARED)
+		flags |= B_USER_MUTEX_SHARED;
+
+	return _kern_mutex_sem_release(sem, flags);
 }
 
 
 static int
-unnamed_sem_trywait(sem_t* semaphore) {
+unnamed_sem_trywait(sem_t* semaphore)
+{
 	int32* sem = (int32*)&semaphore->u.unnamed_sem;
 	int32 oldValue = atomic_add_if_greater(sem, -1, 0);
 	if (oldValue > 0)
@@ -152,22 +161,38 @@ unnamed_sem_trywait(sem_t* semaphore) {
 
 
 static int
-unnamed_sem_timedwait(sem_t* semaphore, const struct timespec* timeout) {
+unnamed_sem_timedwait(sem_t* semaphore, clockid_t clock_id,
+	const struct timespec* timeout)
+{
 	int32* sem = (int32*)&semaphore->u.unnamed_sem;
 
 	bigtime_t timeoutMicros = B_INFINITE_TIMEOUT;
+	uint32 flags = 0;
+	if (semaphore->type == SEM_TYPE_UNNAMED_SHARED)
+		flags |= B_USER_MUTEX_SHARED;
 	if (timeout != NULL) {
-		timeoutMicros = ((bigtime_t)timeout->tv_sec) * 1000000
-			+ timeout->tv_nsec / 1000;
+		if (!timespec_to_bigtime(*timeout, timeoutMicros))
+			timeoutMicros = -1;
+
+		switch (clock_id) {
+			case CLOCK_REALTIME:
+				flags |= B_ABSOLUTE_REAL_TIME_TIMEOUT;
+				break;
+			case CLOCK_MONOTONIC:
+				flags |= B_ABSOLUTE_TIMEOUT;
+				break;
+			default:
+				return EINVAL;
+		}
 	}
 
 	int result = unnamed_sem_trywait(semaphore);
 	if (result == 0)
 		return 0;
+	if (timeoutMicros < 0)
+		return EINVAL;
 
-	return _kern_mutex_sem_acquire(sem, NULL,
-		timeoutMicros == B_INFINITE_TIMEOUT ? 0 : B_ABSOLUTE_REAL_TIME_TIMEOUT,
-		timeoutMicros);
+	return _kern_mutex_sem_acquire(sem, NULL, flags, timeoutMicros);
 }
 
 
@@ -185,23 +210,34 @@ sem_post(sem_t* semaphore)
 
 
 static int
-named_sem_timedwait(sem_t* semaphore, const struct timespec* timeout)
+named_sem_timedwait(sem_t* semaphore, clockid_t clock_id,
+	const struct timespec* timeout)
 {
-	if (timeout != NULL
-		&& (timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000)) {
-		status_t err = _kern_realtime_sem_wait(semaphore->u.named_sem_id, 0);
-		if (err == B_WOULD_BLOCK)
-			err = EINVAL;
-		// do nothing, return err as it is.
-		return err;
+	bigtime_t timeoutMicros = B_INFINITE_TIMEOUT;
+	uint32 flags = 0;
+	if (timeout != NULL) {
+		if (!timespec_to_bigtime(*timeout, timeoutMicros)) {
+			status_t err = _kern_realtime_sem_wait(semaphore->u.named_sem_id,
+				B_RELATIVE_TIMEOUT, 0);
+			if (err == B_WOULD_BLOCK)
+				err = EINVAL;
+			// do nothing, return err as it is.
+			return err;
+		}
+
+		switch (clock_id) {
+			case CLOCK_REALTIME:
+				flags = B_ABSOLUTE_REAL_TIME_TIMEOUT;
+				break;
+			case CLOCK_MONOTONIC:
+				flags = B_ABSOLUTE_TIMEOUT;
+				break;
+			default:
+				return EINVAL;
+		}
 	}
 
-	bigtime_t timeoutMicros = B_INFINITE_TIMEOUT;
-	if (timeout != NULL) {
-		timeoutMicros = ((bigtime_t)timeout->tv_sec) * 1000000
-			+ timeout->tv_nsec / 1000;
-	}
-	status_t err = _kern_realtime_sem_wait(semaphore->u.named_sem_id,
+	status_t err = _kern_realtime_sem_wait(semaphore->u.named_sem_id, flags,
 		timeoutMicros);
 	if (err == B_WOULD_BLOCK)
 		err = ETIMEDOUT;
@@ -214,9 +250,10 @@ int
 sem_trywait(sem_t* semaphore)
 {
 	status_t error;
-	if (semaphore->type == SEM_TYPE_NAMED)
-		error = _kern_realtime_sem_wait(semaphore->u.named_sem_id, 0);
-	else
+	if (semaphore->type == SEM_TYPE_NAMED) {
+		error = _kern_realtime_sem_wait(semaphore->u.named_sem_id,
+			B_RELATIVE_TIMEOUT, 0);
+	} else
 		error = unnamed_sem_trywait(semaphore);
 
 	RETURN_AND_SET_ERRNO(error);
@@ -228,24 +265,31 @@ sem_wait(sem_t* semaphore)
 {
 	status_t error;
 	if (semaphore->type == SEM_TYPE_NAMED)
-		error = named_sem_timedwait(semaphore, NULL);
+		error = named_sem_timedwait(semaphore, CLOCK_REALTIME, NULL);
 	else
-		error = unnamed_sem_timedwait(semaphore, NULL);
+		error = unnamed_sem_timedwait(semaphore, CLOCK_REALTIME, NULL);
 
 	RETURN_AND_SET_ERRNO_TEST_CANCEL(error);
 }
 
 
 int
-sem_timedwait(sem_t* semaphore, const struct timespec* timeout)
+sem_clockwait(sem_t* semaphore, clockid_t clock_id, const struct timespec* abstime)
 {
 	status_t error;
 	if (semaphore->type == SEM_TYPE_NAMED)
-		error = named_sem_timedwait(semaphore, timeout);
+		error = named_sem_timedwait(semaphore, clock_id, abstime);
 	else
-		error = unnamed_sem_timedwait(semaphore, timeout);
+		error = unnamed_sem_timedwait(semaphore, clock_id, abstime);
 
 	RETURN_AND_SET_ERRNO_TEST_CANCEL(error);
+}
+
+
+int
+sem_timedwait(sem_t* semaphore, const struct timespec* abstime)
+{
+	return sem_clockwait(semaphore, CLOCK_REALTIME, abstime);
 }
 
 

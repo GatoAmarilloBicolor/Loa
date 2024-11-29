@@ -20,8 +20,17 @@
 #include "ps2_trackpoint.h"
 
 #include <fs/devfs.h>
+#include <util/AutoLock.h>
 
 #include <string.h>
+
+
+//#define TRACE_PS2_DEV
+#ifdef TRACE_PS2_DEV
+#	define TRACE(x...) dprintf(x)
+#else
+#	define TRACE(x...)
+#endif
 
 
 ps2_dev ps2_device[PS2_DEVICE_COUNT];
@@ -45,7 +54,7 @@ ps2_reset_mouse(ps2_dev* dev)
 		status = ps2_dev_command(dev, PS2_CMD_RESEND, NULL, 0, data, 2);
 	}
 
-	if (status == B_OK && data[0] != 0xAA && data[1] != 0x00) {
+	if (status == B_OK && (data[0] != 0xAA || data[1] != 0x00)) {
 		TRACE("ps2: reset mouse failed, response was: 0x%02x 0x%02x\n",
 			data[0], data[1]);
 		status = B_ERROR;
@@ -64,7 +73,7 @@ ps2_dev_detect_pointing(ps2_dev* dev, device_hooks** hooks)
 {
 	status_t status = ps2_reset_mouse(dev);
 	if (status != B_OK) {
-		INFO("ps2: reset failed\n");
+		INFO("ps2_dev: reset failed: %s\n", strerror(status));
 		return B_ERROR;
 	}
 
@@ -346,7 +355,7 @@ pass_to_handler:
 
 	if (!dev->active) {
 		TRACE("ps2: %s not active, data 0x%02x dropped\n", dev->name, data);
-		if (data != 0x00 && data != 0xaa) {
+		if (gSetupComplete && data != 0x00 && data != 0xaa) {
 			INFO("ps2: possibly a hot plugin of %s\n", dev->name);
 			ps2_service_notify_device_added(dev);
 			return B_INVOKE_SCHEDULER;
@@ -367,19 +376,15 @@ status_t
 standard_command_timeout(ps2_dev* dev, uint8 cmd, const uint8* out,
 	int out_count, uint8* in, int in_count, bigtime_t timeout)
 {
-	status_t res;
-#ifdef TRACE_PS2
-	bigtime_t start;
-#endif
-	int32 sem_count;
-	int i;
-
 	TRACE("ps2: ps2_dev_command cmd 0x%02x, out-count %d, in-count %d, "
 		"dev %s\n", cmd, out_count, in_count, dev->name);
-	for (i = 0; i < out_count; i++)
+	for (int i = 0; i < out_count; i++)
 		TRACE("ps2: ps2_dev_command tx: 0x%02x\n", out[i]);
 
-	res = get_sem_count(dev->result_sem, &sem_count);
+	MutexLocker controllerLocker(gControllerLock);
+
+	int32 sem_count;
+	status_t res = get_sem_count(dev->result_sem, &sem_count);
 	if (res == B_OK && sem_count != 0) {
 		TRACE("ps2: ps2_dev_command: sem_count %" B_PRId32 ", fixing!\n",
 			sem_count);
@@ -394,12 +399,9 @@ standard_command_timeout(ps2_dev* dev, uint8 cmd, const uint8* out,
 	dev->result_buf = in;
 
 	res = B_OK;
-	for (i = -1; res == B_OK && i < out_count; i++) {
-
+	for (int i = -1; res == B_OK && i < out_count; i++) {
 		atomic_and(&dev->flags,
 			~(PS2_FLAG_ACK | PS2_FLAG_NACK | PS2_FLAG_GETID | PS2_FLAG_RESEND));
-
-		acquire_sem(gControllerSem);
 
 		if (!(atomic_get(&dev->flags) & PS2_FLAG_KEYB)) {
 			uint8 prefix_cmd;
@@ -427,16 +429,15 @@ standard_command_timeout(ps2_dev* dev, uint8 cmd, const uint8* out,
 			}
 		}
 
-		release_sem(gControllerSem);
-#ifdef TRACE_PS2
-		start = system_time();
+#ifdef TRACE_PS2_DEV
+		bigtime_t start = system_time();
 #endif
 		res = acquire_sem_etc(dev->result_sem, 1, B_RELATIVE_TIMEOUT, timeout);
 
 		if (res != B_OK)
 			atomic_and(&dev->flags, ~PS2_FLAG_CMD);
 
-#ifdef TRACE_PS2
+#ifdef TRACE_PS2_DEV
 		TRACE("ps2: ps2_dev_command wait for ack res 0x%08" B_PRIx32 ", "
 			"wait-time %" B_PRId64 "\n", res, system_time() - start);
 #endif
@@ -458,8 +459,8 @@ standard_command_timeout(ps2_dev* dev, uint8 cmd, const uint8* out,
 		if (in_count == 0) {
 			atomic_and(&dev->flags, ~PS2_FLAG_CMD);
 		} else {
-#ifdef TRACE_PS2
-			start = system_time();
+#ifdef TRACE_PS2_DEV
+			bigtime_t start = system_time();
 #endif
 			res = acquire_sem_etc(dev->result_sem, 1, B_RELATIVE_TIMEOUT,
 				timeout);
@@ -474,7 +475,7 @@ standard_command_timeout(ps2_dev* dev, uint8 cmd, const uint8* out,
 				res = B_IO_ERROR;
 			}
 
-#ifdef TRACE_PS2
+#ifdef TRACE_PS2_DEV
 			TRACE("ps2: ps2_dev_command wait for input res 0x%08" B_PRIx32 ", "
 				"wait-time %" B_PRId64 "\n", res, system_time() - start);
 			for (i = 0; i < in_count; i++)
@@ -483,7 +484,7 @@ standard_command_timeout(ps2_dev* dev, uint8 cmd, const uint8* out,
 		}
 	}
 
-	TRACE("ps2: ps2_dev_command result 0x%08" B_PRIx32 "\n", res);
+	TRACE("ps2: ps2_dev_command result: %s\n", strerror(res));
 
 	return res;
 }

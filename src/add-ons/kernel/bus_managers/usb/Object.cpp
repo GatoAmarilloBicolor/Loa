@@ -1,5 +1,5 @@
 /*
- * Copyright 2006, Haiku Inc. All rights reserved.
+ * Copyright 2006-2020, Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -29,7 +29,31 @@ Object::Object(Object *parent)
 
 Object::~Object()
 {
-	fStack->PutUSBID(fUSBID);
+	PutUSBID();
+}
+
+
+void
+Object::PutUSBID(bool waitForIdle)
+{
+	if (fUSBID != UINT32_MAX) {
+		fStack->PutUSBID(this);
+		fUSBID = UINT32_MAX;
+	}
+
+	if (waitForIdle)
+		WaitForIdle();
+}
+
+
+void
+Object::WaitForIdle()
+{
+	int32 retries = 20;
+	while (CountReferences() != 1 && retries--)
+		snooze(100);
+	if (retries <= 0)
+		panic("USB object did not become idle!");
 }
 
 

@@ -39,6 +39,7 @@ public:
 
 	inline	int32		GetPriority() const	{ return fThread->priority; }
 	inline	Thread*		GetThread() const	{ return fThread; }
+	inline	CPUSet		GetCPUMask() const	{ return fThread->cpumask.And(gCPUEnabled); }
 
 	inline	bool		IsRealTime() const;
 	inline	bool		IsIdle() const;
@@ -74,7 +75,7 @@ public:
 	inline	bigtime_t	WentSleepActive() const	{ return fWentSleepActive; }
 
 	inline	void		PutBack();
-	inline	void		Enqueue();
+	inline	void		Enqueue(bool& wasRunQueueEmpty);
 	inline	bool		Dequeue();
 
 	inline	void		UpdateActivity(bigtime_t active);
@@ -406,7 +407,7 @@ ThreadData::PutBack()
 
 
 inline void
-ThreadData::Enqueue()
+ThreadData::Enqueue(bool& wasRunQueueEmpty)
 {
 	SCHEDULER_ENTER_FUNCTION();
 
@@ -427,8 +428,7 @@ ThreadData::Enqueue()
 
 	fThread->state = B_THREAD_READY;
 
-	int32 priority = GetEffectivePriority();
-
+	const int32 priority = GetEffectivePriority();
 	if (fThread->pinned_to_cpu > 0) {
 		ASSERT(fThread->previous_cpu != NULL);
 		CPUEntry* cpu = CPUEntry::GetCPU(fThread->previous_cpu->cpu_num);
@@ -437,11 +437,17 @@ ThreadData::Enqueue()
 		ASSERT(!fEnqueued);
 		fEnqueued = true;
 
+		ThreadData* top = cpu->PeekThread();
+		wasRunQueueEmpty = (top == NULL || top->IsIdle());
+
 		cpu->PushBack(this, priority);
 	} else {
 		CoreRunQueueLocker _(fCore);
 		ASSERT(!fEnqueued);
 		fEnqueued = true;
+
+		ThreadData* top = fCore->PeekThread();
+		wasRunQueueEmpty = (top == NULL || top->IsIdle());
 
 		fCore->PushBack(this, priority);
 	}

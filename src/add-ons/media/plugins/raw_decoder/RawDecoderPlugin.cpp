@@ -50,12 +50,12 @@ AudioBufferSize(int32 channel_count, uint32 sample_format, float frame_rate, big
 void
 RawDecoder::GetCodecInfo(media_codec_info *info)
 {
-	strcpy(info->short_name, "raw");
+	strlcpy(info->short_name, "raw", sizeof(info->short_name));
 
 	if (fInputFormat.IsAudio())
-		strcpy(info->pretty_name, "Raw audio decoder");
+		strlcpy(info->pretty_name, "Raw audio decoder", sizeof(info->pretty_name));
 	else
-		strcpy(info->pretty_name, "Raw video decoder");
+		strlcpy(info->pretty_name, "Raw video decoder", sizeof(info->pretty_name));
 }
 
 
@@ -482,12 +482,13 @@ RawDecoder::Decode(void *buffer, int64 *frameCount,
 	char *output_buffer = (char *)buffer;
 	mediaHeader->start_time = fStartTime;
 	*frameCount = 0;
+
+	status_t status = B_OK;
 	while (*frameCount < fOutputBufferFrameCount) {
 		if (fChunkSize == 0) {
 			media_header mh;
-			status_t err;
-			err = GetNextChunk(&fChunkBuffer, &fChunkSize, &mh);
-			if (err != B_OK || fChunkSize < fInputFrameSize) {
+			status = GetNextChunk(&fChunkBuffer, &fChunkSize, &mh);
+			if (status != B_OK || fChunkSize < (size_t)fInputFrameSize) {
 				fChunkSize = 0;
 				break;
 			}
@@ -496,7 +497,8 @@ RawDecoder::Decode(void *buffer, int64 *frameCount,
 			fStartTime = mh.start_time;
 			continue;
 		}
-		int32 frames = min_c(fOutputBufferFrameCount - *frameCount, fChunkSize / fInputFrameSize);
+		int32 frames = min_c(fOutputBufferFrameCount - *frameCount,
+			(int64)(fChunkSize / fInputFrameSize));
 		if (frames == 0)
 			break;
 
@@ -513,10 +515,10 @@ RawDecoder::Decode(void *buffer, int64 *frameCount,
 
 	if (fSwapOutput)
 		fSwapOutput(buffer, *frameCount * fInputFormat.u.raw_audio.channel_count);
-	
-	TRACE("framecount %Ld, time %Ld\n",*frameCount, mediaHeader->start_time);
-		
-	return *frameCount ? B_OK : B_ERROR;
+
+	TRACE("framecount %lld, time %lld\n",*frameCount, mediaHeader->start_time);
+
+	return *frameCount ? B_OK : (status != B_OK ? status : B_ERROR);
 }
 
 

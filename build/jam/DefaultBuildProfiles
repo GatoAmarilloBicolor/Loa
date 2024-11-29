@@ -42,6 +42,7 @@ rule DefineDefaultBuildProfiles
 
 	# nightly profiles
 	DefineBuildProfile nightly-raw : image : "haiku-nightly.image" ;
+	DefineBuildProfile nightly-mmc : haiku-mmc-image : "haiku-nightly.mmc" ;
 	DefineBuildProfile nightly-vmware : vmware-image : "haiku-nightly.vmdk" ;
 	DefineBuildProfile nightly-cd : cd-image : "haiku-nightly.iso" ;
 	DefineBuildProfile nightly-anyboot : anyboot-image
@@ -70,47 +71,42 @@ rule DefineDefaultBuildProfiles
 			HAIKU_ROOT_USER_REAL_NAME ?= "Yourself" ;
 			AddGroupToHaikuImage party : 101 : user sshd ;
 			HAIKU_IMAGE_HOST_NAME ?= shredder ;
-			if $(DEBUG) != 0 {
-				HAIKU_IMAGE_SIZE ?= 1000 ;
-			}
-			HAIKU_IMAGE_SIZE ?= 800 ;
 
-			AddHaikuImagePackages
+			if $(HAIKU_INCLUDE_SOURCES) = 1 || $(DEBUG) != 0 {
+				HAIKU_IMAGE_SIZE ?= 1400 ;
+			} else {
+				HAIKU_IMAGE_SIZE ?= 800 ;
+			}
+
+			AddHaikuImageSystemPackages
 				bepdf
 				keymapswitcher
-				llvm
-				man
-				mercurial
-				nano
+				mandoc
 				noto
 				noto_sans_cjk_jp
 				openssh
-				p7zip
 				pdfwriter
 				pe
-				python
 				timgmsoundfont
 				vision
+				wonderbrush
 				wpa_supplicant
-				wqy_microhei
-				# xz_utils can't be built with gcc2, so we install it for
-				# primary gcc 4 architectures or gcc 2 hybrids.
-				xz_utils@!gcc2
-				gcc2 @{ xz_utils_x86@secondary_x86 }@
+				# Some packages can't be built with gcc2, so we install the gcc13
+				# secondary architecture package instead in this case
+				!gcc2 @{ nano p7zip python3.10 xz_utils }@
+				gcc2 @{ nano_x86@secondary_x86 p7zip_x86@secondary_x86
+					python3.10_x86@secondary_x86 xz_utils_x86@secondary_x86 }@
 				;
 			AddHaikuImageSourcePackages
 				bepdf
-				man
-				mercurial
 				nano
 				p7zip
-				gcc
 				;
 
 			local architectureObject ;
 			for architectureObject in [ MultiArchSubDirSetup ] {
 				on $(architectureObject) {
-					AddHaikuImagePackages openssl wonderbrush@gcc2 ;
+					AddHaikuImageSystemPackages openssl3 ;
 				}
 			}
 
@@ -124,11 +120,6 @@ rule DefineDefaultBuildProfiles
 			}
 		}
 
-		case "alpha-*" : {
-			Echo The alpha-* build profiles have been renamed to release-* ;
-			Exit ;
-		}
-
 		case "nightly-*" : {
 			Echo Building Haiku Nightly ;
 			HAIKU_ROOT_USER_NAME ?= user ;
@@ -138,28 +129,29 @@ rule DefineDefaultBuildProfiles
 			if $(DEBUG) != 0 {
 				HAIKU_IMAGE_SIZE ?= 850 ;
 			}
-			HAIKU_IMAGE_SIZE ?= 600 ;
+			HAIKU_IMAGE_SIZE ?= 650 ;
+			HAIKU_NIGHTLY_BUILD = 1 ;
 
-			AddHaikuImagePackages
-				man
-				nano
+			AddHaikuImageSystemPackages
+				mandoc
 				noto
 				openssh
-				openssl
-				p7zip
+				openssl3
 				pe
 				vision
 				wpa_supplicant
 				# xz_utils can't be built with gcc2, so we install it for
-				# primary gcc 4 architectures or gcc 2 hybrids.
-				xz_utils@!gcc2
-				gcc2 @{ xz_utils_x86@secondary_x86 }@
+				# primary gcc 8 architectures or gcc 2 hybrids.
+				!gcc2 @{ nano p7zip xz_utils }@
+				gcc2 @{
+					nano_x86@secondary_x86
+					p7zip_x86@secondary_x86
+					xz_utils_x86@secondary_x86
+				}@
 				;
 			AddHaikuImageSourcePackages
-				man
 				nano
 				p7zip
-				gcc
 				;
 
 			AddOptionalHaikuImagePackages Development Git ;
@@ -179,7 +171,8 @@ rule DefineDefaultBuildProfiles
 				HAIKU_IMAGE_SIZE ?= 450 ;
 			}
 
-			AddHaikuImagePackages
+			AddHaikuImageSystemPackages
+				openssl3
 				;
 		}
 
@@ -188,53 +181,54 @@ rule DefineDefaultBuildProfiles
 			HAIKU_IMAGE_HOST_NAME ?= shredder ;
 			HAIKU_IMAGE_SIZE ?= 20000 ;
 
-			AddHaikuImagePackages
+			AddHaikuImageSystemPackages
 				binutils
 				bison
-				curl_devel
 				expat
 				flex
-				freetype_devel
-				gawk
 				gcc
 				grep
 				haikuporter
 				less
 				libedit
-				libedit_devel
-				m4
 				make
 				ncurses6
-				ncurses6_devel
 				noto
 				python
 				sed
 				texinfo
-				zlib_devel
+				!gcc2 @{ gawk grep }@
+				gcc2 @{ grep_x86@secondary_x86 mawk }@
 				;
+
+			AddHaikuImageDisabledPackages
+				freetype_devel
+				libedit_devel
+				ncurses6_devel
+				zlib_devel
+			;
 
 			# secondary architecture packages
 			local architectureObject ;
 			for architectureObject
 					in [ MultiArchSubDirSetup $(TARGET_PACKAGING_ARCHS[2-]) ] {
 				on $(architectureObject) {
-					AddHaikuImagePackages
+					AddHaikuImageSystemPackages
 						binutils
-						curl
-						curl_devel
 						expat
 						freetype
-						freetype_devel
 						gcc
-						icu
-						libsolv
+						icu@gcc2 icu74@!gcc2
 						libedit
-						libedit_devel
 						ncurses6
-						ncurses6_devel
 						zlib
-						zlib_devel
 						;
+					AddHaikuImageDisabledPackages
+						freetype_devel
+						libedit_devel
+						ncurses6_devel
+						zlib_devel
+					;
 				}
 			}
 
@@ -252,8 +246,7 @@ rule DefineDefaultBuildProfiles
 	# check whether it is unknown or one of the default profiles.
 	if $(HAIKU_BUILD_PROFILE) && ! $(HAIKU_BUILD_PROFILE_DEFINED) {
 		# define the obvious default profiles
-		if $(HAIKU_BUILD_PROFILE) in anyboot-image cd-image image install
-				vmware-image {
+		if $(HAIKU_BUILD_PROFILE) in cd-image install vmware-image {
 			DefineBuildProfile $(HAIKU_BUILD_PROFILE) : $(HAIKU_BUILD_PROFILE) ;
 		} else {
 			Exit "Build profile" $(HAIKU_BUILD_PROFILE) "not defined." ;

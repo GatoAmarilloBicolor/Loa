@@ -38,11 +38,6 @@ using namespace std;
 #define MEASURE_PRINT_JOB_TIME false
 
 
-enum {
-	kMaxMemorySize = 4 * 1024 * 1024
-};
-
-
 GraphicsDriver::GraphicsDriver(BMessage* message, PrinterData* printerData,
 	const PrinterCap* printerCap)
 	:
@@ -82,7 +77,7 @@ RotateRect(BRect rect)
 }
 
 
-bool 
+bool
 GraphicsDriver::_SetupData(BFile* spoolFile)
 {
 	if (fOrgJobData != NULL) {
@@ -139,13 +134,13 @@ GraphicsDriver::_SetupData(BFile* spoolFile)
 	} else {
 		fInternalCopies = 1;
 	}
-	
+
 	fSpoolMetaData = new SpoolMetaData(spoolFile);
 	return true;
 }
 
 
-void 
+void
 GraphicsDriver::_CleanupData()
 {
 	delete fRealJobData;
@@ -157,7 +152,7 @@ GraphicsDriver::_CleanupData()
 }
 
 
-void 
+void
 GraphicsDriver::_SetupBitmap()
 {
 	fPixelDepth = color_space2pixel_depth(fOrgJobData->GetSurfaceType());
@@ -167,18 +162,11 @@ GraphicsDriver::_SetupBitmap()
 	fPageHeight = (fRealJobData->GetPhysicalRect().IntegerHeight()
 		* fOrgJobData->GetYres() + 71) / 72;
 
-	int widthByte = (fPageWidth * fPixelDepth + 7) / 8;
-	int size = widthByte * fPageHeight;
-#ifdef USE_PREVIEW_FOR_DEBUG
-	size = 0;
-#endif
+	fBitmap = NULL;
+	fRotatedBitmap = NULL;
+	BRect rect;
 
-	if (size < kMaxMemorySize) {
-		fBandCount  = 0;
-		fBandWidth  = fPageWidth;
-		fBandHeight = fPageHeight;
-	} else {
-		fBandCount  = (size + kMaxMemorySize - 1) / kMaxMemorySize;
+	for (fBandCount = 1; fBandCount < 256; fBandCount++) {
 		if (_NeedRotateBitmapBand()) {
 			fBandWidth  = (fPageWidth + fBandCount - 1) / fBandCount;
 			fBandHeight = fPageHeight;
@@ -186,7 +174,45 @@ GraphicsDriver::_SetupBitmap()
 			fBandWidth  = fPageWidth;
 			fBandHeight = (fPageHeight + fBandCount - 1) / fBandCount;
 		}
+
+		rect.Set(0, 0, fBandWidth - 1, fBandHeight - 1);
+		fBitmap = new(std::nothrow) BBitmap(rect, fOrgJobData->GetSurfaceType(),
+			true);
+		if (fBitmap == NULL || fBitmap->InitCheck() != B_OK) {
+			delete fBitmap;
+			fBitmap = NULL;
+			// Try with smaller bands
+			continue;
+		}
+
+		if (_NeedRotateBitmapBand()) {
+			BRect rotatedRect(0, 0, rect.bottom, rect.right);
+			delete fRotatedBitmap;
+			fRotatedBitmap = new(std::nothrow) BBitmap(rotatedRect,
+				fOrgJobData->GetSurfaceType(), false);
+			if (fRotatedBitmap == NULL || fRotatedBitmap->InitCheck() != B_OK) {
+				delete fBitmap;
+				fBitmap = NULL;
+				delete fRotatedBitmap;
+				fRotatedBitmap = NULL;
+
+				// Try with smaller bands
+				continue;
+			}
+		}
+
+		// If we get here, all needed allocations have succeeded, we can safely
+		// go ahead.
+		break;
+	};
+
+	if (fBitmap == NULL) {
+		debugger("Failed to allocate bitmaps for print rasterization");
+		return;
 	}
+
+	fView = new BView(rect, "", B_FOLLOW_ALL, B_WILL_DRAW);
+	fBitmap->AddChild(fView);
 
 	DBGMSG(("****************\n"));
 	DBGMSG(("page_width  = %d\n", fPageWidth));
@@ -194,22 +220,10 @@ GraphicsDriver::_SetupBitmap()
 	DBGMSG(("band_count  = %d\n", fBandCount));
 	DBGMSG(("band_height = %d\n", fBandHeight));
 	DBGMSG(("****************\n"));
-
-	BRect rect;
-	rect.Set(0, 0, fBandWidth - 1, fBandHeight - 1);
-	fBitmap = new BBitmap(rect, fOrgJobData->GetSurfaceType(), true);
-	fView   = new BView(rect, "", B_FOLLOW_ALL, B_WILL_DRAW);
-	fBitmap->AddChild(fView);
-
-	if (_NeedRotateBitmapBand()) {
-		BRect rotatedRect(0, 0, rect.bottom, rect.right);
-		fRotatedBitmap = new BBitmap(rotatedRect, fOrgJobData->GetSurfaceType(),
-			false);
-	}
 }
 
 
-void 
+void
 GraphicsDriver::_CleanupBitmap()
 {
 	delete fBitmap;
@@ -221,7 +235,7 @@ GraphicsDriver::_CleanupBitmap()
 }
 
 
-BPoint 
+BPoint
 GraphicsDriver::GetScale(int32 nup, BRect physicalRect, float scaling)
 {
 	float width;
@@ -306,7 +320,7 @@ GraphicsDriver::GetScale(int32 nup, BRect physicalRect, float scaling)
 }
 
 
-BPoint 
+BPoint
 GraphicsDriver::GetOffset(int32 nup, int index,
 	JobData::Orientation orientation, const BPoint* scale,
 	BRect scaledPhysicalRect, BRect scaledPrintableRect,
@@ -406,7 +420,7 @@ GraphicsDriver::GetOffset(int32 nup, int index,
 
 
 // print the specified pages on a physical page
-bool 
+bool
 GraphicsDriver::_PrintPage(PageDataList* pages)
 {
 	BPoint offset;
@@ -469,7 +483,7 @@ GraphicsDriver::_PrintPage(PageDataList* pages)
 			return false;
 
 	} while (offset.x >= 0.0f && offset.y >= 0.0f);
-	
+
 	return true;
 }
 
@@ -525,7 +539,7 @@ GraphicsDriver::_RotateInto(BBitmap* target, const BBitmap* source)
 	}
 }
 
-bool 
+bool
 GraphicsDriver::_CollectPages(SpoolData* spoolData, PageDataList* pages)
 {
 	// collect the pages to be printed on the physical page
@@ -537,19 +551,19 @@ GraphicsDriver::_CollectPages(SpoolData* spoolData, PageDataList* pages)
 		if (pages != NULL)
 			pages->push_back(page_data);
 	} while (more && --nup);
-	
+
 	return more;
 }
 
 
-bool 
+bool
 GraphicsDriver::_SkipPages(SpoolData* spoolData)
 {
 	return _CollectPages(spoolData, NULL);
 }
 
 
-bool 
+bool
 GraphicsDriver::_PrintDocument(SpoolData* spoolData)
 {
 	bool more;
@@ -561,7 +575,7 @@ GraphicsDriver::_PrintDocument(SpoolData* spoolData)
 	more = true;
 	success = true;
 	page_index = 0;
-	
+
 	if (fPrinterCap->Supports(PrinterCap::kCopyCommand))
 		// let the printer perform the copy operation
 		copies = 1;
@@ -571,10 +585,10 @@ GraphicsDriver::_PrintDocument(SpoolData* spoolData)
 
 	fStatusWindow -> SetPageCopies(copies);
 		// inform fStatusWindow about number of copies
-	
+
 	// printing of even/odd numbered pages only is valid in simplex mode
 	bool simplex = fRealJobData->GetPrintStyle() == JobData::kSimplex;
-	
+
 	if (spoolData->startEnum()) {
 		do {
 			DBGMSG(("page index = %d\n", page_index));
@@ -588,10 +602,10 @@ GraphicsDriver::_PrintDocument(SpoolData* spoolData)
 			if (!more)
 				// end reached
 				break;
-			
+
 			PageDataList pages;
 			more = _CollectPages(spoolData, &pages);
-			
+
 			if (more && simplex
 				&& fRealJobData->GetPageSelection()
 					== JobData::kOddNumberedPages)
@@ -602,13 +616,13 @@ GraphicsDriver::_PrintDocument(SpoolData* spoolData)
 			for (copy = 0; success && copy < copies; copy ++) {
 
 				// Update the status / cancel job
-				if (fStatusWindow->UpdateStatusBar(page_index, copy))		
-					return false;	
+				if (fStatusWindow->UpdateStatusBar(page_index, copy))
+					return false;
 
 				success = StartPage(page_index);
 				if (!success)
 					break;
-				
+
 				// print the pages on the physical page
 				fView->Window()->Lock();
 				success = _PrintPage(&pages);
@@ -618,7 +632,7 @@ GraphicsDriver::_PrintDocument(SpoolData* spoolData)
 					success = EndPage(page_index);
 				}
 			}
-				
+
 			page_index++;
 		} while (success && more);
 	}
@@ -631,7 +645,7 @@ GraphicsDriver::_PrintDocument(SpoolData* spoolData)
 			% 2)) {
 		// append an empty page on the back side of the page in duplex or
 		// booklet mode
-		success = 
+		success =
 			StartPage(page_index) &&
 			_PrintPage(NULL) &&
 			EndPage(page_index);
@@ -650,7 +664,7 @@ GraphicsDriver::GetJobData(BFile* spoolFile)
 }
 
 
-bool 
+bool
 GraphicsDriver::_PrintJob(BFile* spoolFile)
 {
 	bool success = true;
@@ -674,9 +688,9 @@ GraphicsDriver::_PrintJob(BFile* spoolFile)
 				fRealJobData->GetPageSelection() == JobData::kOddNumberedPages,
 				fRealJobData->GetPageSelection() == JobData::kEvenNumberedPages,
 				fRealJobData->GetFirstPage(),
-				fPageCount, 
+				fPageCount,
 				fInternalCopies,fRealJobData->GetNup());
-				
+
 			while (fInternalCopies--) {
 				success = _PrintDocument(&spoolData);
 				if (success == false) {
@@ -684,7 +698,7 @@ GraphicsDriver::_PrintJob(BFile* spoolFile)
 				}
 			}
 			EndDocument(success);
-		
+
 			fStatusWindow->Lock();
 			fStatusWindow->Quit();
 		}
@@ -721,35 +735,35 @@ GraphicsDriver::TakeJob(BFile* spoolFile)
 }
 
 
-bool 
+bool
 GraphicsDriver::StartDocument()
 {
 	return true;
 }
 
 
-bool 
+bool
 GraphicsDriver::StartPage(int)
 {
 	return true;
 }
 
 
-bool 
+bool
 GraphicsDriver::NextBand(BBitmap*, BPoint*)
 {
 	return true;
 }
 
 
-bool 
+bool
 GraphicsDriver::EndPage(int)
 {
 	return true;
 }
 
 
-bool 
+bool
 GraphicsDriver::EndDocument(bool)
 {
 	return true;
@@ -758,7 +772,6 @@ GraphicsDriver::EndDocument(bool)
 
 void
 GraphicsDriver::WriteSpoolData(const void* buffer, size_t size)
-	throw (TransportException)
 {
 	if (fTransport == NULL)
 		return;
@@ -768,7 +781,6 @@ GraphicsDriver::WriteSpoolData(const void* buffer, size_t size)
 
 void
 GraphicsDriver::WriteSpoolString(const char* format, ...)
-	throw (TransportException)
 {
 	if (fTransport == NULL)
 		return;
@@ -784,7 +796,6 @@ GraphicsDriver::WriteSpoolString(const char* format, ...)
 
 void
 GraphicsDriver::WriteSpoolChar(char c)
-	throw (TransportException)
 {
 	if (fTransport == NULL)
 		return;
@@ -795,7 +806,6 @@ GraphicsDriver::WriteSpoolChar(char c)
 
 void
 GraphicsDriver::ReadSpoolData(void* buffer, size_t size)
-	throw (TransportException)
 {
 	if (fTransport == NULL)
 		return;
@@ -805,7 +815,6 @@ GraphicsDriver::ReadSpoolData(void* buffer, size_t size)
 
 int
 GraphicsDriver::ReadSpoolChar()
-	throw (TransportException)
 {
 	if (fTransport == NULL)
 		return -1;
@@ -824,7 +833,7 @@ GraphicsDriver::_NeedRotateBitmapBand() const
 }
 
 
-void 
+void
 GraphicsDriver::_ConvertRGB32ToRGB24(const void* src, void* dst, int width) {
 	uint8* d = (uint8*)dst;
 	const rgb_color* s = static_cast<const rgb_color*>(src);
@@ -837,7 +846,7 @@ GraphicsDriver::_ConvertRGB32ToRGB24(const void* src, void* dst, int width) {
 }
 
 
-void 
+void
 GraphicsDriver::_ConvertCMAP8ToRGB24(const void* src, void* dst, int width) {
 	uint8* d = (uint8*)dst;
 	const uint8* s = static_cast<const uint8*>(src);
@@ -847,12 +856,12 @@ GraphicsDriver::_ConvertCMAP8ToRGB24(const void* src, void* dst, int width) {
 		*d ++ = rgb->red;
 		*d ++ = rgb->green;
 		*d ++ = rgb->blue;
-		s ++;		
+		s ++;
 	}
 }
 
 
-void 
+void
 GraphicsDriver::ConvertToRGB24(const void* src, void* dst, int width,
 	color_space cs) {
 	if (cs == B_RGB32)
@@ -865,7 +874,7 @@ GraphicsDriver::ConvertToRGB24(const void* src, void* dst, int width,
 }
 
 
-uint8 
+uint8
 GraphicsDriver::_ConvertToGray(uint8 r, uint8 g, uint8 b) {
 	if (r == g && g == b)
 		return r;
@@ -874,7 +883,7 @@ GraphicsDriver::_ConvertToGray(uint8 r, uint8 g, uint8 b) {
 }
 
 
-void 
+void
 GraphicsDriver::_ConvertRGB32ToGray(const void* src, void* dst, int width) {
 	uint8* d = (uint8*)dst;
 	const rgb_color* s = static_cast<const rgb_color*>(src);
@@ -883,7 +892,7 @@ GraphicsDriver::_ConvertRGB32ToGray(const void* src, void* dst, int width) {
 }
 
 
-void 
+void
 GraphicsDriver::_ConvertCMAP8ToGray(const void* src, void* dst, int width) {
 	uint8* d = (uint8*)dst;
 	const uint8* s = static_cast<const uint8*>(src);
@@ -895,7 +904,7 @@ GraphicsDriver::_ConvertCMAP8ToGray(const void* src, void* dst, int width) {
 }
 
 
-void 
+void
 GraphicsDriver::ConvertToGray(const void* src, void* dst, int width,
 	color_space cs) {
 	if (cs == B_RGB32)

@@ -11,6 +11,7 @@
 
 #include "EndpointManager.h"
 #include "TCPEndpoint.h"
+#include "tcp.h"
 
 #include <net_protocol.h>
 #include <net_stat.h>
@@ -34,10 +35,8 @@
 //#define TRACE_TCP
 #ifdef TRACE_TCP
 #	define TRACE(x) dprintf x
-#	define TRACE_BLOCK(x) dump_block x
 #else
 #	define TRACE(x)
-#	define TRACE_BLOCK(x)
 #endif
 
 
@@ -54,8 +53,8 @@ static EndpointManager* sEndpointManagers[AF_MAX];
 static rw_lock sEndpointManagersLock;
 
 
-// The TCP header length is at most 64 bytes.
-static const int kMaxOptionSize = 64 - sizeof(tcp_header);
+// The TCP header length is at most 60 bytes (0xf * 4).
+static const int kMaxOptionSize = 60 - sizeof(tcp_header);
 
 
 /*!	Returns an endpoint manager for the specified domain, if any.
@@ -97,6 +96,9 @@ bump_option(tcp_option *&option, size_t &length)
 static inline size_t
 add_options(tcp_segment_header &segment, uint8 *buffer, size_t bufferSize)
 {
+	// Some network devices can be very sensitive to the ordering of TCP options
+	// https://github.com/torvalds/linux/blob/9e9fb7655ed585da8f468e29221f0ba194a5f613/net/ipv4/tcp_output.c#L598
+
 	tcp_option *option = (tcp_option *)buffer;
 	size_t length = 0;
 
@@ -109,21 +111,38 @@ add_options(tcp_segment_header &segment, uint8 *buffer, size_t bufferSize)
 
 	if ((segment.options & TCP_HAS_TIMESTAMPS) != 0
 		&& length + 12 <= bufferSize) {
-		// two NOPs so the timestamps get aligned to a 4 byte boundary
-		option->kind = TCP_OPTION_NOP;
-		bump_option(option, length);
-		option->kind = TCP_OPTION_NOP;
-		bump_option(option, length);
+		if ((segment.options & TCP_SACK_PERMITTED) != 0) {
+			// combine with timestamp
+			option->kind = TCP_OPTION_SACK_PERMITTED;
+			option->length = 2;
+			bump_option(option, length);
+		} else {
+			// two NOPs so the timestamps get aligned to a 4 byte boundary
+			option->kind = TCP_OPTION_NOP;
+			bump_option(option, length);
+			option->kind = TCP_OPTION_NOP;
+			bump_option(option, length);
+		}
 		option->kind = TCP_OPTION_TIMESTAMP;
 		option->length = 10;
 		option->timestamp.value = htonl(segment.timestamp_value);
 		option->timestamp.reply = htonl(segment.timestamp_reply);
 		bump_option(option, length);
+	} else if ((segment.options & TCP_SACK_PERMITTED) != 0
+		&& length + 4 <= bufferSize) {
+		// two NOPs so that the subsequent data is aligned on a 4 byte boundary
+		option->kind = TCP_OPTION_NOP;
+		bump_option(option, length);
+		option->kind = TCP_OPTION_NOP;
+		bump_option(option, length);
+		option->kind = TCP_OPTION_SACK_PERMITTED;
+		option->length = 2;
+		bump_option(option, length);
 	}
 
 	if ((segment.options & TCP_HAS_WINDOW_SCALE) != 0
 		&& length + 4 <= bufferSize) {
-		// insert one NOP so that the subsequent data is aligned on a 4 byte boundary
+		// one NOP so that the subsequent data is aligned on a 4 byte boundary
 		option->kind = TCP_OPTION_NOP;
 		bump_option(option, length);
 
@@ -133,17 +152,10 @@ add_options(tcp_segment_header &segment, uint8 *buffer, size_t bufferSize)
 		bump_option(option, length);
 	}
 
-	if ((segment.options & TCP_SACK_PERMITTED) != 0
-		&& length + 2 <= bufferSize) {
-		option->kind = TCP_OPTION_SACK_PERMITTED;
-		option->length = 2;
-		bump_option(option, length);
-	}
-
-	if (segment.sack_count > 0) {
+	if (segment.sackCount > 0) {
 		int sackCount = ((int)(bufferSize - length) - 4) / sizeof(tcp_sack);
-		if (sackCount > segment.sack_count)
-			sackCount = segment.sack_count;
+		if (sackCount > segment.sackCount)
+			sackCount = segment.sackCount;
 
 		if (sackCount > 0) {
 			option->kind = TCP_OPTION_NOP;
@@ -217,6 +229,19 @@ process_options(tcp_segment_header &segment, net_buffer *buffer, size_t size)
 			case TCP_OPTION_SACK_PERMITTED:
 				if (option->length == 2 && size >= 2)
 					segment.options |= TCP_SACK_PERMITTED;
+				break;
+			case TCP_OPTION_SACK:
+				if (size >= option->length) {
+					segment.options |= TCP_HAS_SACK;
+					segment.sackCount = min_c((option->length - 2)
+						/ sizeof(tcp_sack), MAX_SACK_BLKS);
+					for(int i = 0; i < segment.sackCount; ++i) {
+						segment.sacks[i].left_edge = ntohl(
+							option->sack[i].left_edge);
+						segment.sacks[i].right_edge = ntohl(
+							option->sack[i].right_edge);
+					}
+				}
 				break;
 		}
 
@@ -404,12 +429,13 @@ add_tcp_header(net_address_module_info* addressModule,
 			optionsLength);
 	}
 
-	TRACE(("add_tcp_header(): buffer %p, flags 0x%x, seq %lu, ack %lu, up %u, "
+	TRACE(("add_tcp_header(): buffer %p, flags 0x%x, seq %" B_PRIu32 ", ack %" B_PRIu32 ", up %u, "
 		"win %u\n", buffer, segment.flags, segment.sequence,
 		segment.acknowledge, segment.urgent_offset, segment.advertised_window));
 
 	*TCPChecksumField(buffer) = Checksum::PseudoHeader(addressModule,
 		gBufferModule, buffer, IPPROTO_TCP);
+	buffer->buffer_flags |= NET_BUFFER_L4_CHECKSUM_VALID;
 
 	return B_OK;
 }
@@ -423,18 +449,17 @@ tcp_options_length(tcp_segment_header& segment)
 	if (segment.max_segment_size > 0)
 		length += 4;
 
-	if (segment.options & TCP_HAS_TIMESTAMPS)
+	if ((segment.options & TCP_HAS_TIMESTAMPS) != 0)
 		length += 12;
-
-	if (segment.options & TCP_HAS_WINDOW_SCALE)
+	else if ((segment.options & TCP_SACK_PERMITTED) != 0)
 		length += 4;
 
-	if (segment.options & TCP_SACK_PERMITTED)
-		length += 2;
+	if ((segment.options & TCP_HAS_WINDOW_SCALE) != 0)
+		length += 4;
 
-	if (segment.sack_count > 0) {
+	if (segment.sackCount > 0) {
 		int sackCount = min_c((int)((kMaxOptionSize - length - 4)
-			/ sizeof(tcp_sack)), segment.sack_count);
+			/ sizeof(tcp_sack)), segment.sackCount);
 		if (sackCount > 0)
 			length += 4 + sackCount * sizeof(tcp_sack);
 	}
@@ -452,9 +477,6 @@ tcp_options_length(tcp_segment_header& segment)
 net_protocol*
 tcp_init_protocol(net_socket* socket)
 {
-	socket->send.buffer_size = 32768;
-		// override net_socket default
-
 	TCPEndpoint* protocol = new (std::nothrow) TCPEndpoint(socket);
 	if (protocol == NULL)
 		return NULL;
@@ -677,9 +699,10 @@ tcp_receive_data(net_buffer* buffer)
 	if (headerLength < sizeof(tcp_header))
 		return B_BAD_DATA;
 
-	if (Checksum::PseudoHeader(addressModule, gBufferModule, buffer,
-			IPPROTO_TCP) != 0)
-		return B_BAD_DATA;
+	if ((buffer->buffer_flags & NET_BUFFER_L4_CHECKSUM_VALID) == 0) {
+		if (Checksum::PseudoHeader(addressModule, gBufferModule, buffer, IPPROTO_TCP) != 0)
+			return B_BAD_DATA;
+	}
 
 	addressModule->set_port(buffer->source, header.source_port);
 	addressModule->set_port(buffer->destination, header.destination_port);
@@ -712,7 +735,13 @@ tcp_receive_data(net_buffer* buffer)
 		buffer->destination, buffer->source);
 	if (endpoint != NULL) {
 		segmentAction = endpoint->SegmentReceived(segment, buffer);
-		gSocketModule->release_socket(endpoint->socket);
+
+		// There are some states in which the socket could have been deleted
+		// while handling a segment. If this flag is set in segmentAction
+		// then we know the socket has been freed and can skip releasing
+		// the reference acquired in EndpointManager::FindConnection().
+		if ((segmentAction & DELETED_ENDPOINT) == 0)
+			gSocketModule->release_socket(endpoint->socket);
 	} else if ((segment.flags & TCP_FLAG_RESET) == 0)
 		segmentAction = DROP | RESET;
 

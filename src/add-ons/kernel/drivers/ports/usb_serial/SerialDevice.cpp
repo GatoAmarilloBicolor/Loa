@@ -21,6 +21,7 @@
 #include "Option.h"
 #include "Prolific.h"
 #include "Silicon.h"
+#include "WinChipHead.h"
 
 #include <sys/ioctl.h>
 
@@ -90,7 +91,7 @@ SerialDevice::Init()
 		+ fInterruptBufferSize;
 	fBufferArea = create_area("usb_serial:buffers_area", (void **)&fReadBuffer,
 		B_ANY_KERNEL_ADDRESS, ROUNDUP(totalBuffers, B_PAGE_SIZE), B_CONTIGUOUS,
-		B_READ_AREA | B_WRITE_AREA);
+		B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA);
 	if (fBufferArea < 0)
 		return fBufferArea;
 
@@ -212,6 +213,9 @@ SerialDevice::SetModes(struct termios *tios)
 bool
 SerialDevice::Service(struct tty *tty, uint32 op, void *buffer, size_t length)
 {
+	if (!fDeviceOpen)
+		return false;
+
 	if (tty != fMasterTTY)
 		return false;
 
@@ -271,6 +275,7 @@ SerialDevice::Service(struct tty *tty, uint32 op, void *buffer, size_t length)
 		case TTYOSTART:
 		case TTYOSYNC:
 		case TTYSETBREAK:
+		case TTYFLUSH:
 			TRACE("TTY other\n");
 			return true;
 	}
@@ -282,42 +287,42 @@ SerialDevice::Service(struct tty *tty, uint32 op, void *buffer, size_t length)
 status_t
 SerialDevice::Open(uint32 flags)
 {
+	status_t status = B_OK;
+
 	if (fDeviceOpen)
 		return B_BUSY;
 
 	if (fDeviceRemoved)
 		return B_DEV_NOT_READY;
 
-	fMasterTTY = gTTYModule->tty_create(usb_serial_service, true);
-	if (fMasterTTY == NULL) {
+	status = gTTYModule->tty_create(usb_serial_service, NULL, &fMasterTTY);
+	if (status != B_OK) {
 		TRACE_ALWAYS("open: failed to init master tty\n");
-		return B_NO_MEMORY;
+		return status;
 	}
 
-	fSlaveTTY = gTTYModule->tty_create(usb_serial_service, false);
-	if (fSlaveTTY == NULL) {
+	status = gTTYModule->tty_create(usb_serial_service, fMasterTTY, &fSlaveTTY);
+	if (status != B_OK) {
 		TRACE_ALWAYS("open: failed to init slave tty\n");
 		gTTYModule->tty_destroy(fMasterTTY);
-		return B_NO_MEMORY;
+		return status;
 	}
 
-	fSystemTTYCookie = gTTYModule->tty_create_cookie(fMasterTTY, fSlaveTTY,
-		O_RDWR);
-	if (fSystemTTYCookie == NULL) {
+	status = gTTYModule->tty_create_cookie(fMasterTTY, fSlaveTTY, O_RDWR, &fSystemTTYCookie);
+	if (status != B_OK) {
 		TRACE_ALWAYS("open: failed to init system tty cookie\n");
 		gTTYModule->tty_destroy(fMasterTTY);
 		gTTYModule->tty_destroy(fSlaveTTY);
-		return B_NO_MEMORY;
+		return status;
 	}
 
-	fDeviceTTYCookie = gTTYModule->tty_create_cookie(fSlaveTTY, fMasterTTY,
-		O_RDWR);
-	if (fDeviceTTYCookie == NULL) {
+	status = gTTYModule->tty_create_cookie(fSlaveTTY, fMasterTTY, O_RDWR, &fDeviceTTYCookie);
+	if (status != B_OK) {
 		TRACE_ALWAYS("open: failed to init device tty cookie\n");
 		gTTYModule->tty_destroy_cookie(fSystemTTYCookie);
 		gTTYModule->tty_destroy(fMasterTTY);
 		gTTYModule->tty_destroy(fSlaveTTY);
-		return B_NO_MEMORY;
+		return status;
 	}
 
 	ResetDevice();
@@ -337,9 +342,8 @@ SerialDevice::Open(uint32 flags)
 		| USB_CDC_CONTROL_SIGNAL_STATE_RTS;
 	SetControlLineState(fControlOut);
 
-	status_t status = gUSBModule->queue_interrupt(fControlPipe,
-		fInterruptBuffer, fInterruptBufferSize, _InterruptCallbackFunction,
-		this);
+	status = gUSBModule->queue_interrupt(fControlPipe, fInterruptBuffer, fInterruptBufferSize,
+		_InterruptCallbackFunction, this);
 	if (status < B_OK)
 		TRACE_ALWAYS("failed to queue initial interrupt\n");
 
@@ -453,6 +457,7 @@ SerialDevice::Close()
 
 	fStopThreads = true;
 	fInputStopped = false;
+	fDeviceOpen = false;
 
 	if (!fDeviceRemoved) {
 		gUSBModule->cancel_queued_transfers(fReadPipe);
@@ -473,7 +478,10 @@ SerialDevice::Close()
 	gTTYModule->tty_destroy(fMasterTTY);
 	gTTYModule->tty_destroy(fSlaveTTY);
 
-	fDeviceOpen = false;
+	fMasterTTY = NULL;
+	fSlaveTTY = NULL;
+	fSystemTTYCookie = NULL;
+	fDeviceTTYCookie = NULL;
 	return B_OK;
 }
 
@@ -767,6 +775,16 @@ SerialDevice::MakeDevice(usb_device device, uint16 vendorID,
 			&& productID == kSiliconDevices[i].productID) {
 			return new(std::nothrow) SiliconDevice(device, vendorID, productID,
 				kSiliconDevices[i].deviceName);
+		}
+	}
+
+	// WinChipHead Serial Device
+	for (uint32 i = 0; i < sizeof(kWCHDevices)
+		/ sizeof(kWCHDevices[0]); i++) {
+		if (vendorID == kWCHDevices[i].vendorID
+			&& productID == kWCHDevices[i].productID) {
+			return new(std::nothrow) WCHDevice(device, vendorID, productID,
+				kWCHDevices[i].deviceName);
 		}
 	}
 

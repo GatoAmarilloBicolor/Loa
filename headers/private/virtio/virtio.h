@@ -10,24 +10,31 @@
 #include <KernelExport.h>
 
 
-#define VIRTIO_DEVICE_ID_NETWORK	0x01
-#define VIRTIO_DEVICE_ID_BLOCK		0x02
-#define VIRTIO_DEVICE_ID_CONSOLE	0x03
-#define VIRTIO_DEVICE_ID_ENTROPY	0x04
-#define VIRTIO_DEVICE_ID_BALLOON	0x05
-#define VIRTIO_DEVICE_ID_IOMEMORY	0x06
-#define VIRTIO_DEVICE_ID_RP_MESSAGE	0x07
-#define VIRTIO_DEVICE_ID_SCSI		0x08
-#define VIRTIO_DEVICE_ID_9P			0x09
-#define VIRTIO_DEVICE_ID_RP_SERIAL	0x0b
-#define VIRTIO_DEVICE_ID_CAIF		0x0c
+#define VIRTIO_DEVICE_ID_NETWORK	1
+#define VIRTIO_DEVICE_ID_BLOCK		2
+#define VIRTIO_DEVICE_ID_CONSOLE	3
+#define VIRTIO_DEVICE_ID_ENTROPY	4
+#define VIRTIO_DEVICE_ID_BALLOON	5
+#define VIRTIO_DEVICE_ID_IOMEMORY	6
+#define VIRTIO_DEVICE_ID_RP_MESSAGE	7
+#define VIRTIO_DEVICE_ID_SCSI		8
+#define VIRTIO_DEVICE_ID_9P			9
+#define VIRTIO_DEVICE_ID_RP_SERIAL	11
+#define VIRTIO_DEVICE_ID_CAIF		12
+#define VIRTIO_DEVICE_ID_GPU		16
+#define VIRTIO_DEVICE_ID_INPUT		18
+#define VIRTIO_DEVICE_ID_VSOCK		19
+#define VIRTIO_DEVICE_ID_CRYPTO		20
+#define VIRTIO_DEVICE_ID_SOUND		25
 
-#define VIRTIO_FEATURE_TRANSPORT_MASK	((1 << 28) - 1)
+#define VIRTIO_FEATURE_TRANSPORT_MASK	((1ULL << 28) - 1)
 
-#define VIRTIO_FEATURE_NOTIFY_ON_EMPTY 		(1 << 24)
+#define VIRTIO_FEATURE_NOTIFY_ON_EMPTY		(1 << 24)
+#define VIRTIO_FEATURE_ANY_LAYOUT			(1 << 27)
 #define VIRTIO_FEATURE_RING_INDIRECT_DESC	(1 << 28)
 #define VIRTIO_FEATURE_RING_EVENT_IDX		(1 << 29)
-#define VIRTIO_FEATURE_BAD_FEATURE 			(1 << 30)
+#define VIRTIO_FEATURE_BAD_FEATURE			(1 << 30)
+#define VIRTIO_FEATURE_VERSION_1			(1ULL << 32)
 
 #define VIRTIO_VIRTQUEUES_MAX_COUNT	8
 
@@ -35,6 +42,8 @@
 #define VIRTIO_CONFIG_STATUS_ACK	0x01
 #define VIRTIO_CONFIG_STATUS_DRIVER	0x02
 #define VIRTIO_CONFIG_STATUS_DRIVER_OK	0x04
+#define VIRTIO_CONFIG_STATUS_FEATURES_OK	0x08
+#define VIRTIO_CONFIG_STATUS_DEVICE_NEEDS_RESET	0x40
 #define VIRTIO_CONFIG_STATUS_FAILED	0x80
 
 // attributes:
@@ -45,6 +54,8 @@
 #define VIRTIO_DEVICE_TYPE_ITEM "virtio/type"
 // alignment (uint16)
 #define VIRTIO_VRING_ALIGNMENT_ITEM "virtio/vring_alignment"
+// version (uint8)
+#define VIRTIO_VERSION_ITEM "virtio/version"
 
 // sim cookie, issued by virtio bus manager
 typedef void* virtio_sim;
@@ -73,8 +84,8 @@ typedef struct {
 	driver_module_info info;
 
 	void (*set_sim)(void* cookie, virtio_sim sim);
-	status_t (*read_host_features)(void* cookie, uint32* features);
-	status_t (*write_guest_features)(void* cookie, uint32 features);
+	status_t (*read_host_features)(void* cookie, uint64* features);
+	status_t (*write_guest_features)(void* cookie, uint64 features);
 	uint8 (*get_status)(void* cookie);
 	void (*set_status)(void* cookie, uint8 status);
 	status_t (*read_device_config)(void* cookie, uint8 offset, void* buffer,
@@ -83,7 +94,8 @@ typedef struct {
 		const void* buffer, size_t bufferSize);
 
 	uint16	(*get_queue_ring_size)(void* cookie, uint16 queue);
-	status_t (*setup_queue)(void* cookie, uint16 queue, phys_addr_t phy);
+	status_t (*setup_queue)(void* cookie, uint16 queue, phys_addr_t phy, phys_addr_t phyAvail,
+		phys_addr_t phyUsed);
 	status_t (*setup_interrupt)(void* cookie, uint16 queueCount);
 	status_t (*free_interrupt)(void* cookie);
 	void	(*notify_queue)(void* cookie, uint16 queue);
@@ -94,8 +106,10 @@ typedef struct {
 typedef struct {
 	driver_module_info info;
 
-	status_t (*negotiate_features)(virtio_device cookie, uint32 supported,
-		uint32* negotiated, const char* (*get_feature_name)(uint32));
+	status_t (*negotiate_features)(virtio_device cookie, uint64 supported,
+		uint64* negotiated, const char* (*get_feature_name)(uint64));
+
+	status_t (*clear_feature)(virtio_device cookie, uint64 feature);
 
 	status_t (*read_device_config)(virtio_device cookie, uint8 offset,
 		void* buffer, size_t bufferSize);
@@ -103,7 +117,7 @@ typedef struct {
 		const void* buffer, size_t bufferSize);
 
 	status_t (*alloc_queues)(virtio_device cookie, size_t count,
-		virtio_queue* queues);
+		virtio_queue* queues, uint16* requestedSizes);
 
 	void (*free_queues)(virtio_device cookie);
 
@@ -130,7 +144,8 @@ typedef struct {
 
 	uint16 (*queue_size)(virtio_queue queue);
 
-	void* (*queue_dequeue)(virtio_queue queue, uint16* _size);
+	bool (*queue_dequeue)(virtio_queue queue, void** _cookie,
+		uint32* _usedLength);
 
 } virtio_device_interface;
 

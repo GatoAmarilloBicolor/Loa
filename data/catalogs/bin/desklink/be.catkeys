@@ -1,15 +1,14 @@
-1	belarusian	x-vnd.Haiku-desklink	4132238754
-Control physical output	MediaReplicant		Кантраляваць фізічны выхад
-Couldn't launch 	MediaReplicant		Немагчыма запусціць 
+1	belarusian	x-vnd.Haiku-desklink	1299174281
+desklink	MediaReplicant	Title of an alert box	desklink
 Muted	MediaReplicant		Сцішаны
-OK	MediaReplicant		ОК
-Sound preferences…	MediaReplicant		Наладкі гука…
 %g dB	MediaReplicant		%g дБ
-Open %name	DeskButton	Don't translate variable %name	Адкрыць %name
-No media server running	VolumeControl		Медыя сервер не запушчаны
-Media preferences…	MediaReplicant		Наладкі медыя…
+OK	MediaReplicant		ОК
+Couldn't launch 	MediaReplicant		Немагчыма запусціць 
+Volume	VolumeControl		Узровень
 Open MediaPlayer	MediaReplicant		Запусціць Праігравальнік Медыя
-desklink	MediaReplicant		desklink
+Media preferences…	MediaReplicant		Наладкі медыя…
 Options	MediaReplicant		Параметры
 Beep	MediaReplicant		Біп
-Volume	VolumeControl		Узровень
+Open %name	DeskButton	Don't translate variable %name	Адкрыць %name
+Control physical output	MediaReplicant		Кантраляваць фізічны выхад
+No media server running	VolumeControl		Медыя сервер не запушчаны

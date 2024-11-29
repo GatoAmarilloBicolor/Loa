@@ -152,9 +152,9 @@ ExpanderWindow::ExpanderWindow(BRect frame, const entry_ref* ref,
 					.Add(fStatusView = new StatusView())
 					.End()
 				.End()
-			.Add(fScrollView)
 			.SetInsets(B_USE_WINDOW_SPACING)
-			.End();
+			.End()
+		.Add(fScrollView);
 
 	pathLayout->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNSET));
 	size = GetLayout()->View()->PreferredSize();
@@ -196,18 +196,18 @@ ExpanderWindow::ValidateDest()
 		BAlert* alert = new BAlert("destAlert",
 			B_TRANSLATE("Destination folder doesn't exist. "
 				"Would you like to create it?"),
-			B_TRANSLATE("Create"), B_TRANSLATE("Cancel"), NULL,
-			B_WIDTH_AS_USUAL, B_EVEN_SPACING, B_WARNING_ALERT);
+			B_TRANSLATE("Cancel"), B_TRANSLATE("Create"), NULL,
+			B_WIDTH_AS_USUAL, B_INFO_ALERT);
 		alert->SetShortcut(0, B_ESCAPE);
 
-		if (alert->Go() != 0)
+		if (alert->Go() == 0)
 			return false;
 
 		if (create_directory(fDestText->Text(), 0755) != B_OK) {
-			BAlert* alert = new BAlert("stopAlert",
+			BAlert* alert = new BAlert("destAlert",
 				B_TRANSLATE("Failed to create the destination folder."),
-				B_TRANSLATE("Cancel"), NULL, NULL,
-				B_WIDTH_AS_USUAL, B_EVEN_SPACING, B_WARNING_ALERT);
+				B_TRANSLATE("OK"), NULL, NULL,
+				B_WIDTH_AS_USUAL, B_WARNING_ALERT);
 			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 			alert->Go();
 			return false;
@@ -216,14 +216,13 @@ ExpanderWindow::ValidateDest()
 		BEntry newEntry(fDestText->Text(), true);
 		newEntry.GetRef(&fDestRef);
 		return true;
-
 	}
 
 	if (!entry.IsDirectory()) {
 		BAlert* alert = new BAlert("destAlert",
 			B_TRANSLATE("The destination is not a folder."),
-			B_TRANSLATE("Cancel"), NULL, NULL,
-			B_WIDTH_AS_USUAL, B_EVEN_SPACING, B_WARNING_ALERT);
+			B_TRANSLATE("OK"), NULL, NULL,
+			B_WIDTH_AS_USUAL, B_WARNING_ALERT);
 		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 		alert->Go();
 		return false;
@@ -232,8 +231,8 @@ ExpanderWindow::ValidateDest()
 	if (entry.GetVolume(&volume) != B_OK || volume.IsReadOnly()) {
 		BAlert* alert = new BAlert("destAlert",
 			B_TRANSLATE("The destination is read only."),
-			B_TRANSLATE("Cancel"), NULL, NULL, B_WIDTH_AS_USUAL,
-			B_EVEN_SPACING,	B_WARNING_ALERT);
+			B_TRANSLATE("OK"), NULL, NULL, B_WIDTH_AS_USUAL,
+			B_WARNING_ALERT);
 		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 		alert->Go();
 		return false;
@@ -634,7 +633,7 @@ ExpanderWindow::_CreateMenuBar()
 	menu = new BMenu(B_TRANSLATE("Settings"));
 	menu->AddItem(fPreferencesItem
 		= new BMenuItem(B_TRANSLATE("Settings" B_UTF8_ELLIPSIS),
-			new BMessage(MSG_PREFERENCES), 'S'));
+			new BMessage(MSG_PREFERENCES), ','));
 	fBar->AddItem(menu);
 }
 
@@ -818,6 +817,7 @@ ExpanderWindow::StartListing()
 	text.ReplaceFirst("%s", path.Leaf());
 	fStatusView->SetStatus(text.String());
 	fListingText->SetText("");
+	fListingText->MakeSelectable(false);
 
 	fListingThread = new ExpanderThread(&message, new BMessenger(this));
 	fListingThread->Start();
@@ -836,6 +836,7 @@ ExpanderWindow::StopListing(void)
 
 	fListingStarted = false;
 
+	fListingText->MakeSelectable(true);
 	fShowContents->SetEnabled(true);
 	fSourceItem->SetEnabled(true);
 	fDestItem->SetEnabled(true);

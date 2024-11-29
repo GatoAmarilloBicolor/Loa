@@ -106,12 +106,14 @@ init_image_version_infos(image_t* image)
 		return B_OK;
 
 	// allocate the version infos
+	size_t size = sizeof(elf_version_info) * (maxIndex + 1);
 	image->versions
-		= (elf_version_info*)malloc(sizeof(elf_version_info) * (maxIndex + 1));
+		= (elf_version_info*)malloc(size);
 	if (image->versions == NULL) {
 		FATAL("Memory shortage in init_image_version_infos()");
 		return B_NO_MEMORY;
 	}
+	memset(image->versions, 0, size);
 	image->num_versions = maxIndex + 1;
 
 	// init the version infos
@@ -179,7 +181,7 @@ check_needed_image_versions(image_t* image)
 			// the file should also appear in DT_NEEDED.
 			FATAL("%s: Version dependency \"%s\" not found", image->path,
 				fileName);
-			return B_FILE_NOT_FOUND;
+			return B_ENTRY_NOT_FOUND;
 		}
 
 		elf_vernaux* vernaux

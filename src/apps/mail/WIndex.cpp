@@ -80,6 +80,7 @@ WIndex::SetTo(const char *dataPath, const char *indexPath)
 	dataFile = new BFile();
 
 	if (dataFile->SetTo(dataPath, B_READ_ONLY) != B_OK) {
+		delete dataFile;
 		return B_ERROR;
 	} else {
 		bool buildIndex = true;
@@ -268,9 +269,14 @@ WIndex::_BlockCheck(void)
 	if (fEntries < fMaxEntries)
 		return B_OK;
 	fBlocks = fEntries / fEntriesPerBlock + 1;
-	fEntryList = (uint8 *)realloc(fEntryList, fBlockSize * fBlocks);
-	if (!fEntryList)
+	uint8* tmpEntryList = (uint8 *)realloc(fEntryList, fBlockSize * fBlocks);
+	if (!tmpEntryList) {
+		free(fEntryList);
+		fEntryList = NULL;
 		return B_ERROR;
+	} else {
+		fEntryList = tmpEntryList;
+	}
 	return B_OK;
 }
 
@@ -473,8 +479,8 @@ gen_crc_table()
 {
 	// generate the table of CRC remainders for all possible bytes
 
-	register int i, j;
-	register unsigned long crc_accum;
+	int i, j;
+	unsigned long crc_accum;
 
 	for (i = 0;  i < 256;  i++) {
 		crc_accum = ((unsigned long) i << 24);
@@ -496,7 +502,7 @@ update_crc(unsigned long crc_accum, const char *data_blk_ptr, int data_blk_size)
 {
 	// update the CRC on the data block one byte at a time
 
-	register int i, j;
+	int i, j;
 
 	for (j = 0;  j < data_blk_size;  j++) {
 		i = ((int) (crc_accum >> 24) ^ *data_blk_ptr++) & 0xff;

@@ -6,6 +6,7 @@
 
 #include "debug.h"
 
+#include <limits.h>
 #include <string.h>
 
 #include <boot/platform.h>
@@ -30,11 +31,6 @@ static uint32 sBufferPosition;
 
 static ring_buffer* sDebugSyslogBuffer = NULL;
 static bool sPostCleanup = false;
-
-
-#ifdef PRINT_TIME_STAMPS
-extern "C" uint64 rdtsc();
-#endif
 
 
 static void
@@ -65,7 +61,7 @@ dprintf_args(const char *format, va_list args)
 
 	if (sNewLine) {
 		char timeBuffer[32];
-		snprintf(timeBuffer, sizeof(timeBuffer), "[%" B_PRIu64 "] ", rdtsc());
+		snprintf(timeBuffer, sizeof(timeBuffer), "[%" B_PRIu64 "] ", __rdtsc());
 		syslog_write(timeBuffer, strlen(timeBuffer));
 		serial_puts(timeBuffer, strlen(timeBuffer));
 	}

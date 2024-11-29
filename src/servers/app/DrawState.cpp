@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2015, Haiku.
+ * Copyright 2001-2018, Haiku.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -39,7 +39,6 @@ DrawState::DrawState()
 	fCombinedScale(1.0f),
 	fTransform(),
 	fCombinedTransform(),
-	fClippingRegion(NULL),
 	fAlphaMask(NULL),
 
 	fHighColor((rgb_color){ 0, 0, 0, 255 }),
@@ -63,8 +62,7 @@ DrawState::DrawState()
 	fLineCapMode(B_BUTT_CAP),
 	fLineJoinMode(B_MITER_JOIN),
 	fMiterLimit(B_DEFAULT_MITER_LIMIT),
-	fFillRule(B_NONZERO),
-	fPreviousState(NULL)
+	fFillRule(B_NONZERO)
 {
 	fUnscaledFontSize = fFont.Size();
 }
@@ -118,8 +116,6 @@ DrawState::DrawState(const DrawState& other)
 
 DrawState::~DrawState()
 {
-	delete fClippingRegion;
-	delete fPreviousState;
 }
 
 
@@ -133,7 +129,7 @@ DrawState::PushState()
 		next->fOrigin = BPoint(0.0, 0.0);
 		next->fScale = 1.0;
 		next->fTransform.Reset();
-		next->fPreviousState = this;
+		next->fPreviousState.SetTo(this);
 		next->SetAlphaMask(fAlphaMask);
 	}
 
@@ -144,17 +140,13 @@ DrawState::PushState()
 DrawState*
 DrawState::PopState()
 {
-	DrawState* previous = PreviousState();
-
-	fPreviousState = NULL;
-	delete this;
-
-	return previous;
+	return fPreviousState.Detach();
 }
 
 
-void
-DrawState::ReadFontFromLink(BPrivate::LinkReceiver& link)
+uint16
+DrawState::ReadFontFromLink(BPrivate::LinkReceiver& link,
+	AppFontManager* fontManager)
 {
 	uint16 mask;
 	link.Read<uint16>(&mask);
@@ -162,7 +154,7 @@ DrawState::ReadFontFromLink(BPrivate::LinkReceiver& link)
 	if ((mask & B_FONT_FAMILY_AND_STYLE) != 0) {
 		uint32 fontID;
 		link.Read<uint32>(&fontID);
-		fFont.SetFamilyAndStyle(fontID);
+		fFont.SetFamilyAndStyle(fontID, fontManager);
 	}
 
 	if ((mask & B_FONT_SIZE) != 0) {
@@ -213,6 +205,8 @@ DrawState::ReadFontFromLink(BPrivate::LinkReceiver& link)
 		link.Read<uint32>(&flags);
 		fFont.SetFlags(flags);
 	}
+
+	return mask;
 }
 
 
@@ -251,7 +245,7 @@ DrawState::ReadFromLink(BPrivate::LinkReceiver& link)
 	fAlphaFncMode = info.alphaFunctionMode;
 	fFontAliasing = info.fontAntialiasing;
 
-	if (fPreviousState != NULL) {
+	if (fPreviousState.IsSet()) {
 		fCombinedOrigin = fPreviousState->fCombinedOrigin + fOrigin;
 		fCombinedScale = fPreviousState->fCombinedScale * fScale;
 		fCombinedTransform = fPreviousState->fCombinedTransform * fTransform;
@@ -330,7 +324,7 @@ DrawState::WriteToLink(BPrivate::LinkSender& link) const
 
 	// TODO: Could be optimized, but is low prio, since most views do not
 	// use a custom clipping region...
-	if (fClippingRegion != NULL) {
+	if (fClippingRegion.IsSet()) {
 		int32 clippingRectCount = fClippingRegion->CountRects();
 		link.Attach<int32>(clippingRectCount);
 		for (int i = 0; i < clippingRectCount; i++)
@@ -349,7 +343,7 @@ DrawState::SetOrigin(BPoint origin)
 
 	// NOTE: the origins of earlier states are never expected to
 	// change, only the topmost state ever changes
-	if (fPreviousState != NULL) {
+	if (fPreviousState.IsSet()) {
 		fCombinedOrigin.x = fPreviousState->fCombinedOrigin.x
 			+ fOrigin.x * fPreviousState->fCombinedScale;
 		fCombinedOrigin.y = fPreviousState->fCombinedOrigin.y
@@ -370,7 +364,7 @@ DrawState::SetScale(float scale)
 
 	// NOTE: the scales of earlier states are never expected to
 	// change, only the topmost state ever changes
-	if (fPreviousState != NULL)
+	if (fPreviousState.IsSet())
 		fCombinedScale = fPreviousState->fCombinedScale * fScale;
 	else
 		fCombinedScale = fScale;
@@ -392,7 +386,7 @@ DrawState::SetTransform(BAffineTransform transform)
 
 	// NOTE: the transforms of earlier states are never expected to
 	// change, only the topmost state ever changes
-	if (fPreviousState != NULL)
+	if (fPreviousState.IsSet())
 		fCombinedTransform = fPreviousState->fCombinedTransform * fTransform;
 	else
 		fCombinedTransform = fTransform;
@@ -427,13 +421,12 @@ void
 DrawState::SetClippingRegion(const BRegion* region)
 {
 	if (region) {
-		if (fClippingRegion != NULL)
-			*fClippingRegion = *region;
+		if (fClippingRegion.IsSet())
+			*fClippingRegion.Get() = *region;
 		else
-			fClippingRegion = new(nothrow) BRegion(*region);
+			fClippingRegion.SetTo(new(nothrow) BRegion(*region));
 	} else {
-		delete fClippingRegion;
-		fClippingRegion = NULL;
+		fClippingRegion.Unset();
 	}
 }
 
@@ -441,9 +434,9 @@ DrawState::SetClippingRegion(const BRegion* region)
 bool
 DrawState::HasClipping() const
 {
-	if (fClippingRegion != NULL)
+	if (fClippingRegion.IsSet())
 		return true;
-	if (fPreviousState != NULL)
+	if (fPreviousState.IsSet())
 		return fPreviousState->HasClipping();
 	return false;
 }
@@ -452,26 +445,26 @@ DrawState::HasClipping() const
 bool
 DrawState::HasAdditionalClipping() const
 {
-	return fClippingRegion != NULL;
+	return fClippingRegion.IsSet();
 }
 
 
 bool
 DrawState::GetCombinedClippingRegion(BRegion* region) const
 {
-	if (fClippingRegion != NULL) {
-		BRegion localTransformedClipping(*fClippingRegion);
+	if (fClippingRegion.IsSet()) {
+		BRegion localTransformedClipping(*fClippingRegion.Get());
 		SimpleTransform penTransform;
 		Transform(penTransform);
 		penTransform.Apply(&localTransformedClipping);
-		if (fPreviousState != NULL
+		if (fPreviousState.IsSet()
 			&& fPreviousState->GetCombinedClippingRegion(region)) {
 			localTransformedClipping.IntersectWith(region);
 		}
 		*region = localTransformedClipping;
 		return true;
 	} else {
-		if (fPreviousState != NULL)
+		if (fPreviousState.IsSet())
 			return fPreviousState->GetCombinedClippingRegion(region);
 	}
 	return false;
@@ -481,8 +474,15 @@ DrawState::GetCombinedClippingRegion(BRegion* region) const
 bool
 DrawState::ClipToRect(BRect rect, bool inverse)
 {
-	if (!rect.IsValid())
+	if (!rect.IsValid()) {
+		if (!inverse) {
+			if (!fClippingRegion.IsSet())
+				fClippingRegion.SetTo(new(nothrow) BRegion());
+			else
+				fClippingRegion->MakeEmpty();
+		}
 		return false;
+	}
 
 	if (!fCombinedTransform.IsIdentity()) {
 		if (fCombinedTransform.IsDilation()) {
@@ -514,16 +514,16 @@ DrawState::ClipToRect(BRect rect, bool inverse)
 	}
 
 	if (inverse) {
-		if (fClippingRegion == NULL) {
-			fClippingRegion = new(nothrow) BRegion(BRect(
-				-(1 << 16), -(1 << 16), (1 << 16), (1 << 16)));
+		if (!fClippingRegion.IsSet()) {
+			fClippingRegion.SetTo(new(nothrow) BRegion(BRect(
+				-(1 << 16), -(1 << 16), (1 << 16), (1 << 16))));
 				// TODO: we should have a definition for a rect (or region)
 				// with "infinite" area. For now, this region size should do...
 		}
 		fClippingRegion->Exclude(rect);
 	} else {
-		if (fClippingRegion == NULL)
-			fClippingRegion = new(nothrow) BRegion(rect);
+		if (!fClippingRegion.IsSet())
+			fClippingRegion.SetTo(new(nothrow) BRegion(rect));
 		else {
 			BRegion rectRegion(rect);
 			fClippingRegion->IntersectWith(&rectRegion);
@@ -543,12 +543,10 @@ DrawState::ClipToShape(shape_data* shape, bool inverse)
 	if (!fCombinedTransform.IsIdentity())
 		fCombinedTransform.Apply(shape->ptList, shape->ptCount);
 
-	AlphaMask* const mask = ShapeAlphaMask::Create(GetAlphaMask(), *shape,
-		BPoint(0, 0), inverse);
+	BReference<AlphaMask> const mask(ShapeAlphaMask::Create(GetAlphaMask(), *shape,
+		BPoint(0, 0), inverse), true);
 
 	SetAlphaMask(mask);
-	if (mask != NULL)
-		mask->ReleaseReference();
 }
 
 
@@ -837,7 +835,7 @@ DrawState::PrintToStream() const
 	printf("\t LineCap: %d\t LineJoin: %d\t MiterLimit: %.2f\n",
 		   (int16)fLineCapMode, (int16)fLineJoinMode, fMiterLimit);
 
-	if (fClippingRegion != NULL)
+	if (fClippingRegion.IsSet())
 		fClippingRegion->PrintToStream();
 
 	printf("\t ===== Font Data =====\n");

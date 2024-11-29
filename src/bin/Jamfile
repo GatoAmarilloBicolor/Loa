@@ -2,11 +2,9 @@ SubDir HAIKU_TOP src bin ;
 
 HAIKU_MULTIPLE_LOCALIZED_TARGETS on $(SUBDIR) = 1 ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
-
 AddSubDirSupportedPlatforms libbe_test ;
 
-UsePrivateHeaders app interface shared storage support tracker usb ;
+UsePrivateHeaders app interface libroot kernel shared storage support tracker usb ;
 UsePrivateSystemHeaders ;
 SubDirHdrs $(HAIKU_TOP) src add-ons kernel file_cache ;
 UseBuildFeatureHeaders ncurses ;
@@ -25,6 +23,9 @@ AddResources notify : notify.rdef ;
 AddResources setmime : setmime.rdef ;
 AddResources urlwrapper : urlwrapper.rdef ;
 
+ObjectSysHdrs listimage.c :
+	[ FDirName $(HAIKU_TOP) headers compatibility bsd ] ;
+
 # standard commands that don't need any additional library
 StdBinCommands
 	badblocks.cpp
@@ -34,7 +35,6 @@ StdBinCommands
 	error.c
 	fortune.c
 	finddir.c
-	fstrim.cpp
 	get_driver_settings.cpp
 	hd.c
 	listarea.c
@@ -50,7 +50,6 @@ StdBinCommands
 	rescan.c
 	system_time.cpp
 	unchop.c
-	uptime.cpp
 	vmstat.cpp
 	: : $(haiku-utils_rsrc) ;
 
@@ -70,6 +69,8 @@ StdBinCommands
 Includes [ FGristFiles top.cpp watch.c ]
 	: [ BuildFeatureAttribute ncurses : headers ] ;
 
+ObjectSysHdrs watch.c : [ FDirName $(HAIKU_TOP) headers compatibility bsd ] ;
+
 StdBinCommands
 	watch.c
 	: [ BuildFeatureAttribute ncurses : library ] : $(haiku-utils_rsrc) ;
@@ -87,7 +88,6 @@ StdBinCommands
 	draggers.cpp
 	ffm.cpp
 	iroster.cpp
-	launch_roster.cpp
 	listattr.cpp
 	listfont.cpp
 	listres.cpp
@@ -95,7 +95,7 @@ StdBinCommands
 	message.cpp
 	modifiers.cpp
 	mvattr.cpp
-	play.cpp
+	pidof.cpp
 	query.cpp
 	quit.cpp
 	roster.cpp
@@ -111,6 +111,11 @@ if $(TARGET_PLATFORM) = libbe_test {
 		: tests!apps ;
 }
 
+# standard commands that need libbe.so, libshared.a
+StdBinCommands
+	fstrim.cpp
+	: shared be : $(haiku-utils_rsrc) ;
+
 # standard commands that need libbe.so and libsupc++.so
 StdBinCommands
 	alert.cpp
@@ -121,28 +126,24 @@ StdBinCommands
 	resattr.cpp
 	screeninfo.cpp
 	setarch.cpp
+	setcontrollook.cpp
 	setdecor.cpp
 	settype.cpp
 	spybmessage.cpp
 	urlwrapper.cpp
-	: be [ TargetLibsupc++ ] : $(haiku-utils_rsrc) ;
+	: be [ TargetLibstdc++ ] [ TargetLibsupc++ ] : $(haiku-utils_rsrc) ;
 
 # standard commands that need libbe.so, libsupc++.so, and libshared.a
 StdBinCommands
+	launch_roster.cpp
 	ramdisk.cpp
+	resizefs.cpp
 	: shared be [ TargetLibsupc++ ] : $(haiku-utils_rsrc) ;
 
 # standard commands that need libbe.so, libbnetapi.so, libsupc++.so
 StdBinCommands
 	open.cpp
-	urlwrapper.cpp
 	: be bnetapi [ TargetLibsupc++ ] : $(haiku-utils_rsrc) ;
-
-# commands that need libbe.so and the stub catalog
-StdBinCommands
-	clockconfig.cpp
-	query.cpp
-	: be localestub : $(haiku-utils_rsrc) ;
 
 # commands that need libbe.so, libsupc++.so and the stub catalog
 StdBinCommands
@@ -245,6 +246,7 @@ DoCatalogs filepanel
 	: filepanel.cpp
 ;
 
+SubInclude HAIKU_TOP src bin acpi_call ;
 SubInclude HAIKU_TOP src bin addattr ;
 SubInclude HAIKU_TOP src bin bfs_tools ;
 SubInclude HAIKU_TOP src bin cddb_lookup ;
@@ -252,16 +254,15 @@ SubInclude HAIKU_TOP src bin consoled ;
 SubInclude HAIKU_TOP src bin desklink ;
 SubInclude HAIKU_TOP src bin fwcontrol ;
 SubInclude HAIKU_TOP src bin hid_decode ;
+SubInclude HAIKU_TOP src bin i2c ;
 SubInclude HAIKU_TOP src bin keymap ;
 SubInclude HAIKU_TOP src bin keystore ;
 SubInclude HAIKU_TOP src bin listdev ;
 SubInclude HAIKU_TOP src bin listusb ;
 SubInclude HAIKU_TOP src bin locale ;
 SubInclude HAIKU_TOP src bin makebootable ;
-#SubInclude HAIKU_TOP src bin makeudfimage ;
 SubInclude HAIKU_TOP src bin mail_utils ;
 SubInclude HAIKU_TOP src bin media_client ;
-SubInclude HAIKU_TOP src bin mkdos ;
 SubInclude HAIKU_TOP src bin mkfs ;
 SubInclude HAIKU_TOP src bin multiuser ;
 SubInclude HAIKU_TOP src bin package ;

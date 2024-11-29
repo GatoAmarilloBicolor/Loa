@@ -13,6 +13,7 @@
 
 #include "OverlayView.h"
 
+#include <AboutWindow.h>
 #include <Catalog.h>
 #include <InterfaceDefs.h>
 #include <Locale.h>
@@ -24,22 +25,22 @@
 #define B_TRANSLATION_CONTEXT "Main view"
 
 const float kDraggerSize = 7;
-	
 
-OverlayView::OverlayView(BRect frame) 
+
+OverlayView::OverlayView(BRect frame)
 	:
 	BView(frame, "OverlayImage", B_FOLLOW_NONE, B_WILL_DRAW)
 {
 	fBitmap = NULL;
 	fReplicated = false;
-	
+
 	frame.left = frame.right - kDraggerSize;
 	frame.top = frame.bottom - kDraggerSize;
-	BDragger *dragger = new BDragger(frame, this, B_FOLLOW_RIGHT | B_FOLLOW_BOTTOM);
+	BDragger* dragger = new BDragger(frame, this, B_FOLLOW_RIGHT | B_FOLLOW_BOTTOM);
 	AddChild(dragger);
-	
+
 	SetViewColor(B_TRANSPARENT_COLOR);
-	
+
 	fText = new BTextView(Bounds(), "bgView", Bounds(), B_FOLLOW_ALL, B_WILL_DRAW);
 	fText->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
 	rgb_color color = ui_color(B_PANEL_TEXT_COLOR);
@@ -58,7 +59,7 @@ OverlayView::OverlayView(BRect frame)
 }
 
 
-OverlayView::OverlayView(BMessage *archive) 
+OverlayView::OverlayView(BMessage* archive)
 	:
 	BView(archive)
 {
@@ -85,14 +86,14 @@ OverlayView::Draw(BRect)
 
 
 void
-OverlayView::MessageReceived(BMessage *msg)
+OverlayView::MessageReceived(BMessage* msg)
 {
 	switch (msg->what) {
-		case B_SIMPLE_DATA: 
+		case B_SIMPLE_DATA:
 		{
 			if (fReplicated)
 				break;
-			
+
 			entry_ref ref;
 			msg->FindRef("refs", &ref);
 			BEntry entry(&ref);
@@ -100,13 +101,13 @@ OverlayView::MessageReceived(BMessage *msg)
 
 			delete fBitmap;
 			fBitmap = BTranslationUtils::GetBitmap(path.Path());
-			
+
 			if (fBitmap != NULL) {
 				if (fText != NULL) {
 					RemoveChild(fText);
 					fText = NULL;
 				}
-				
+
 				BRect rect = fBitmap->Bounds();
 				if (!fReplicated) {
 					Window()->ResizeTo(rect.right, rect.bottom);
@@ -117,14 +118,15 @@ OverlayView::MessageReceived(BMessage *msg)
 			}
 			break;
 		}
-	    case B_ABOUT_REQUESTED:
-	      	OverlayAboutRequested(); 
-    		break; 
+		case B_ABOUT_REQUESTED:
+		{
+			OverlayAboutRequested();
+			break;
+		}
 		case B_COLORS_UPDATED:
 		{
 			rgb_color color;
-			if (msg->FindColor(ui_color_name(B_PANEL_TEXT_COLOR), &color)
-					== B_OK)
+			if (msg->FindColor(ui_color_name(B_PANEL_TEXT_COLOR), &color) == B_OK)
 				fText->SetFontAndColor(be_plain_font, B_FONT_ALL, &color);
 			break;
 		}
@@ -135,26 +137,26 @@ OverlayView::MessageReceived(BMessage *msg)
 }
 
 
-BArchivable *OverlayView::Instantiate(BMessage *data)
+BArchivable*
+OverlayView::Instantiate(BMessage* data)
 {
 	return new OverlayView(data);
 }
 
 
 status_t
-OverlayView::Archive(BMessage *archive, bool deep) const
+OverlayView::Archive(BMessage* archive, bool deep) const
 {
 	BView::Archive(archive, deep);
 
-	archive->AddString("add_on", "application/x-vnd.Haiku-OverlayImage");
+	archive->AddString("add_on", kAppSignature);
 	archive->AddString("class", "OverlayImage");
 
 	if (fBitmap) {
 		fBitmap->Lock();
 		fBitmap->Archive(archive);
 		fBitmap->Unlock();
-	}			
-	//archive->PrintToStream();
+	}
 
 	return B_OK;
 }
@@ -163,20 +165,18 @@ OverlayView::Archive(BMessage *archive, bool deep) const
 void
 OverlayView::OverlayAboutRequested()
 {
-	BAlert *alert = new BAlert("about",
-		"OverlayImage\n"
-		"Copyright 1999-2010\n\n\t"
-		"originally by Seth Flaxman\n\t"
-		"modified by Hartmuth Reh\n\t"
-		"further modified by Humdinger\n",
-		"OK");	
-	BTextView *view = alert->TextView();
-	BFont font;
-	view->SetStylable(true);
-	view->GetFont(&font);
-	font.SetSize(font.Size() + 7.0f);
-	font.SetFace(B_BOLD_FACE);
-	view->SetFontAndColor(0, 12, &font);
-	alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);	
-	alert->Go();
+	BAboutWindow* aboutwindow
+		= new BAboutWindow(B_TRANSLATE_SYSTEM_NAME("OverlayImage"), kAppSignature);
+
+	const char* authors[] = {
+		"Seth Flaxman",
+		"Hartmuth Reh",
+		"Humdinger",
+		NULL
+	};
+
+	aboutwindow->AddCopyright(1999, "Seth Flaxman");
+	aboutwindow->AddCopyright(2010, "Haiku, Inc.");
+	aboutwindow->AddAuthors(authors);
+	aboutwindow->Show();
 }

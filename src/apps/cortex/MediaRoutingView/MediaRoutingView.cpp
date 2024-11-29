@@ -62,6 +62,10 @@
 #include <MenuItem.h>
 #include <PopUpMenu.h>
 #include <Window.h>
+// Locale Kit
+#undef B_CATALOG
+#define B_CATALOG (&sCatalog)
+#include <Catalog.h>
 // Media Kit
 #include <MediaRoster.h>
 // Storage Kit
@@ -72,6 +76,9 @@
 #include <BitmapStream.h>
 #include <TranslatorRoster.h>
 
+#undef B_TRANSLATION_CONTEXT
+#define B_TRANSLATION_CONTEXT "MediaRoutingView"
+
 __USE_CORTEX_NAMESPACE
 
 #include <Debug.h>
@@ -79,6 +86,8 @@ __USE_CORTEX_NAMESPACE
 #define D_MESSAGE(x) //PRINT (x)
 #define D_MOUSE(x) //PRINT (x)
 #define D_KEY(x) //PRINT (x)
+
+static BCatalog sCatalog("x-vnd.Cortex.MediaRoutingView");
 
 // ---------------------------------------------------------------- //
 // constants
@@ -131,7 +140,7 @@ MediaRoutingView::~MediaRoutingView() {
 	D_METHOD(("MediaRoutingView::~MediaRoutingView()\n"));
 
 	_emptyInactiveNodeState();
-	
+
 	// quit ParameterWindowManager if necessary
 	ParameterWindowManager::shutDown();
 
@@ -200,11 +209,11 @@ DiagramWire *MediaRoutingView::createWire(
 			status_t error;
 			Connection connection;
 			error = manager->connect(output, input, &connection);
-/*			if (error)
+			if (error)
 			{
-				showErrorMessage("Could not connect", error);
+				showErrorMessage(B_TRANSLATE("Could not connect"), error);
 			}
-*/		}
+		}
 	}
 	return 0;
 }
@@ -271,11 +280,12 @@ MediaRoutingView::MessageDropped(BPoint point, BMessage *message)
 							dropPoint = message->DropPoint(&dropOffset);
 							m_lastDropPoint = Align(ConvertFromScreen(dropPoint - dropOffset));
 						} else {
-							BString s;
-							s << "Could not instantiate '" << info.name << "'";
+							BString s = B_TRANSLATE(
+								"Could not instantiate '%infoname%'");
+							s.ReplaceFirst("%infoname%", info.name);
 							showErrorMessage(s, error);
 						}
-					}	
+					}
 				}
 			}
 			break;
@@ -322,7 +332,7 @@ void MediaRoutingView::AttachedToWindow()
 {
 	D_METHOD(("MediaRoutingView::AttachedToWindow()\n"));
 	_inherited::AttachedToWindow();
-	
+
 	// attach to manager
 	ASSERT(manager);
 	add_observer(this, manager);
@@ -341,20 +351,18 @@ void MediaRoutingView::AllAttached()
 {
 	D_METHOD(("MediaRoutingView::AllAttached()\n"));
 	_inherited::AllAttached();
-	
+
 	_adjustScrollBars();
 
 	// grab keyboard events
 	MakeFocus();
-}	
+}
 
 void MediaRoutingView::DetachedFromWindow()
 {
 	D_METHOD(("MediaRoutingView::DetachedFromWindow()\n"));
 	_inherited::DetachedFromWindow();
 
-	status_t error;
-		
 	// detach from manager
 	if (manager)
 	{
@@ -365,7 +373,7 @@ void MediaRoutingView::DetachedFromWindow()
 		{
 			remove_observer(this, ref);
 		}
-		error = remove_observer(this, manager);
+		remove_observer(this, manager);
 		const_cast<RouteAppNodeManager *&>(manager) = 0;
 	}
 }
@@ -429,7 +437,7 @@ void MediaRoutingView::MessageReceived(
 			int32 count;
 			if (message->GetInfo("media_node_id", &type, &count) == B_OK)
 			{
-				for(int32 n = 0; n < count; n++) 
+				for(int32 n = 0; n < count; n++)
 				{
 					int32 id;
 					if (message->FindInt32("media_node_id", n, &id) == B_OK)
@@ -450,7 +458,7 @@ void MediaRoutingView::MessageReceived(
 			int32 count;
 			if (message->GetInfo("media_node_id", &type, &count) == B_OK)
 			{
-				for (int32 n = 0; n < count; n++) 
+				for (int32 n = 0; n < count; n++)
 				{
 					int32 id;
 					if (message->FindInt32("media_node_id", n, &id) == B_OK)
@@ -458,7 +466,7 @@ void MediaRoutingView::MessageReceived(
 						_removePanelFor(id);
 					}
 				}
-			}			
+			}
 			break;
 		}
 		case B_MEDIA_CONNECTION_MADE:
@@ -499,7 +507,7 @@ void MediaRoutingView::MessageReceived(
 					if (message->FindInt32("__connection_id", n, &id) == B_OK)
 					{
 						_removeWireFor(id);
-					}	
+					}
 				}
 			}
 			break;
@@ -507,7 +515,7 @@ void MediaRoutingView::MessageReceived(
 		case B_MEDIA_FORMAT_CHANGED:
 		{
 			D_MESSAGE(("MediaRoutingView::MessageReceived(B_MEDIA_FORMAT_CHANGED)\n"));
-			
+
 			media_node_id nodeID;
 			if(message->FindInt32("__source_node_id", &nodeID) < B_OK)
 				break;
@@ -520,7 +528,7 @@ void MediaRoutingView::MessageReceived(
 			ssize_t dataSize;
 			if(message->FindData("be:source", B_RAW_TYPE, (const void**)&source, &dataSize) < B_OK)
 				break;
-				
+
 			MediaWire* wire;
 			if(_findWireFor(connectionID, &wire) == B_OK) {
 				// copy new connection data
@@ -590,7 +598,7 @@ void MediaRoutingView::MessageReceived(
 			NodeRef* ref;
 			if(manager->getNodeRef(id, &ref) < B_OK)
 				break;
-			
+
 			bigtime_t when = system_time();
 			status_t err = manager->roster->StartTimeSource(ref->node(), when);
 			if(err < B_OK) {
@@ -609,7 +617,7 @@ void MediaRoutingView::MessageReceived(
 			NodeRef* ref;
 			if(manager->getNodeRef(id, &ref) < B_OK)
 				break;
-			
+
 			bigtime_t when = system_time();
 			status_t err = manager->roster->StopTimeSource(ref->node(), when);
 			if(err < B_OK) {
@@ -703,10 +711,10 @@ void MediaRoutingView::MessageReceived(
 		{
 			D_MESSAGE(("MediaRoutingView::MessageReceived(NodeManager::M_RELEASED)\n"));
 			remove_observer(this, manager);
-			const_cast<RouteAppNodeManager*&>(manager) = 0;	
+			const_cast<RouteAppNodeManager*&>(manager) = 0;
 			// +++++ disable view!
 			break;
-		}			
+		}
 		case NodeRef::M_RELEASED:
 		{
 			D_MESSAGE(("MediaRoutingView::MessageReceived(NodeRef::M_RELEASED)\n"));
@@ -728,7 +736,7 @@ BPoint MediaRoutingView::findFreePositionFor(
 	const MediaNodePanel* panel) const
 {
 	D_METHOD(("MediaRoutingView::_findFreeSpotFor()\n"));
-	
+
 	BPoint p(M_CLEANUP_H_MARGIN, M_CLEANUP_V_MARGIN);
 	if (panel)
 	{
@@ -790,7 +798,7 @@ BPoint MediaRoutingView::findFreePositionFor(
 				{
 					p.x = right + M_CLEANUP_H_GAP;
 				}
-				break;				
+				break;
 			}
 		}
 	}
@@ -805,7 +813,7 @@ void MediaRoutingView::layoutChanged(
 	layout_t layout)
 {
 	D_METHOD(("MediaRoutingView::layoutChanged()\n"));
-	
+
 	switch (layout)
 	{
 		case M_ICON_VIEW:
@@ -946,14 +954,14 @@ void MediaRoutingView::showContextMenu(
 	BMenuItem *item;
 	BMessage *message = new BMessage(M_LAYOUT_CHANGED);
 	message->AddInt32("layout", M_ICON_VIEW);
-	menu->AddItem(item = new BMenuItem("Icon view", message));
+	menu->AddItem(item = new BMenuItem(B_TRANSLATE("Icon view"), message));
 	if (m_layout == M_ICON_VIEW)
 	{
 		item->SetMarked(true);
 	}
 	message = new BMessage(M_LAYOUT_CHANGED);
 	message->AddInt32("layout", M_MINI_ICON_VIEW);
-	menu->AddItem(item = new BMenuItem("Mini icon view", message));
+	menu->AddItem(item = new BMenuItem(B_TRANSLATE("Mini icon view"), message));
 	if (m_layout == M_MINI_ICON_VIEW)
 	{
 		item->SetMarked(true);
@@ -961,10 +969,12 @@ void MediaRoutingView::showContextMenu(
 	menu->AddSeparatorItem();
 
 	// add 'CleanUp' command
-	menu->AddItem(new BMenuItem("Clean up", new BMessage(M_CLEANUP_REQUESTED), 'K'));
+	menu->AddItem(new BMenuItem(B_TRANSLATE("Clean up"),
+		new BMessage(M_CLEANUP_REQUESTED), 'K'));
 
 	// add 'Select All' command
-	menu->AddItem(new BMenuItem("Select all", new BMessage(M_SELECT_ALL), 'A'));
+	menu->AddItem(new BMenuItem(B_TRANSLATE("Select all"),
+		new BMessage(M_SELECT_ALL), 'A'));
 
 	menu->SetTargetForItems(this);
 	ConvertToScreen(&point);
@@ -990,8 +1000,8 @@ void MediaRoutingView::showErrorMessage(
 	BMessenger messenger(0, Window());
 	if (!messenger.IsValid()
 	 || (messenger.SendMessage(&message) != B_OK)) {
-		BAlert *alert = new BAlert("Error", text.String(), "OK", 0, 0,
-								   B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+		BAlert *alert = new BAlert(B_TRANSLATE("Error"), text.String(),
+			B_TRANSLATE("OK"), 0, 0, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
 		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 		alert->Go();
 	}
@@ -1013,7 +1023,7 @@ status_t MediaRoutingView::importState(
 	if(err == B_OK && layout != m_layout) {
 		layoutChanged(layout);
 	}
-	
+
 	const char* path;
 	err = archive->FindString("bgBitmap", &path);
 	if(err == B_OK) {
@@ -1031,8 +1041,8 @@ status_t MediaRoutingView::importState(
 			archive->FindInt8("bgGreen", (int8*)&color.green) == B_OK &&
 			archive->FindInt8("bgBlue", (int8*)&color.blue) == B_OK)
 				_changeBackground(color);
-	}	
-	
+	}
+
 	for(int32 n = 0; ; ++n) {
 
 		// find panel state info; stop when exhausted
@@ -1040,12 +1050,12 @@ status_t MediaRoutingView::importState(
 		err = archive->FindMessage("panel", n, &m);
 		if(err < B_OK)
 			break;
-		
+
 		const char* nodeName;
 		err = archive->FindString("nodeName", n, &nodeName);
 		if(err < B_OK)
 			break;
-			
+
 		uint32 nodeKind;
 		err = archive->FindInt32("nodeKind", n, (int32*)&nodeKind);
 		if(err < B_OK)
@@ -1058,14 +1068,14 @@ status_t MediaRoutingView::importState(
 			panelIndex = 0;
 			panelIndex < items;
 			++panelIndex) {
-		
+
 			MediaNodePanel* panel = dynamic_cast<MediaNodePanel*>(
 				ItemAt(panelIndex, DiagramItem::M_BOX));
-				
+
 			if(panel &&
 				!strcmp(panel->ref->name(), nodeName) &&
 				panel->ref->kind() == nodeKind) {
-				
+
 				// found match; hand message to panel
 				panel->importState(&m);
 				break;
@@ -1084,7 +1094,7 @@ status_t MediaRoutingView::importState(
 	}
 
 	updateDataRect();
-	
+
 	return B_OK;
 }
 
@@ -1113,7 +1123,7 @@ status_t MediaRoutingView::exportState(
 			ItemAt(n, DiagramItem::M_BOX));
 		if(!panel)
 			continue;
-		
+
 		if(panel->ref->isInternal())
 			// skip internal nodes
 			continue;
@@ -1122,9 +1132,9 @@ status_t MediaRoutingView::exportState(
 		panel->exportState(&m);
 		archive->AddString("nodeName", panel->ref->name());
 		archive->AddInt32("nodeKind", panel->ref->kind());
-		archive->AddMessage("panel", &m);		
+		archive->AddMessage("panel", &m);
 	}
-	
+
 	// copy inactive node state info
 	for(int32 n = 0; n < m_inactiveNodeState.CountItems(); ++n) {
 		_inactive_node_state_entry* e = reinterpret_cast<_inactive_node_state_entry*>(
@@ -1135,7 +1145,7 @@ status_t MediaRoutingView::exportState(
 		archive->AddMessage("panel", &e->state);
 	}
 
-	return B_OK;	
+	return B_OK;
 }
 
 // [e.moon 8dec99] subset support
@@ -1153,7 +1163,7 @@ status_t MediaRoutingView::importStateFor(
 		err = archive->FindString("nodeKey", archiveIndex, &key);
 		if(err < B_OK)
 			break;
-		
+
 		BMessage m;
 		err = archive->FindMessage("panel", archiveIndex, &m);
 		if(err < B_OK) {
@@ -1162,7 +1172,7 @@ status_t MediaRoutingView::importStateFor(
 					B_PRId32 "\n", archiveIndex));
 			continue;
 		}
-		
+
 		// find corresponding node
 		media_node_id id;
 		err = context->getNodeFor(key, &id);
@@ -1172,7 +1182,7 @@ status_t MediaRoutingView::importStateFor(
 				key));
 			continue;
 		}
-		
+
 		// look for panel, create it if necessary
 		MediaNodePanel* panel;
 		err = _findPanelFor(id,	&panel);
@@ -1199,11 +1209,11 @@ status_t MediaRoutingView::importStateFor(
 
 		// pass state data along
 		panel->importState(&m);
-		
+
 		// select the panel
 		SelectItem(panel, false);
 	}
-	
+
 	return B_OK;
 }
 
@@ -1212,7 +1222,7 @@ status_t MediaRoutingView::exportStateFor(
 	BMessage*									archive) const {
 
 	status_t err;
-	
+
 	for(uint32 n = 0; n < context->countNodes(); ++n) {
 		MediaNodePanel* panel;
 		err = _findPanelFor(
@@ -1225,15 +1235,15 @@ status_t MediaRoutingView::exportStateFor(
 				context->nodeAt(n)));
 			return B_BAD_VALUE;
 		}
-			
+
 		const char* key = context->keyAt(n);
-		
+
 		archive->AddString("nodeKey", key);
 		BMessage m;
 		panel->exportState(&m);
 		archive->AddMessage("panel", &m);
 	}
-	
+
 	return B_OK;
 }
 
@@ -1329,7 +1339,7 @@ status_t MediaRoutingView::_addWireFor(
 	 && (_findPanelFor(connection.destinationNode(), &destination) == B_OK))
 	{
 		status_t error;
-		
+
 		media_output output;
 		error = connection.getOutput(&output);
 		if (error)
@@ -1392,7 +1402,7 @@ status_t MediaRoutingView::_removeWireFor(
 	uint32 connectionID)
 {
 	D_METHOD(("MediaRoutingView::_removeWireFor()\n"));
-	
+
 	MediaWire *wire;
 	if (_findWireFor(connectionID, &wire) == B_OK)
 	{
@@ -1413,8 +1423,8 @@ status_t MediaRoutingView::_removeWireFor(
 			destination->updateIOJacks();
 			destination->arrangeIOJacks();
 			Invalidate(destination->Frame());
-		}	
-		
+		}
+
 		// [e.moon 21nov99] group split/remove now performed by
 		// RouteAppNodeManager
 
@@ -1448,6 +1458,9 @@ void MediaRoutingView::_initLayout()
 {
 	D_METHOD(("MediaRoutingView::_initLayout()\n"));
 
+	BString measure;
+	measure << " " << B_TRANSLATE("Be Audio Mixer") << " ";
+
 	switch (m_layout)
 	{
 		case M_ICON_VIEW:
@@ -1469,7 +1482,7 @@ void MediaRoutingView::_initLayout()
 			font_height fh;
 			be_plain_font->GetHeight(&fh);
 			labelWidth = 4 * MediaNodePanel::M_LABEL_H_MARGIN
-						 + be_plain_font->StringWidth(" Be Audio Mixer ");
+						 + be_plain_font->StringWidth(measure.String());
 			bodyWidth = 2 * MediaNodePanel::M_BODY_H_MARGIN + B_LARGE_ICON
 						+ 2 * MediaJack::M_DEFAULT_WIDTH;
 			labelHeight = 2 * MediaNodePanel::M_LABEL_V_MARGIN
@@ -1492,7 +1505,7 @@ void MediaRoutingView::_initLayout()
 			font_height fh;
 			be_plain_font->GetHeight(&fh);
 			labelWidth = 4 * MediaNodePanel::M_LABEL_H_MARGIN
-						 + be_plain_font->StringWidth(" Be Audio Mixer ");
+						 + be_plain_font->StringWidth(measure.String());
 			bodyWidth = 2 * MediaNodePanel::M_BODY_H_MARGIN + B_MINI_ICON;
 			labelHeight = 3 * MediaNodePanel::M_LABEL_V_MARGIN
 						  + fh.ascent + fh.descent + fh.leading
@@ -1536,21 +1549,21 @@ void MediaRoutingView::_initContent()
 	NodeRef* videoIn = manager->videoInputNode();
 	if (videoIn)
 	{
-		group = manager->createGroup("Video input");
+		group = manager->createGroup(B_TRANSLATE("Video input"));
 		group->setRunMode(BMediaNode::B_RECORDING);
 		group->addNode(videoIn);
 	}
 	NodeRef* audioIn = manager->audioInputNode();
 	if (audioIn)
 	{
-		group = manager->createGroup("Audio input");
+		group = manager->createGroup(B_TRANSLATE("Audio input"));
 		group->setRunMode(BMediaNode::B_RECORDING);
 		group->addNode(audioIn);
 	}
 	NodeRef* videoOut = manager->videoOutputNode();
 	if (videoOut)
 	{
-		group = manager->createGroup("Video output");
+		group = manager->createGroup(B_TRANSLATE("Video output"));
 		group->addNode(videoOut);
 	}
 }
@@ -1569,7 +1582,7 @@ void MediaRoutingView::_changeCyclingForSelection(
 			if (panel && (panel->ref->isCycling() != cycle))
 			{
 				panel->ref->setCycling(cycle);
-			}			
+			}
 		}
 		manager->unlock();
 	}
@@ -1676,11 +1689,11 @@ void MediaRoutingView::_deleteSelection()
 				status_t error = panel->ref->releaseNode();
 				if (error)
 				{
-					BString s;
-					s << "Could not release '" << panel->ref->name() << "'";
+					BString s = B_TRANSLATE("Could not release '%refname%'");
+					s.ReplaceFirst("%rename%", panel->ref->name());
 					showErrorMessage(s, error);
 				}
-			}			
+			}
 		}
 	}
 	else if (SelectedType() == DiagramItem::M_WIRE)
@@ -1693,7 +1706,8 @@ void MediaRoutingView::_deleteSelection()
 				status_t error = manager->disconnect(wire->connection);
 				if (error)
 				{
-					showErrorMessage("Could not disconnect", error);
+					showErrorMessage(
+						B_TRANSLATE("Could not disconnect"), error);
 				}
 			}
 		}
@@ -1723,7 +1737,7 @@ void MediaRoutingView::_checkDroppedFile(
 			{
 				BMimeType mimeType(mimeString);
 				BMimeType superType;
-				
+
 				// [e.moon 22dec99] handle dropped node-set files
 				if(mimeType == RouteApp::s_nodeSetType) {
 					BMessage m(B_REFS_RECEIVED);
@@ -1753,11 +1767,12 @@ void MediaRoutingView::_checkDroppedFile(
 						}
 						else
 						{
-							char fileName[B_FILE_NAME_LENGTH]; 
+							char fileName[B_FILE_NAME_LENGTH];
 							BEntry entry(ref);
 							entry.GetName(fileName);
-							BString s;
-							s << "Could not load '" << fileName << "'";
+							BString s = B_TRANSLATE(
+								"Could not load '%filename%'");
+							s.ReplaceFirst("%filename%", fileName);
 							showErrorMessage(s, error);
 						}
 					}
@@ -1773,17 +1788,17 @@ void MediaRoutingView::_changeBackground(
 	D_METHOD(("MediaRoutingView::_changeBackground()\n"));
 
 	status_t error;
-	BBitmap *background = 0; 
-	BFile file(ref, B_READ_ONLY); 
+	BBitmap *background = 0;
+	BFile file(ref, B_READ_ONLY);
 	error = file.InitCheck();
 	if (!error)
 	{
-		BTranslatorRoster *roster = BTranslatorRoster::Default(); 
-		BBitmapStream stream; 
+		BTranslatorRoster *roster = BTranslatorRoster::Default();
+		BBitmapStream stream;
 		error = roster->Translate(&file, NULL, NULL, &stream, B_TRANSLATOR_BITMAP);
 		if (!error)
 		{
-			stream.DetachBitmap(&background); 
+			stream.DetachBitmap(&background);
 			setBackgroundBitmap(background);
 			Invalidate();
 
@@ -1800,7 +1815,7 @@ void MediaRoutingView::_changeBackground(
 	D_METHOD(("MediaRoutingView::_changeBackground()\n"));
 	setBackgroundColor(color);
 	Invalidate();
-	
+
 	// [e.moon 1dec99] persistence, yay
 	m_backgroundBitmapEntry.Unset();
 }
@@ -1827,7 +1842,7 @@ MediaRoutingView::_adjustScrollBars()
 	}
 }
 
-void 
+void
 MediaRoutingView::_broadcastSelection() const
 {
 	int32 selectedGroup = 0;
@@ -1855,7 +1870,7 @@ MediaRoutingView::_broadcastSelection() const
 	messenger.SendMessage(&groupMsg);
 }
 
-status_t 
+status_t
 MediaRoutingView::_fetchInactiveNodeState(MediaNodePanel *forPanel, BMessage *outMessage)
 {
 	// copy inactive node state info
@@ -1866,7 +1881,7 @@ MediaRoutingView::_fetchInactiveNodeState(MediaNodePanel *forPanel, BMessage *ou
 		ASSERT(e);
 		if(e->name != forPanel->ref->name())
 			continue;
-			
+
 		if(e->kind != forPanel->ref->kind())
 			continue;
 
@@ -1876,10 +1891,10 @@ MediaRoutingView::_fetchInactiveNodeState(MediaNodePanel *forPanel, BMessage *ou
 		return B_OK;
 	}
 
-	return B_BAD_VALUE;		
+	return B_BAD_VALUE;
 }
 
-void 
+void
 MediaRoutingView::_emptyInactiveNodeState()
 {
 	int32 c = m_inactiveNodeState.CountItems();

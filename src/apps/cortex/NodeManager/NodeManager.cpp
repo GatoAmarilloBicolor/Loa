@@ -46,6 +46,13 @@
 #include <functional>
 #include <list>
 #include <set>
+// Locale Kit
+#undef B_CATALOG
+#define B_CATALOG (&sCatalog)
+#include <Catalog.h>
+
+#undef B_TRANSLATION_CONTEXT
+#define B_TRANSLATION_CONTEXT "NodeManager"
 
 #include "set_tools.h"
 #include "functional_tools.h"
@@ -60,6 +67,8 @@ __USE_CORTEX_NAMESPACE
 #define D_MESSAGE(x) //PRINT (x)
 #define D_ROSTER(x) //PRINT (x)
 #define D_LOCK(x) //PRINT (x)
+
+static BCatalog sCatalog("x-vnd.Cortex.NodeManager");
 
 // -------------------------------------------------------- //
 // messaging constants
@@ -133,7 +142,7 @@ void _do_for_each_connected(
 
 	ASSERT(origin);
 	ASSERT(state);
-	status_t err;
+	status_t err __attribute__((unused));
 
 	if(state->visited.find(origin->id()) != state->visited.end()) {
 //		PRINT(("### already visited\n"));
@@ -406,12 +415,18 @@ NodeManager::~NodeManager() {
 //
 }
 
-const char* const			NodeManager::s_defaultGroupPrefix = "No Name";
-const char* const			NodeManager::s_timeSourceGroup = "Time Sources";
-const char* const			NodeManager::s_audioInputGroup = "System Audio Input";
-const char* const			NodeManager::s_videoInputGroup = "System Video Input";
-const char* const			NodeManager::s_audioMixerGroup = "System Audio Mixer";
-const char* const			NodeManager::s_videoOutputGroup = "System Video Output";
+const char* const
+NodeManager::s_defaultGroupPrefix = B_TRANSLATE("No name");
+const char* const
+NodeManager::s_timeSourceGroup = B_TRANSLATE("Time sources");
+const char* const
+NodeManager::s_audioInputGroup = B_TRANSLATE("System audio input");
+const char* const
+NodeManager::s_videoInputGroup = B_TRANSLATE("System video input");
+const char* const
+NodeManager::s_audioMixerGroup = B_TRANSLATE("System audio mixer");
+const char* const
+NodeManager::s_videoOutputGroup = B_TRANSLATE("System video output");
 
 NodeManager::NodeManager(
 	bool													useAddOnHost) :
@@ -590,7 +605,7 @@ bool NodeManager::_find_route_recurse(
 	ASSERT(IsLocked());
 	ASSERT(origin);
 	ASSERT(state);
-	status_t err;
+	status_t err __attribute__((unused));
 
 	// node already visited?
 	if(state->visited.find(origin->id()) != state->visited.end()) {
@@ -767,69 +782,43 @@ NodeGroup* NodeManager::groupAt(
 // look up a group by unique ID; returns B_BAD_VALUE if no
 // matching group was found
 
-class match_group_by_id :
-	public binary_function<const NodeGroup*, uint32, bool> {
-public:
-	bool operator()(const NodeGroup* group, uint32 id) const {
-		return group->id() == id;
-	}
-};
-
-status_t NodeManager::findGroup(
-	uint32												id,
-	NodeGroup**										outGroup) const {
+status_t NodeManager::findGroup(uint32 id, NodeGroup** outGroup) const
+{
 	Autolock _l(this);
-	D_METHOD((
-		"NodeManager::findGroup(id)\n"));
+	D_METHOD(("NodeManager::findGroup(id)\n"));
 
-	node_group_set::const_iterator it =
-		find_if(
-			m_nodeGroupSet.begin(),
-			m_nodeGroupSet.end(),
-			bind2nd(match_group_by_id(), id)
-		);
-
-	if(it == m_nodeGroupSet.end()) {
-		*outGroup = 0;
-		return B_BAD_VALUE;
+	node_group_set::const_iterator it;
+	for (it = m_nodeGroupSet.begin(); it != m_nodeGroupSet.end(); it++)
+	{
+		if ((*it)->id() == id) {
+			*outGroup = *it;
+			return B_OK;
+		}
 	}
 
-	*outGroup = *it;
-	return B_OK;
+	*outGroup = 0;
+	return B_BAD_VALUE;
 }
 
 // look up a group by name; returns B_NAME_NOT_FOUND if
 // no group matching the name was found.
 
-class match_group_by_name :
-	public binary_function<const NodeGroup*, const char*, bool> {
-public:
-	bool operator()(const NodeGroup* group, const char* name) const {
-		return !strcmp(group->name(), name);
-	}
-};
-
-status_t NodeManager::findGroup(
-	const char*										name,
-	NodeGroup**										outGroup) const {
+status_t NodeManager::findGroup(const char* name, NodeGroup** outGroup) const
+{
 	Autolock _l(this);
-	D_METHOD((
-		"NodeManager::findGroup(name)\n"));
+	D_METHOD(("NodeManager::findGroup(name)\n"));
 
-	node_group_set::const_iterator it =
-		find_if(
-			m_nodeGroupSet.begin(),
-			m_nodeGroupSet.end(),
-			bind2nd(match_group_by_name(), name)
-		);
-
-	if(it == m_nodeGroupSet.end()) {
-		*outGroup = 0;
-		return B_BAD_VALUE;
+	node_group_set::const_iterator it;
+	for (it = m_nodeGroupSet.begin(); it != m_nodeGroupSet.end(); it++)
+	{
+		if (strcmp((*it)->name(), name) == 0) {
+			*outGroup = *it;
+				return B_OK;
+		}
 	}
 
-	*outGroup = *it;
-	return B_OK;
+	*outGroup = 0;
+	return B_BAD_VALUE;
 }
 
 // merge the given source group to the given destination;
@@ -842,8 +831,6 @@ status_t NodeManager::mergeGroups(
 	D_METHOD((
 		"NodeManager::mergeGroups(name)\n"));
 
-	status_t err;
-
 	// [5feb00 c.lenz] already merged
 	if(sourceGroup->id() == destinationGroup->id())
 		return B_OK;
@@ -854,7 +841,7 @@ status_t NodeManager::mergeGroups(
 	for(uint32 n = sourceGroup->countNodes(); n; --n) {
 		NodeRef* node = sourceGroup->nodeAt(n-1);
 		ASSERT(node);
-		err = sourceGroup->removeNode(n-1);
+		status_t err __attribute__((unused)) = sourceGroup->removeNode(n-1);
 		ASSERT(err == B_OK);
 		err = destinationGroup->addNode(node);
 		ASSERT(err == B_OK);
@@ -882,8 +869,7 @@ status_t NodeManager::mergeGroups(
 // was split successfully.
 
 
-class _changeNodeGroupFn :
-	public	unary_function<NodeRef*, void> {
+class _changeNodeGroupFn {
 public:
 	NodeGroup*										newGroup;
 
@@ -898,7 +884,7 @@ public:
 		PRINT((
 			"_changeNodeGroupFn(): '%s'\n", node->name()));
 
-		status_t err;
+		status_t err __attribute__((unused));
 		NodeGroup* oldGroup = node->group();
 		if(oldGroup) {
 			err = oldGroup->removeNode(node);
@@ -2514,7 +2500,11 @@ inline void NodeManager::_updateLatenciesFrom(
 		origin,
 		0, // all groups
 		recurse,
+#if __GNUC__ <= 2
 		mem_fun(&NodeRef::_updateLatency),
+#else
+		[](NodeRef* node) { return node->_updateLatency(); },
+#endif
 		&st);
 
 	_unlockAllGroups(); // [e.moon 13oct99]

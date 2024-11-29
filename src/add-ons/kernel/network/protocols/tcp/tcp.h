@@ -62,11 +62,11 @@ struct tcp_header {
 	uint16	urgent_offset;
 
 	uint32	HeaderLength() const { return (uint32)header_length << 2; }
-	uint32	Sequence() const { return ntohl(sequence); }
-	uint32	Acknowledge() const { return ntohl(acknowledge); }
-	uint16	AdvertisedWindow() const { return ntohs(advertised_window); }
-	uint16	Checksum() const { return ntohs(checksum); }
-	uint16	UrgentOffset() const { return ntohs(urgent_offset); }
+	uint32	Sequence() const { return B_BENDIAN_TO_HOST_INT32(sequence); }
+	uint32	Acknowledge() const { return B_BENDIAN_TO_HOST_INT32(acknowledge); }
+	uint16	AdvertisedWindow() const { return B_BENDIAN_TO_HOST_INT16(advertised_window); }
+	uint16	Checksum() const { return B_BENDIAN_TO_HOST_INT16(checksum); }
+	uint16	UrgentOffset() const { return B_BENDIAN_TO_HOST_INT16(urgent_offset); }
 } _PACKED;
 
 class tcp_sequence {
@@ -231,6 +231,7 @@ enum {
 	TCP_HAS_WINDOW_SCALE	= 1 << 0,
 	TCP_HAS_TIMESTAMPS		= 1 << 1,
 	TCP_SACK_PERMITTED		= 1 << 2,
+	TCP_HAS_SACK			= 1 << 3,
 };
 
 struct tcp_segment_header {
@@ -239,7 +240,7 @@ struct tcp_segment_header {
 		flags(_flags),
 		window_shift(0),
 		max_segment_size(0),
-		sack_count(0),
+		sackCount(0),
 		options(0)
 	{}
 
@@ -254,8 +255,9 @@ struct tcp_segment_header {
 	uint32	timestamp_value;
 	uint32	timestamp_reply;
 
-	tcp_sack	*sacks;
-	int			sack_count;
+#define MAX_SACK_BLKS 4
+	tcp_sack	sacks[MAX_SACK_BLKS];
+	int			sackCount;
 
 	uint32	options;
 
@@ -264,15 +266,26 @@ struct tcp_segment_header {
 		return (flags & (TCP_FLAG_SYNCHRONIZE | TCP_FLAG_FINISH | TCP_FLAG_RESET
 			| TCP_FLAG_URGENT | TCP_FLAG_ACKNOWLEDGE)) == TCP_FLAG_ACKNOWLEDGE;
 	}
+
+	uint32 AdvertisedWindow(uint8 windowShift) const
+	{
+		return (uint32)advertised_window << windowShift;
+	}
+	void SetAdvertisedWindow(size_t availableBytes, uint8 windowShift)
+	{
+		availableBytes >>= windowShift;
+		advertised_window = min_c(TCP_MAX_WINDOW, availableBytes);
+	}
 };
 
 enum tcp_segment_action {
-	KEEP			= 0x00,
-	DROP			= 0x01,
-	RESET			= 0x02,
-	ACKNOWLEDGE		= 0x04,
-	IMMEDIATE_ACKNOWLEDGE = 0x08,
-	DELETE_ENDPOINT	= 0x10,
+	KEEP					= 0,
+	DROP					= (1 << 0),
+	RESET					= (1 << 1),
+	ACKNOWLEDGE				= (1 << 2),
+	IMMEDIATE_ACKNOWLEDGE	= (1 << 3),
+	SEND_QUEUED				= (1 << 4),
+	DELETED_ENDPOINT		= (1 << 5),
 };
 
 

@@ -22,23 +22,24 @@ public:
 								ICUCollateData(pthread_key_t tlsKey);
 	virtual						~ICUCollateData();
 
-	virtual	status_t			SetTo(const Locale& locale,
-										const char* posixLocaleName);
+	virtual	status_t			SetTo(const U_NAMESPACE_QUALIFIER Locale&
+										locale,
+									const char* posixLocaleName);
 	virtual	status_t			SetToPosix();
 
 			status_t			Strcoll(const char* a, const char* b, int& out);
-			status_t			Strxfrm(char* out, const char* in, size_t size,
-									size_t& outSize);
+			status_t			Strxfrm(char* out, const char* in,
+									size_t outSize, size_t& requiredSize);
 			status_t			Wcscoll(const wchar_t* a, const wchar_t* b,
 									int& out);
 			status_t			Wcsxfrm(wchar_t* out, const wchar_t* in,
-									size_t size, size_t& outSize);
+									size_t outSize, size_t& requiredSize);
 
 private:
 			status_t			_ToUnicodeString(const char* in,
-									UnicodeString& out);
+									U_NAMESPACE_QUALIFIER UnicodeString& out);
 
-			Collator*			fCollator;
+			U_NAMESPACE_QUALIFIER Collator*	fCollator;
 };
 
 

@@ -41,8 +41,6 @@
 #define DB_EXPONENT_POSITIVE 1.4	// for dB values > 0
 #define DB_EXPONENT_NEGATIVE 1.8	// for dB values < 0
 
-#define USE_MEDIA_FORMAT_WORKAROUND 1
-
 #define DB_TO_GAIN(db)			dB_to_Gain((db))
 #define GAIN_TO_DB(gain)		Gain_to_dB((gain))
 #define PERCENT_TO_GAIN(pct)	((pct) / 100.0)
@@ -81,12 +79,6 @@
 #define PARAM_IS_MUTE(id)					(((id) & 0xf) == 0x7)
 #define PARAM_IS_GAIN(id)					(((id) & 0xf) == 0x8)
 #define PARAM_IS_BALANCE(id)				(((id) & 0xf) == 0x9)
-
-#if USE_MEDIA_FORMAT_WORKAROUND
-static void
-multi_audio_format_specialize(media_multi_audio_format *format,
-	const media_multi_audio_format *other);
-#endif
 
 #define FORMAT_USER_DATA_TYPE 		0x7294a8f3
 #define FORMAT_USER_DATA_MAGIC_1	0xc84173bd
@@ -212,14 +204,6 @@ status_t
 AudioMixer::HandleMessage(int32 message, const void *data, size_t size)
 {
 	// since we're using a mediaeventlooper, there shouldn't be any messages
-	// except the message we are using to schedule output events for the
-	// process thread.
-
-	if (message == MIXER_SCHEDULE_EVENT) {
-		RealTimeQueue()->AddEvent(*(const media_timed_event*)data);
-		return B_OK;
-	}
-
 	return B_ERROR;
 }
 
@@ -275,7 +259,7 @@ AudioMixer::GetNextInput(int32 *cookie, media_input *out_input)
 		out_input->source = media_source::null;
 		out_input->destination.port = ControlPort();
 		out_input->destination.id = 0;
-		memset(&out_input->format, 0, sizeof(out_input->format));
+		out_input->format.Clear();
 		out_input->format.type = B_MEDIA_RAW_AUDIO;
 		strcpy(out_input->name, "Free Input");
 		*cookie += 1;
@@ -532,7 +516,7 @@ AudioMixer::FormatSuggestionRequested(media_type type, int32 quality,
 		return B_MEDIA_BAD_FORMAT;
 
 	// we can produce any (wildcard) raw audio format
-	memset(format, 0, sizeof(*format));
+	format->Clear();
 	format->type = B_MEDIA_RAW_AUDIO;
 	return B_OK;
 }
@@ -617,12 +601,7 @@ AudioMixer::FormatChangeRequested(const media_source &source,
 	}
 
 	/* remove wildcards */
-#if USE_MEDIA_FORMAT_WORKAROUND
-	multi_audio_format_specialize(&io_format->u.raw_audio,
-		&fDefaultFormat.u.raw_audio);
-#else
 	io_format->SpecializeTo(&fDefaultFormat);
-#endif
 
 	media_node_id id;
 	FindLatencyFor(destination, &fDownstreamLatency, &id);
@@ -686,7 +665,7 @@ AudioMixer::GetNextOutput(int32 *cookie, media_output *out_output)
 		out_output->source.port = ControlPort();
 		out_output->source.id = 0;
 		out_output->destination = media_destination::null;
-		memset(&out_output->format, 0, sizeof(out_output->format));
+		out_output->format.Clear();
 		out_output->format.type = B_MEDIA_RAW_AUDIO;
 		strcpy(out_output->name, "Mixer Output");
 	}
@@ -741,7 +720,7 @@ AudioMixer::GetLatency(bigtime_t *out_latency)
 	// report our *total* latency:  internal plus downstream plus scheduling
 	*out_latency = EventLatency() + SchedulingLatency();
 
-	TRACE("AudioMixer::GetLatency %Ld\n", *out_latency);
+	TRACE("AudioMixer::GetLatency %lld\n", *out_latency);
 
 	return B_OK;
 }
@@ -758,7 +737,7 @@ AudioMixer::LatencyChanged(const media_source& source,
 	}
 
 	TRACE("AudioMixer::LatencyChanged: downstream latency from %ld/%ld to "
-		"%ld/%ld changed from %Ld to %Ld\n", source.port, source.id,
+		"%ld/%ld changed from %lld to %lld\n", source.port, source.id,
 		destination.port, destination.id, fDownstreamLatency, new_latency);
 
 #if DEBUG
@@ -766,7 +745,7 @@ AudioMixer::LatencyChanged(const media_source& source,
 		media_node_id id;
 		bigtime_t l;
 		FindLatencyFor(destination, &l, &id);
-		TRACE("AudioMixer: Reported downstream Latency is %Ld usecs\n", l);
+		TRACE("AudioMixer: Reported downstream Latency is %lld usecs\n", l);
 	}
 #endif
 
@@ -873,12 +852,7 @@ AudioMixer::PrepareToConnect(const media_source &what,
 	strcpy(out_name, "Mixer Output");
 
 	/* remove wildcards */
-#if USE_MEDIA_FORMAT_WORKAROUND
-	multi_audio_format_specialize(&format->u.raw_audio,
-		&fDefaultFormat.u.raw_audio);
-#else
 	format->SpecializeTo(&fDefaultFormat);
-#endif
 
 	PRINT_FORMAT("AudioMixer::PrepareToConnect: final format", *format);
 
@@ -935,17 +909,17 @@ AudioMixer::Connect(status_t error, const media_source &source,
 	// Now that we're connected, we can determine our downstream latency.
 	media_node_id id;
 	FindLatencyFor(dest, &fDownstreamLatency, &id);
-	TRACE("AudioMixer: Downstream Latency is %Ld usecs\n", fDownstreamLatency);
+	TRACE("AudioMixer: Downstream Latency is %lld usecs\n", fDownstreamLatency);
 
 	// SetDuration of one buffer
 	SetBufferDuration(buffer_duration(format.u.raw_audio));
-	TRACE("AudioMixer: buffer duration is %Ld usecs\n", BufferDuration());
+	TRACE("AudioMixer: buffer duration is %lld usecs\n", BufferDuration());
 
 	// Our internal latency is at least the length of a full output buffer
 	// plus mixing time, plus jitter
 	fInternalLatency = BufferDuration()
 		+ max(kMinMixingTime, bigtime_t(0.5 * BufferDuration())) + kMaxJitter;
-	TRACE("AudioMixer: Internal latency is %Ld usecs\n", fInternalLatency);
+	TRACE("AudioMixer: Internal latency is %lld usecs\n", fInternalLatency);
 
 	SetEventLatency(fDownstreamLatency + fInternalLatency);
 
@@ -1009,9 +983,6 @@ AudioMixer::Disconnect(const media_source& what, const media_destination& where)
 	fDefaultFormat.u.raw_audio.frame_rate = 96000;
 	fDefaultFormat.u.raw_audio.channel_count = 2;
 
-	// force a stop
-	fCore->Stop();
-
 	fCore->RemoveOutput();
 
 	// destroy buffer group
@@ -1032,7 +1003,7 @@ AudioMixer::LateNoticeReceived(const media_source& what, bigtime_t howMuch,
 	// is the only runmode in which we can do anything about this
 	// TODO: quality could be decreased, too
 
-	ERROR("AudioMixer::LateNoticeReceived, %Ld too late at %Ld\n", howMuch,
+	ERROR("AudioMixer::LateNoticeReceived, %lld too late at %lld\n", howMuch,
 		performanceTime);
 
 	if (what == fCore->Output()->MediaOutput().source
@@ -1139,10 +1110,6 @@ AudioMixer::HandleEvent(const media_timed_event *event, bigtime_t lateness,
 			break;
 		}
 
-		case MIXER_PROCESS_EVENT:
-			fCore->Process();
-		break;
-
 		default:
 			break;
 	}
@@ -1165,7 +1132,7 @@ AudioMixer::PublishEventLatencyChange()
 	MixerInput *input;
 	for (int i = 0; (input = fCore->Input(i)) != 0; i++) {
 		TRACE("AudioMixer::PublishEventLatencyChange: SendLatencyChange, "
-			"connection %ld/%ld to %ld/%ld event latency is now %Ld\n",
+			"connection %ld/%ld to %ld/%ld event latency is now %lld\n",
 			input->MediaInput().source.port, input->MediaInput().source.id,
 			input->MediaInput().destination.port,
 			input->MediaInput().destination.id, EventLatency());
@@ -1184,8 +1151,8 @@ AudioMixer::CreateBufferGroup(BBufferGroup** buffer) const
 	// (plus one for rounding up), plus one extra
 	int32 count = int32(fDownstreamLatency / BufferDuration()) + 2;
 
-	TRACE("AudioMixer::CreateBufferGroup: fDownstreamLatency %Ld, "
-		"BufferDuration %Ld, buffer count = %ld\n", fDownstreamLatency,
+	TRACE("AudioMixer::CreateBufferGroup: fDownstreamLatency %lld, "
+		"BufferDuration %lld, buffer count = %ld\n", fDownstreamLatency,
 		BufferDuration(), count);
 
 	if (count < 3)
@@ -1224,18 +1191,16 @@ float
 AudioMixer::dB_to_Gain(float db)
 {
 	TRACE("dB_to_Gain: dB in: %01.2f ", db);
-	if (fCore->Settings()->NonLinearGainSlider()) {
-		if (db > 0) {
-			db = db * (pow(abs(DB_MAX), (1.0 / DB_EXPONENT_POSITIVE))
-				/ abs(DB_MAX));
-			db = pow(db, DB_EXPONENT_POSITIVE);
-		} else {
-			db = -db;
-			db = db * (pow(abs(DB_MIN), (1.0 / DB_EXPONENT_NEGATIVE))
-				/ abs(DB_MIN));
-			db = pow(db, DB_EXPONENT_NEGATIVE);
-			db = -db;
-		}
+	if (db > 0) {
+		db = db * (pow(abs(DB_MAX), (1.0 / DB_EXPONENT_POSITIVE))
+			/ abs(DB_MAX));
+		db = pow(db, DB_EXPONENT_POSITIVE);
+	} else {
+		db = -db;
+		db = db * (pow(abs(DB_MIN), (1.0 / DB_EXPONENT_NEGATIVE))
+			/ abs(DB_MIN));
+		db = pow(db, DB_EXPONENT_NEGATIVE);
+		db = -db;
 	}
 	TRACE("dB out: %01.2f\n", db);
 	return pow(10.0, db / 20.0);
@@ -1247,18 +1212,16 @@ AudioMixer::Gain_to_dB(float gain)
 {
 	float db;
 	db = 20.0 * log10(gain);
-	if (fCore->Settings()->NonLinearGainSlider()) {
-		if (db > 0) {
-			db = pow(db, (1.0 / DB_EXPONENT_POSITIVE));
-			db = db * (abs(DB_MAX) / pow(abs(DB_MAX),
-				(1.0 / DB_EXPONENT_POSITIVE)));
-		} else {
-			db = -db;
-			db = pow(db, (1.0 / DB_EXPONENT_NEGATIVE));
-			db = db * (abs(DB_MIN) / pow(abs(DB_MIN),
-				(1.0 / DB_EXPONENT_NEGATIVE)));
-			db = -db;
-		}
+	if (db > 0) {
+		db = pow(db, (1.0 / DB_EXPONENT_POSITIVE));
+		db = db * (abs(DB_MAX) / pow(abs(DB_MAX),
+			(1.0 / DB_EXPONENT_POSITIVE)));
+	} else {
+		db = -db;
+		db = pow(db, (1.0 / DB_EXPONENT_NEGATIVE));
+		db = db * (abs(DB_MIN) / pow(abs(DB_MIN),
+			(1.0 / DB_EXPONENT_NEGATIVE)));
+		db = -db;
 	}
 	return db;
 }
@@ -1279,10 +1242,6 @@ AudioMixer::GetParameterValue(int32 id, bigtime_t *last_change, void *value,
 			case 10:	// Attenuate mixer output by 3dB
 				*ioSize = sizeof(int32);
 				static_cast<int32 *>(value)[0] = fCore->Settings()->AttenuateOutput();
-				break;
-			case 20:	// Use non linear gain sliders
-				*ioSize = sizeof(int32);
-				static_cast<int32 *>(value)[0] = fCore->Settings()->NonLinearGainSlider();
 				break;
 			case 30:	// Display balance control for stereo connections
 				*ioSize = sizeof(int32);
@@ -1491,12 +1450,6 @@ AudioMixer::SetParameterValue(int32 id, bigtime_t when, const void *value,
 				fCore->Settings()->SetAttenuateOutput(static_cast<const int32 *>(value)[0]);
 				// this value is special (see MixerCore.h) and we need to notify the core
 				fCore->SetOutputAttenuation((static_cast<const int32 *>(value)[0]) ? 0.708 : 1.0);
-				break;
-			case 20:	// Use non linear gain sliders
-				if (size != sizeof(int32))
-					goto err;
-				fCore->Settings()->SetNonLinearGainSlider(static_cast<const int32 *>(value)[0]);
-				update = true; // XXX should use BroadcastChangedParameter()
 				break;
 			case 30:	// Display balance control for stereo connections
 				if (size != sizeof(int32))
@@ -1897,9 +1850,7 @@ AudioMixer::UpdateParameterWeb()
 	group = top->MakeGroup("");
 
 	group->MakeDiscreteParameter(PARAM_ETC(10), B_MEDIA_RAW_AUDIO,
-		B_TRANSLATE("Attenuate mixer output by 3dB (like BeOS R5)"), B_ENABLE);
-	group->MakeDiscreteParameter(PARAM_ETC(20), B_MEDIA_RAW_AUDIO,
-		B_TRANSLATE("Use non linear gain sliders (like BeOS R5)"), B_ENABLE);
+		B_TRANSLATE("Attenuate mixer output by 3 dB"), B_ENABLE);
 	group->MakeDiscreteParameter(PARAM_ETC(30), B_MEDIA_RAW_AUDIO,
 		B_TRANSLATE("Display balance control for stereo connections"),
 		B_ENABLE);
@@ -1910,14 +1861,14 @@ AudioMixer::UpdateParameterWeb()
 		B_TRANSLATE("Allow input channel remapping"), B_ENABLE);
 
 	dp = group->MakeDiscreteParameter(PARAM_ETC(60), B_MEDIA_RAW_AUDIO,
-		B_TRANSLATE("Input gain controls represent"), B_INPUT_MUX);
+		B_TRANSLATE("Input gain controls represent:"), B_INPUT_MUX);
 	dp->AddItem(0, B_TRANSLATE("Physical input channels"));
 	dp->AddItem(1, B_TRANSLATE("Virtual output channels"));
 
 	dp = group->MakeDiscreteParameter(PARAM_ETC(70), B_MEDIA_RAW_AUDIO,
-		B_TRANSLATE("Resampling algorithm"), B_INPUT_MUX);
-	dp->AddItem(0, B_TRANSLATE("Drop/repeat samples"));
-	dp->AddItem(2, B_TRANSLATE("Linear interpolation"));
+		B_TRANSLATE("Resampling algorithm:"), B_INPUT_MUX);
+	dp->AddItem(0, B_TRANSLATE("Low quality (drop/repeat samples)"));
+	dp->AddItem(2, B_TRANSLATE("High quality (linear interpolation)"));
 
 	// Note: The following code is outcommented on purpose
 	// and is about to be modified at a later point
@@ -1925,54 +1876,13 @@ AudioMixer::UpdateParameterWeb()
 	dp->AddItem(1, B_TRANSLATE("Drop/repeat samples (template based)"));
 	dp->AddItem(3, B_TRANSLATE("17th order filtering"));
 	*/
+
+	/* Remove those option from the GUI, but keep them in the settings
 	group->MakeDiscreteParameter(PARAM_ETC(80), B_MEDIA_RAW_AUDIO,
 		B_TRANSLATE("Refuse output format changes"), B_ENABLE);
 	group->MakeDiscreteParameter(PARAM_ETC(90), B_MEDIA_RAW_AUDIO,
 		B_TRANSLATE("Refuse input format changes"), B_ENABLE);
-
+	*/
 	fCore->Unlock();
 	SetParameterWeb(web);
 }
-
-
-#if USE_MEDIA_FORMAT_WORKAROUND
-static void
-raw_audio_format_specialize(media_raw_audio_format *format,
-	const media_raw_audio_format *other)
-{
-	if (format->frame_rate == 0)
-		format->frame_rate = other->frame_rate;
-	if (format->channel_count == 0)
-		format->channel_count = other->channel_count;
-	if (format->format == 0)
-		format->format = other->format;
-	if (format->byte_order == 0)
-		format->byte_order = other->byte_order;
-	if (format->buffer_size == 0)
-		format->buffer_size = other->buffer_size;
-	if (format->frame_rate == 0)
-		format->frame_rate = other->frame_rate;
-}
-
-
-static void
-multi_audio_info_specialize(media_multi_audio_info *format,
-	const media_multi_audio_info *other)
-{
-	if (format->channel_mask == 0)
-		format->channel_mask = other->channel_mask;
-	if (format->valid_bits == 0)
-		format->valid_bits = other->valid_bits;
-	if (format->matrix_mask == 0)
-		format->matrix_mask = other->matrix_mask;
-}
-
-
-static void
-multi_audio_format_specialize(media_multi_audio_format *format,
-	const media_multi_audio_format *other)
-{
-	raw_audio_format_specialize(format, other);
-	multi_audio_info_specialize(format, other);
-}
-#endif

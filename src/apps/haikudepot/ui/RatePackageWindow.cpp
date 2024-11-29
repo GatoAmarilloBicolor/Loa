@@ -1,6 +1,6 @@
 /*
  * Copyright 2014, Stephan Aßmus <superstippi@gmx.de>.
- * Copyright 2016-2018, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2016-2024, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
@@ -11,20 +11,25 @@
 
 #include <Alert.h>
 #include <Autolock.h>
+#include <AutoLocker.h>
 #include <Catalog.h>
 #include <Button.h>
 #include <CheckBox.h>
 #include <LayoutBuilder.h>
 #include <MenuField.h>
 #include <MenuItem.h>
-#include <PopUpMenu.h>
 #include <ScrollView.h>
 #include <StringView.h>
 
+#include "AppUtils.h"
 #include "HaikuDepotConstants.h"
+#include "LanguageMenuUtils.h"
+#include "Logger.h"
 #include "MarkupParser.h"
+#include "PackageUtils.h"
 #include "RatingView.h"
 #include "ServerHelper.h"
+#include "SharedIcons.h"
 #include "TextDocumentView.h"
 #include "WebAppInterface.h"
 
@@ -37,7 +42,6 @@ enum {
 	MSG_SEND						= 'send',
 	MSG_PACKAGE_RATED				= 'rpkg',
 	MSG_STABILITY_SELECTED			= 'stbl',
-	MSG_LANGUAGE_SELECTED			= 'lngs',
 	MSG_RATING_ACTIVE_CHANGED		= 'rtac',
 	MSG_RATING_DETERMINATE_CHANGED	= 'rdch'
 };
@@ -152,8 +156,8 @@ protected:
 	virtual const BBitmap* StarBitmap()
 	{
 		if (fRatingDeterminate)
-			return fStarBlueBitmap.Bitmap(SharedBitmap::SIZE_16);
-		return fStarGrayBitmap.Bitmap(SharedBitmap::SIZE_16);
+			return SharedIcons::IconStarBlue16Scaled()->Bitmap();
+		return SharedIcons::IconStarGrey16Scaled()->Bitmap();
 	}
 
 private:
@@ -167,43 +171,17 @@ private:
 };
 
 
-static void
-add_stabilities_to_menu(const StabilityRatingList& stabilities, BMenu* menu)
-{
-	for (int i = 0; i < stabilities.CountItems(); i++) {
-		const StabilityRating& stability = stabilities.ItemAtFast(i);
-		BMessage* message = new BMessage(MSG_STABILITY_SELECTED);
-		message->AddString("name", stability.Name());
-		BMenuItem* item = new BMenuItem(stability.Label(), message);
-		menu->AddItem(item);
-	}
-}
-
-
-static void
-add_languages_to_menu(const StringList& languages, BMenu* menu)
-{
-	for (int i = 0; i < languages.CountItems(); i++) {
-		const BString& language = languages.ItemAtFast(i);
-		BMessage* message = new BMessage(MSG_LANGUAGE_SELECTED);
-		message->AddString("code", language);
-		BMenuItem* item = new BMenuItem(language, message);
-		menu->AddItem(item);
-	}
-}
-
-
-RatePackageWindow::RatePackageWindow(BWindow* parent, BRect frame,
-	Model& model)
+RatePackageWindow::RatePackageWindow(BWindow* parent, BRect frame, Model& model)
 	:
-	BWindow(frame, B_TRANSLATE("Rate package"),
-		B_FLOATING_WINDOW_LOOK, B_FLOATING_SUBSET_WINDOW_FEEL,
-		B_ASYNCHRONOUS_CONTROLS | B_AUTO_UPDATE_SIZE_LIMITS),
+	BWindow(frame, B_TRANSLATE("Rate package"), B_FLOATING_WINDOW_LOOK,
+		B_FLOATING_SUBSET_WINDOW_FEEL,
+		B_ASYNCHRONOUS_CONTROLS | B_AUTO_UPDATE_SIZE_LIMITS | B_CLOSE_ON_ESCAPE),
 	fModel(model),
 	fRatingText(),
 	fTextEditor(new TextEditor(), true),
-	fRating(-1.0f),
-	fCommentLanguage(fModel.PreferredLanguage()),
+	fRating(RATING_NONE),
+	fRatingDeterminate(false),
+	fCommentLanguageId(LANGUAGE_DEFAULT_ID),
 	fWorkerThread(-1)
 {
 	AddToSubset(parent);
@@ -234,41 +212,16 @@ RatePackageWindow::RatePackageWindow(BWindow* parent, BRect frame,
 	BPopUpMenu* stabilityMenu = new BPopUpMenu(B_TRANSLATE("Stability"));
 	fStabilityField = new BMenuField("stability",
 		B_TRANSLATE("Stability:"), stabilityMenu);
-
-	fStabilityCodes.Add(StabilityRating(
-		B_TRANSLATE("Not specified"), "unspecified"));
-	fStabilityCodes.Add(StabilityRating(
-		B_TRANSLATE("Stable"), "stable"));
-	fStabilityCodes.Add(StabilityRating(
-		B_TRANSLATE("Mostly stable"), "mostlystable"));
-	fStabilityCodes.Add(StabilityRating(
-		B_TRANSLATE("Unstable but usable"), "unstablebutusable"));
-	fStabilityCodes.Add(StabilityRating(
-		B_TRANSLATE("Very unstable"), "veryunstable"));
-	fStabilityCodes.Add(StabilityRating(
-		B_TRANSLATE("Does not start"), "nostart"));
-
-	add_stabilities_to_menu(fStabilityCodes, stabilityMenu);
-	stabilityMenu->SetTargetForItems(this);
-
-	fStability = fStabilityCodes.ItemAt(0).Name();
-	stabilityMenu->ItemAt(0)->SetMarked(true);
+	_InitStabilitiesMenu(stabilityMenu);
 
 	// Construct languages popup
 	BPopUpMenu* languagesMenu = new BPopUpMenu(B_TRANSLATE("Language"));
 	fCommentLanguageField = new BMenuField("language",
 		B_TRANSLATE("Comment language:"), languagesMenu);
-
-	add_languages_to_menu(fModel.SupportedLanguages(), languagesMenu);
-	languagesMenu->SetTargetForItems(this);
-
-	BMenuItem* defaultItem = languagesMenu->ItemAt(
-		fModel.SupportedLanguages().IndexOf(fCommentLanguage));
-	if (defaultItem != NULL)
-		defaultItem->SetMarked(true);
+	_InitLanguagesMenu(languagesMenu);
 
 	fRatingActiveCheckBox = new BCheckBox("rating active",
-		B_TRANSLATE("Other users can see this rating"),
+		B_TRANSLATE("This rating is visible to other users"),
 		new BMessage(MSG_RATING_ACTIVE_CHANGED));
 	// Hide the check mark by default, it will be made visible when
 	// the user already made a rating and it is loaded
@@ -315,19 +268,42 @@ RatePackageWindow::~RatePackageWindow()
 
 
 void
-RatePackageWindow::DispatchMessage(BMessage* message, BHandler *handler)
+RatePackageWindow::_InitLanguagesMenu(BPopUpMenu* menu)
 {
-	if (message->what == B_KEY_DOWN) {
-		int8 key;
-			// if the user presses escape, close the window.
-		if ((message->FindInt8("byte", &key) == B_OK)
-			&& key == B_ESCAPE) {
-			Quit();
-			return;
-		}
+	AutoLocker<BLocker> locker(fModel.Lock());
+	fCommentLanguageId = fModel.PreferredLanguage()->ID();
+
+	LanguageMenuUtils::AddLanguagesToMenu(fModel.Languages(), menu);
+	menu->SetTargetForItems(this);
+	LanguageMenuUtils::MarkLanguageInMenu(fCommentLanguageId, menu);
+}
+
+
+void
+RatePackageWindow::_InitStabilitiesMenu(BPopUpMenu* menu)
+{
+	AutoLocker<BLocker> locker(fModel.Lock());
+	int32 countStabilities = fModel.CountRatingStabilities();
+
+	menu->SetTargetForItems(this);
+
+	if (0 == countStabilities) {
+		menu->SetEnabled(false);
+		return;
 	}
 
-	BWindow::DispatchMessage(message, handler);
+	for (int32 i = 0; i < countStabilities; i++) {
+		const RatingStabilityRef stability = fModel.RatingStabilityAtIndex(i);
+		BMessage* message = new BMessage(MSG_STABILITY_SELECTED);
+		message->AddString("code", stability->Code());
+		BMenuItem* item = new BMenuItem(stability->Name(), message);
+		menu->AddItem(item);
+
+		if (i == 0) {
+			fStabilityCode = stability->Code();
+			item->SetMarked(true);
+		}
+	}
 }
 
 
@@ -337,21 +313,23 @@ RatePackageWindow::MessageReceived(BMessage* message)
 	switch (message->what) {
 		case MSG_PACKAGE_RATED:
 			message->FindFloat("rating", &fRating);
+			fRatingDeterminate = true;
 			fSetRatingView->SetRatingDeterminate(true);
 			fRatingDeterminateCheckBox->SetValue(B_CONTROL_ON);
 			break;
 
 		case MSG_STABILITY_SELECTED:
-			message->FindString("name", &fStability);
+			message->FindString("code", &fStabilityCode);
 			break;
 
 		case MSG_LANGUAGE_SELECTED:
-			message->FindString("code", &fCommentLanguage);
+			message->FindString("id", &fCommentLanguageId);
 			break;
 
 		case MSG_RATING_DETERMINATE_CHANGED:
-			fSetRatingView->SetRatingDeterminate(
-				fRatingDeterminateCheckBox->Value() == B_CONTROL_ON);
+			fRatingDeterminate = fRatingDeterminateCheckBox->Value()
+				== B_CONTROL_ON;
+			fSetRatingView->SetRatingDeterminate(fRatingDeterminate);
 			break;
 
 		case MSG_RATING_ACTIVE_CHANGED:
@@ -416,21 +394,26 @@ RatePackageWindow::_RefreshPackageData()
 void
 RatePackageWindow::SetPackage(const PackageInfoRef& package)
 {
+	if (!package.IsSet())
+		HDFATAL("attempt to provide an unset package");
+
 	BAutolock locker(this);
 	if (!locker.IsLocked() || fWorkerThread >= 0)
 		return;
 
 	fPackage = package;
+	BString packageTitle;
+	PackageUtils::TitleOrName(fPackage, packageTitle);
 
 	BString windowTitle(B_TRANSLATE("Rate %Package%"));
-	windowTitle.ReplaceAll("%Package%", package->Title());
+	windowTitle.ReplaceAll("%Package%", packageTitle);
 	SetTitle(windowTitle);
 
 	// See if the user already made a rating for this package,
 	// pre-fill the UI with that rating. (When sending the rating, the
 	// old one will be replaced.)
-	thread_id thread = spawn_thread(&_QueryRatingThreadEntry,
-		"Query rating", B_NORMAL_PRIORITY, this);
+	thread_id thread
+		= spawn_thread(&_QueryRatingThreadEntry, "Query rating", B_NORMAL_PRIORITY, this);
 	if (thread >= 0)
 		_SetWorkerThread(thread);
 }
@@ -469,7 +452,7 @@ RatePackageWindow::_SetWorkerThread(thread_id thread)
 }
 
 
-int32
+/*static*/ int32
 RatePackageWindow::_QueryRatingThreadEntry(void* data)
 {
 	RatePackageWindow* window = reinterpret_cast<RatePackageWindow*>(data);
@@ -496,47 +479,35 @@ RatePackageWindow::_RelayServerDataToUI(BMessage& response)
 			fTextView->SetTextDocument(fRatingText);
 		}
 		if (response.FindString("userRatingStabilityCode",
-			&fStability) == B_OK) {
-			int32 index = 0;
-			for (int32 i = fStabilityCodes.CountItems() - 1; i >= 0; i--) {
-				const StabilityRating& stability
-					= fStabilityCodes.ItemAtFast(i);
-				if (stability.Name() == fStability) {
-					index = i;
-					break;
-				}
-			}
-			BMenuItem* item = fStabilityField->Menu()->ItemAt(index);
-			if (item != NULL)
-				item->SetMarked(true);
+				&fStabilityCode) == B_OK) {
+			BMenu* menu = fStabilityField->Menu();
+			AppUtils::MarkItemWithKeyValueInMenu(menu, "code", fStabilityCode);
 		}
 		if (response.FindString("naturalLanguageCode",
-			&fCommentLanguage) == B_OK) {
-			BMenuItem* item = fCommentLanguageField->Menu()->ItemAt(
-				fModel.SupportedLanguages().IndexOf(fCommentLanguage));
-			if (item != NULL)
-				item->SetMarked(true);
+			&fCommentLanguageId) == B_OK && !comment.IsEmpty()) {
+			LanguageMenuUtils::MarkLanguageInMenu(
+				fCommentLanguageId, fCommentLanguageField->Menu());
 		}
 		double rating;
 		if (response.FindDouble("rating", &rating) == B_OK) {
 			fRating = (float)rating;
+			fRatingDeterminate = fRating >= 0.0f;
 			fSetRatingView->SetPermanentRating(fRating);
-			fSetRatingView->SetRatingDeterminate(true);
-			fRatingDeterminateCheckBox->SetValue(B_CONTROL_ON);
 		} else {
-			fSetRatingView->SetRatingDeterminate(false);
-			fRatingDeterminateCheckBox->SetValue(B_CONTROL_OFF);
+			fRatingDeterminate = false;
 		}
 
+		fSetRatingView->SetRatingDeterminate(fRatingDeterminate);
+		fRatingDeterminateCheckBox->SetValue(
+			fRatingDeterminate ? B_CONTROL_ON : B_CONTROL_OFF);
 		fRatingActiveCheckBox->SetValue(fRatingActive);
 		fRatingActiveCheckBox->Show();
 
 		fSendButton->SetLabel(B_TRANSLATE("Update"));
 
 		Unlock();
-	} else {
-		fprintf(stderr, "unable to acquire lock to update the ui\n");
-	}
+	} else
+		HDERROR("unable to acquire lock to update the ui");
 }
 
 
@@ -544,7 +515,7 @@ void
 RatePackageWindow::_QueryRatingThread()
 {
 	if (!Lock()) {
-		fprintf(stderr, "rating query: Failed to lock window\n");
+		HDERROR("rating query: Failed to lock window");
 		return;
 	}
 
@@ -553,36 +524,42 @@ RatePackageWindow::_QueryRatingThread()
 	Unlock();
 
 	BAutolock locker(fModel.Lock());
-	BString username = fModel.Username();
+	BString nickname = fModel.Nickname();
 	locker.Unlock();
 
-	if (package.Get() == NULL) {
-		fprintf(stderr, "rating query: No package\n");
+	if (!package.IsSet()) {
+		HDERROR("rating query: No package");
 		_SetWorkerThread(-1);
 		return;
 	}
 
-	WebAppInterface interface;
+	WebAppInterface* interface = fModel.GetWebAppInterface();
+
 	BMessage info;
 	const DepotInfo* depot = fModel.DepotForName(package->DepotName());
-	BString repositoryCode;
+	BString webAppRepositoryCode;
+	BString webAppRepositorySourceCode;
 
-	if (depot != NULL)
-		repositoryCode = depot->WebAppRepositoryCode();
+	if (depot != NULL) {
+		webAppRepositoryCode = depot->WebAppRepositoryCode();
+		webAppRepositorySourceCode = depot->WebAppRepositorySourceCode();
+	}
 
-	if (repositoryCode.IsEmpty()) {
-		printf("unable to obtain the repository code for depot; %s\n",
-			package->DepotName().String());
+	if (webAppRepositoryCode.IsEmpty()
+			|| webAppRepositorySourceCode.IsEmpty()) {
+		HDERROR("unable to obtain the repository code or repository source "
+			"code for depot; %s", package->DepotName().String());
 		BMessenger(this).SendMessage(B_QUIT_REQUESTED);
 	} else {
-		status_t status = interface.RetrieveUserRating(
-			package->Name(), package->Version(), package->Architecture(),
-			repositoryCode, username, info);
+		status_t status = interface->RetrieveUserRatingForPackageAndVersionByUser(
+				package->Name(), package->Version(), package->Architecture(),
+				webAppRepositoryCode, webAppRepositorySourceCode,
+				nickname, info);
 
 		if (status == B_OK) {
 				// could be an error or could be a valid response envelope
 				// containing data.
-			switch (interface.ErrorCodeFromResponse(info)) {
+			switch (WebAppInterface::ErrorCodeFromResponse(info)) {
 				case ERROR_CODE_NONE:
 				{
 					//info.PrintToStream();
@@ -590,8 +567,7 @@ RatePackageWindow::_QueryRatingThread()
 					if (info.FindMessage("result", &result) == B_OK) {
 						_RelayServerDataToUI(result);
 					} else {
-						fprintf(stderr, "bad response envelope missing 'result'"
-							"entry\n");
+						HDERROR("bad response envelope missing 'result' entry");
 						ServerHelper::NotifyTransportError(B_BAD_VALUE);
 						BMessenger(this).SendMessage(B_QUIT_REQUESTED);
 					}
@@ -599,9 +575,9 @@ RatePackageWindow::_QueryRatingThread()
 				}
 				case ERROR_CODE_OBJECTNOTFOUND:
 						// an expected response
-					fprintf(stderr, "there was no previous rating for this"
+					HDINFO("there was no previous rating for this"
 						" user on this version of this package so a new rating"
-						" will be added.\n");
+						" will be added.");
 					break;
 				default:
 					ServerHelper::NotifyServerJsonRpcError(info);
@@ -609,8 +585,8 @@ RatePackageWindow::_QueryRatingThread()
 					break;
 			}
 		} else {
-			fprintf(stderr, "an error has arisen communicating with the"
-				" server to obtain data for an existing rating [%s]\n",
+			HDERROR("an error has arisen communicating with the"
+				" server to obtain data for an existing rating [%s]",
 				strerror(status));
 			ServerHelper::NotifyTransportError(status);
 			BMessenger(this).SendMessage(B_QUIT_REQUESTED);
@@ -634,33 +610,47 @@ void
 RatePackageWindow::_SendRatingThread()
 {
 	if (!Lock()) {
-		fprintf(stderr, "upload rating: Failed to lock window\n");
+		HDERROR("upload rating: Failed to lock window");
 		return;
 	}
 
 	BMessenger messenger = BMessenger(this);
 	BString package = fPackage->Name();
 	BString architecture = fPackage->Architecture();
-	BString repositoryCode;
+	BString webAppRepositoryCode;
+	BString webAppRepositorySourceCode;
 	int rating = (int)fRating;
-	BString stability = fStability;
+	BString stability = fStabilityCode;
 	BString comment = fRatingText->Text();
-	BString languageCode = fCommentLanguage;
+	BString languageId = fCommentLanguageId;
+		// note that the language is a "code" in the server and "id" in ICU
 	BString ratingID = fRatingID;
 	bool active = fRatingActive;
 
+	if (!fRatingDeterminate)
+		rating = RATING_NONE;
+
 	const DepotInfo* depot = fModel.DepotForName(fPackage->DepotName());
 
-	if (depot != NULL)
-		repositoryCode = depot->WebAppRepositoryCode();
+	if (depot != NULL) {
+		webAppRepositoryCode = depot->WebAppRepositoryCode();
+		webAppRepositorySourceCode = depot->WebAppRepositorySourceCode();
+	}
 
-	WebAppInterface interface = fModel.GetWebAppInterface();
+	WebAppInterface* interface = fModel.GetWebAppInterface();
 
 	Unlock();
 
-	if (repositoryCode.Length() == 0) {
-		printf("unable to find the web app repository code for the local "
-			"depot %s\n",
+	if (webAppRepositoryCode.IsEmpty()) {
+		HDERROR("unable to find the web app repository code for the "
+			"local depot %s",
+			fPackage->DepotName().String());
+		return;
+	}
+
+	if (webAppRepositorySourceCode.IsEmpty()) {
+		HDERROR("unable to find the web app repository source code for the "
+			"local depot %s",
 			fPackage->DepotName().String());
 		return;
 	}
@@ -671,22 +661,20 @@ RatePackageWindow::_SendRatingThread()
 	status_t status;
 	BMessage info;
 	if (ratingID.Length() > 0) {
-		printf("will update the existing user rating [%s]\n",
-			ratingID.String());
-		status = interface.UpdateUserRating(ratingID,
-			languageCode, comment, stability, rating, active, info);
+		HDINFO("will update the existing user rating [%s]", ratingID.String());
+		status = interface->UpdateUserRating(ratingID,
+			languageId, comment, stability, rating, active, info);
 	} else {
-		printf("will create a new user rating for pkg [%s]\n",
-			package.String());
-		status = interface.CreateUserRating(package, fPackage->Version(),
-			architecture, repositoryCode, languageCode, comment, stability,
-			rating, info);
+		HDINFO("will create a new user rating for pkg [%s]", package.String());
+		status = interface->CreateUserRating(package, fPackage->Version(),
+			architecture, webAppRepositoryCode, webAppRepositorySourceCode,
+			languageId, comment, stability, rating, info);
 	}
 
 	if (status == B_OK) {
 			// could be an error or could be a valid response envelope
 			// containing data.
-		switch (interface.ErrorCodeFromResponse(info)) {
+		switch (WebAppInterface::ErrorCodeFromResponse(info)) {
 			case ERROR_CODE_NONE:
 			{
 				if (ratingID.Length() > 0)
@@ -700,8 +688,8 @@ RatePackageWindow::_SendRatingThread()
 				break;
 		}
 	} else {
-		fprintf(stderr, "an error has arisen communicating with the"
-			" server to obtain data for an existing rating [%s]\n",
+		HDERROR("an error has arisen communicating with the"
+			" server to obtain data for an existing rating [%s]",
 			strerror(status));
 		ServerHelper::NotifyTransportError(status);
 	}

@@ -24,9 +24,6 @@
 #include <String.h>
 
 
-#define ICON_SIZE 32
-
-
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "InterfaceListItem"
 
@@ -37,6 +34,9 @@ InterfaceListItem::InterfaceListItem(const char* name,
 	BListItem(0, false),
 	fType(type),
 	fIcon(NULL),
+	fIconOffline(NULL),
+	fIconPending(NULL),
+	fIconOnline(NULL),
 	fFirstLineOffset(0),
 	fLineOffset(0),
 	fDisabled(false),
@@ -51,6 +51,9 @@ InterfaceListItem::InterfaceListItem(const char* name,
 InterfaceListItem::~InterfaceListItem()
 {
 	delete fIcon;
+	delete fIconOffline;
+	delete fIconPending;
+	delete fIconOnline;
 }
 
 
@@ -75,6 +78,7 @@ InterfaceListItem::DrawItem(BView* owner, BRect bounds, bool complete)
 	}
 
 	BBitmap* stateIcon = _StateIcon();
+	const int32 stateIconWidth = stateIcon->Bounds().IntegerWidth() + 1;
 	const char* stateText = _StateText();
 
 	// Set the initial bounds of item contents
@@ -84,8 +88,8 @@ InterfaceListItem::DrawItem(BView* owner, BRect bounds, bool complete)
 		- BPoint(be_plain_font->StringWidth(stateText)
 			+ be_control_look->DefaultLabelSpacing(), 0);
 	BPoint namePoint = bounds.LeftTop()
-		+ BPoint(ICON_SIZE + (be_control_look->DefaultLabelSpacing() * 2),
-		fFirstLineOffset);
+		+ BPoint(stateIconWidth	+ (be_control_look->DefaultLabelSpacing() * 2),
+			fFirstLineOffset);
 
 	if (fDisabled) {
 		owner->SetDrawingMode(B_OP_ALPHA);
@@ -122,7 +126,7 @@ InterfaceListItem::DrawItem(BView* owner, BRect bounds, bool complete)
 	owner->DrawString(stateText, statePoint);
 
 	BPoint linePoint = bounds.LeftTop()
-		+ BPoint(ICON_SIZE + (be_control_look->DefaultLabelSpacing() * 2),
+		+ BPoint(stateIconWidth + (be_control_look->DefaultLabelSpacing() * 2),
 		fFirstLineOffset + fLineOffset);
 	owner->DrawString(fSubtitle, linePoint);
 
@@ -167,13 +171,21 @@ InterfaceListItem::ConfigurationUpdated(const BMessage& message)
 void
 InterfaceListItem::_Init()
 {
-	switch(fType) {
-		default:
+	switch (fType) {
 		case B_NETWORK_INTERFACE_TYPE_WIFI:
 			_PopulateBitmaps("wifi");
 			break;
 		case B_NETWORK_INTERFACE_TYPE_ETHERNET:
 			_PopulateBitmaps("ether");
+			break;
+		case B_NETWORK_INTERFACE_TYPE_VPN:
+			_PopulateBitmaps("vpn");
+			break;
+		case B_NETWORK_INTERFACE_TYPE_DIAL_UP:
+			_PopulateBitmaps("dialup");
+			break;
+		default:
+			_PopulateBitmaps(NULL);
 			break;
 	}
 }
@@ -188,30 +200,34 @@ InterfaceListItem::_PopulateBitmaps(const char* mediaType)
 	const uint8* onlineHVIF;
 
 	BBitmap* interfaceBitmap = NULL;
+	BBitmap* offlineBitmap = NULL;
+	BBitmap* pendingBitmap = NULL;
+	BBitmap* onlineBitmap = NULL;
 
 	BResources* resources = BApplication::AppResources();
 
-	size_t iconSize;
+	size_t iconDataSize;
 
 	// Try specific interface icon?
 	interfaceHVIF = (const uint8*)resources->LoadResource(
-		B_VECTOR_ICON_TYPE, Name(), &iconSize);
+		B_VECTOR_ICON_TYPE, Name(), &iconDataSize);
 
 	if (interfaceHVIF == NULL && mediaType != NULL)
 		// Not found, try interface media type?
 		interfaceHVIF = (const uint8*)resources->LoadResource(
-			B_VECTOR_ICON_TYPE, mediaType, &iconSize);
+			B_VECTOR_ICON_TYPE, mediaType, &iconDataSize);
 	if (interfaceHVIF == NULL)
 		// Not found, try default interface icon?
 		interfaceHVIF = (const uint8*)resources->LoadResource(
-			B_VECTOR_ICON_TYPE, "ether", &iconSize);
+			B_VECTOR_ICON_TYPE, "ether", &iconDataSize);
 
-	if (interfaceHVIF) {
+	const BSize iconSize = be_control_look->ComposeIconSize(B_LARGE_ICON);
+	if (interfaceHVIF != NULL) {
 		// Now build the bitmap
-		interfaceBitmap = new BBitmap(BRect(0, 0, ICON_SIZE, ICON_SIZE),
-			0, B_RGBA32);
+		interfaceBitmap = new(std::nothrow) BBitmap(
+			BRect(BPoint(0, 0), iconSize), 0, B_RGBA32);
 		if (BIconUtils::GetVectorIcon(interfaceHVIF,
-			iconSize, interfaceBitmap) == B_OK)
+				iconDataSize, interfaceBitmap) == B_OK)
 			fIcon = interfaceBitmap;
 		else
 			delete interfaceBitmap;
@@ -219,30 +235,42 @@ InterfaceListItem::_PopulateBitmaps(const char* mediaType)
 
 	// Load possible state icons
 	offlineHVIF = (const uint8*)resources->LoadResource(
-		B_VECTOR_ICON_TYPE, "offline", &iconSize);
+		B_VECTOR_ICON_TYPE, "offline", &iconDataSize);
 
-	if (offlineHVIF) {
-		fIconOffline = new BBitmap(BRect(0, 0, ICON_SIZE, ICON_SIZE),
-			0, B_RGBA32);
-		BIconUtils::GetVectorIcon(offlineHVIF, iconSize, fIconOffline);
+	if (offlineHVIF != NULL) {
+		offlineBitmap = new(std::nothrow) BBitmap(
+			BRect(BPoint(0, 0), iconSize), 0, B_RGBA32);
+		if (BIconUtils::GetVectorIcon(offlineHVIF,
+				iconDataSize, offlineBitmap) == B_OK)
+			fIconOffline = offlineBitmap;
+		else
+			delete offlineBitmap;
 	}
 
 	pendingHVIF = (const uint8*)resources->LoadResource(
-		B_VECTOR_ICON_TYPE, "pending", &iconSize);
+		B_VECTOR_ICON_TYPE, "pending", &iconDataSize);
 
-	if (pendingHVIF) {
-		fIconPending = new BBitmap(BRect(0, 0, ICON_SIZE, ICON_SIZE),
-			0, B_RGBA32);
-		BIconUtils::GetVectorIcon(pendingHVIF, iconSize, fIconPending);
+	if (pendingHVIF != NULL) {
+		pendingBitmap = new(std::nothrow) BBitmap(
+			BRect(BPoint(0, 0), iconSize), 0, B_RGBA32);
+		if (BIconUtils::GetVectorIcon(pendingHVIF,
+				iconDataSize, pendingBitmap) == B_OK)
+			fIconPending = pendingBitmap;
+		else
+			delete pendingBitmap;
 	}
 
 	onlineHVIF = (const uint8*)resources->LoadResource(
-		B_VECTOR_ICON_TYPE, "online", &iconSize);
+		B_VECTOR_ICON_TYPE, "online", &iconDataSize);
 
-	if (onlineHVIF) {
-		fIconOnline = new BBitmap(BRect(0, 0, ICON_SIZE, ICON_SIZE),
-			0, B_RGBA32);
-		BIconUtils::GetVectorIcon(onlineHVIF, iconSize, fIconOnline);
+	if (onlineHVIF != NULL) {
+		onlineBitmap = new(std::nothrow) BBitmap(
+			BRect(BPoint(0, 0), iconSize), 0, B_RGBA32);
+		if (BIconUtils::GetVectorIcon(onlineHVIF,
+				iconDataSize, onlineBitmap) == B_OK)
+			fIconOnline = onlineBitmap;
+		else
+			delete onlineBitmap;
 	}
 }
 
@@ -266,9 +294,11 @@ InterfaceListItem::_UpdateState()
 			break;
 		case B_NETWORK_INTERFACE_TYPE_DIAL_UP:
 			fSubtitle = B_TRANSLATE("Dial-up connection");
+			fDisabled = false;
 			break;
 		case B_NETWORK_INTERFACE_TYPE_VPN:
 			fSubtitle = B_TRANSLATE("VPN connection");
+			fDisabled = false;
 			break;
 		default:
 			fSubtitle = "";
@@ -300,8 +330,16 @@ InterfaceListItem::_StateText() const
 {
 	if (fDisabled)
 		return B_TRANSLATE("disabled");
-	if (!fInterface.HasLink())
-		return B_TRANSLATE("no link");
+
+	if (!fInterface.HasLink()) {
+		switch (fType) {
+			case B_NETWORK_INTERFACE_TYPE_VPN:
+			case B_NETWORK_INTERFACE_TYPE_DIAL_UP:
+				return B_TRANSLATE("disconnected");
+			default:
+				return B_TRANSLATE("no link");
+		}
+	}
 
 	// TODO!
 //	} else if ((fSettings->IPAddr(AF_INET).IsEmpty()

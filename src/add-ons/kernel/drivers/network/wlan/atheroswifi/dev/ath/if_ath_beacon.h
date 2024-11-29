@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * All rights reserved.
  *
@@ -25,8 +27,6 @@
  * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/if_ath_beacon.h 265115 2014-04-30 02:19:41Z adrian $
  */
 #ifndef	__IF_ATH_BEACON_H__
 #define	__IF_ATH_BEACON_H__
@@ -51,4 +51,3 @@ extern	void ath_beacon_proc(void *arg, int pending);
 extern	void ath_beacon_miss(struct ath_softc *sc);
 
 #endif
-

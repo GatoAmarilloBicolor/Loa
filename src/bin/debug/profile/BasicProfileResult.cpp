@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <new>
+#include <StackOrHeapArray.h>
 
 #include "Options.h"
 #include "ProfiledEntity.h"
@@ -119,9 +120,17 @@ BasicProfileResult::BasicProfileResult()
 	:
 	fTotalTicks(0),
 	fUnkownTicks(0),
+	fExpectedTicks(0),
 	fDroppedTicks(0),
 	fTotalSampleCount(0)
 {
+}
+
+
+void
+BasicProfileResult::AddExpectedTicks(int32 expected)
+{
+	fExpectedTicks += expected;
 }
 
 
@@ -136,8 +145,8 @@ void
 BasicProfileResult::PrintResults(ImageProfileResultContainer* container)
 {
 	// get hit images
-	BasicImageProfileResult* images[container->CountImages()];
-	int32 imageCount = GetHitImages(container, images);
+	BStackOrHeapArray<BasicImageProfileResult*, 128> images(container->CountImages());
+	int32 imageCount = GetHitImages(container, &*images);
 
 	// count symbols
 	int32 symbolCount = 0;
@@ -148,7 +157,7 @@ BasicProfileResult::PrintResults(ImageProfileResultContainer* container)
 	}
 
 	// find and sort the hit symbols
-	HitSymbol hitSymbols[symbolCount];
+	BStackOrHeapArray<HitSymbol, 128> hitSymbols(symbolCount);
 	int32 hitSymbolCount = 0;
 
 	for (int32 k = 0; k < imageCount; k++) {
@@ -169,21 +178,33 @@ BasicProfileResult::PrintResults(ImageProfileResultContainer* container)
 	}
 
 	if (hitSymbolCount > 1)
-		std::sort(hitSymbols, hitSymbols + hitSymbolCount);
+		std::sort(&*hitSymbols, hitSymbols + hitSymbolCount);
 
 	int64 totalTicks = fTotalTicks;
+	const int64 missedTicks = fExpectedTicks - fTotalTicks;
+
 	fprintf(gOptions.output, "\nprofiling results for %s \"%s\" "
 		"(%" B_PRId32 "):\n", fEntity->EntityType(), fEntity->EntityName(),
 		fEntity->EntityID());
-	fprintf(gOptions.output, "  tick interval:  %lld us\n", fInterval);
-	fprintf(gOptions.output, "  total ticks:    %lld (%lld us)\n",
+	fprintf(gOptions.output, "  tick interval:  %" B_PRIdBIGTIME " us\n",
+		fInterval);
+	fprintf(gOptions.output,
+		"  total ticks:    %" B_PRId64 " (%" B_PRId64 " us)\n",
 		totalTicks, totalTicks * fInterval);
+	if (fExpectedTicks != 0) {
+		fprintf(gOptions.output,
+			"  expected ticks: %" B_PRId64 " (missed %" B_PRId64 ")\n",
+			fExpectedTicks, missedTicks);
+	}
 	if (totalTicks == 0)
 		totalTicks = 1;
-	fprintf(gOptions.output, "  unknown ticks:  %lld (%lld us, %6.2f%%)\n",
+
+	fprintf(gOptions.output,
+		"  unknown ticks:  %" B_PRId64 " (%" B_PRId64 " us, %6.2f%%)\n",
 		fUnkownTicks, fUnkownTicks * fInterval,
 		100.0 * fUnkownTicks / totalTicks);
-	fprintf(gOptions.output, "  dropped ticks:  %lld (%lld us, %6.2f%%)\n",
+	fprintf(gOptions.output,
+		"  dropped ticks:  %" B_PRId64 " (%" B_PRId64 " us, %6.2f%%)\n",
 		fDroppedTicks, fDroppedTicks * fInterval,
 		100.0 * fDroppedTicks / totalTicks);
 	if (gOptions.analyze_full_stack) {
@@ -198,7 +219,8 @@ BasicProfileResult::PrintResults(ImageProfileResultContainer* container)
 			"---------------------------------------\n");
 		for (int32 k = 0; k < imageCount; k++) {
 			BasicImageProfileResult* image = images[k];
-			fprintf(gOptions.output, "  %10lld  %10lld  %7ld %s\n",
+			fprintf(gOptions.output,
+				"  %10" B_PRId64 "  %10" B_PRId64 "  %7" B_PRId32 " %s\n",
 				image->TotalHits(), image->UnknownHits(),
 				image->ID(), image->GetImage()->Name());
 		}
@@ -222,8 +244,9 @@ BasicProfileResult::PrintResults(ImageProfileResultContainer* container)
 #else
 			const char* symbolName = symbol->Name();
 #endif
-			fprintf(gOptions.output, "  %10lld  %10lld  %6.2f  %6ld  %s\n",
-				hitSymbol.hits, hitSymbol.hits * fInterval,
+			fprintf(gOptions.output,
+				"  %10" B_PRId64 "  %10" B_PRId64 "  %6.2f  %6" B_PRId32
+				"  %s\n", hitSymbol.hits, hitSymbol.hits * fInterval,
 				100.0 * hitSymbol.hits / totalTicks, hitSymbol.imageID,
 				symbolName);
 #if __GNUC__ > 2
@@ -280,10 +303,12 @@ InclusiveProfileResult::AddSamples(ImageProfileResultContainer* container,
 		int32 symbol = -1;
 		if (image != NULL) {
 			symbol = image->GetImage()->FindSymbol(address - loadDelta);
-			if (symbol < 0) {
-				// TODO: Count unknown image hits?
-			} else if (image != previousImage || symbol != previousSymbol)
-				image->AddSymbolHit(symbol);
+			if (image != previousImage || symbol != previousSymbol) {
+				if (symbol < 0)
+					image->AddUnknownHit();
+				else
+					image->AddSymbolHit(symbol);
+			}
 
 			if (image != previousImage)
 				image->AddImageHit();
@@ -324,6 +349,7 @@ ExclusiveProfileResult::AddSamples(ImageProfileResultContainer* container,
 				break;
 			if (firstImage == NULL)
 				firstImage = image;
+			image = NULL;
 		}
 	}
 

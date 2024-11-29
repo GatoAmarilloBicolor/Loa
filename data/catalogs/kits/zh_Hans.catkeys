@@ -1,42 +1,48 @@
-1	english	x-vnd.Haiku-libbe	3337473349
+1	english	x-vnd.Haiku-libbe	658791763
+All Rights Reserved.	AboutWindow		保留所有权利
+gold master	AboutWindow		最终测试版
+Undo	TextView		撤销
+OK	PrintJob		确定
+OK	Dragger		确定
 gamma	AboutWindow		伽马
-beta	AboutWindow		beta
-%3.2f GiB	StringForSize		%3.2f GiB
-Written by:	AboutWindow		编写：
+development	AboutWindow		开发
+Print Server is not responding.	PrintJob		打印服务未响应。
 About %app%	AboutMenuItem		关于 %app%
+Warning	Dragger		警告
+Green:	ColorControl		绿色:
+Redo	TextView		恢复
+No pages to print!	PrintJob		无打印页！
+beta	AboutWindow		beta
+%s MiB	StringForSize	size unit	%s MiB
+OK	ZombieReplicantView		确定
 Cut	TextView		剪切
+Default	Default decorator about box		默认
+Can't delete this replicant from its original application. Life goes on.	Dragger		无法从原始应用中删除克隆控件。它将继续存在。
+%s KiB	StringForSize	size unit	%s KiB
+Error	ZombieReplicantView		错误
+Paste	TextView		粘贴
+OK	AboutWindow		确定
+%s MiB/s	StringForRate	units per second	%s MiB/s
+Special Thanks:	AboutWindow		特别感谢：
+%s TiB	StringForSize	size unit	%s TiB
+Default Haiku window decorator.	Default decorator about box		默认 Haiku 窗口主题。
+%s GiB	StringForSize	size unit	%s GiB
+%s B	StringForSize	size unit, narrow space	%s B
+Remove replicant	Dragger		删除克隆控件
 Version	AboutWindow		版本
-Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		无法为 \"%description\" 创建克隆控件。\n%error
+Red:	ColorControl		红色:
+<empty>	Menu		<空>
 Copy	TextView		复制
-%3.2f KiB	StringForSize		%3.2f KiB
+Select all	TextView		全选
 alpha	AboutWindow		测试
 Error	PrintJob		错误
-All Rights Reserved.	AboutWindow		保留所有权利
-{0, plural, one{# byte} other{# bytes}}	StringForSize		{0, plural, one{# 字节} other{# 字节}}
-About %app%	AboutWindow		关于 %app%
-No pages to print!	PrintJob		无打印页！
-OK	Dragger		确定
-OK	PrintJob		确定
-Green:	ColorControl		绿色:
-Version history:	AboutWindow		版本历史：
-Remove replicant	Dragger		删除克隆控件
-Select all	TextView		全选
-OK	AboutWindow		确定
-OK	ZombieReplicantView		确定
-Print Server is not responding.	PrintJob		打印服务未响应。
-Paste	TextView		粘贴
-Special Thanks:	AboutWindow		特别感谢：
-%.2f TiB	StringForSize		%.2f TiB
-Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		无法定位克隆控件应用。未提供应用程序署名。\n%error
-Redo	TextView		恢复
-<empty>	Menu		<空>
-Warning	Dragger		警告
-Undo	TextView		撤销
-Red:	ColorControl		红色:
-%3.2f MiB	StringForSize		%3.2f MiB
+%s TiB/s	StringForRate	units per second	%s TiB/s
 About %app…	Dragger		关于 %app...
-development	AboutWindow		开发
-Error	ZombieReplicantView		错误
+About %app%	AboutWindow		关于 %app%
+%s GiB/s	StringForRate	units per second	%s GiB/s
+Version history:	AboutWindow		版本历史：
+Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		无法定位克隆控件应用。未提供应用程序署名。\n%error
+%s KiB/s	StringForRate	units per second	%s KiB/s
 Blue:	ColorControl		蓝色:
-gold master	AboutWindow		最终测试版
-Can't delete this replicant from its original application. Life goes on.	Dragger		无法从原始应用中删除克隆控件。它将继续存在。
+Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		无法为 \"%description\" 创建克隆控件。\n%error
+Written by:	AboutWindow		编写：

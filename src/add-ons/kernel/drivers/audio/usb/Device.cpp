@@ -37,6 +37,11 @@ Device::Device(usb_device device)
 	fProductID = deviceDescriptor->product_id;
 	fUSBVersion = deviceDescriptor->usb_version;
 
+#if 1
+	if (fUSBVersion >= 0x200)
+		return;
+#endif
+
 	fBuffersReadySem = create_sem(0, DRIVER_NAME "_buffers_ready");
 	if (fBuffersReadySem < B_OK) {
 		TRACE(ERR, "Error of creating ready "
@@ -168,13 +173,12 @@ Device::Control(uint32 op, void* buffer, size_t length)
 
 		case B_MULTI_GET_ENABLED_CHANNELS:
 		{
-			multi_channel_enable* data = (multi_channel_enable*)buffer;
 			multi_channel_enable enable;
 			uint32 enable_bits;
 			uchar* orig_enable_bits;
 
-			if (user_memcpy(&enable, data, sizeof(enable)) != B_OK
-				|| !IS_USER_ADDRESS(enable.enable_bits)) {
+			if (user_memcpy(&enable, buffer, sizeof(enable)) != B_OK
+					|| !IS_USER_ADDRESS(enable.enable_bits)) {
 				return B_BAD_ADDRESS;
 			}
 
@@ -229,7 +233,7 @@ Device::Control(uint32 op, void* buffer, size_t length)
 
 			status_t status = _MultiGetGlobalFormat(&info);
 			if (status != B_OK)
-				return B_OK;
+				return status;
 			if (user_memcpy(buffer, &info, sizeof(multi_format_info)) != B_OK)
 				return B_BAD_ADDRESS;
 			return B_OK;
@@ -242,7 +246,7 @@ Device::Control(uint32 op, void* buffer, size_t length)
 
 			status_t status = _MultiSetGlobalFormat(&info);
 			if (status != B_OK)
-				return B_OK;
+				return status;
 			return user_memcpy(buffer, &info, sizeof(multi_format_info));
 		}
 		case B_MULTI_GET_CHANNEL_FORMATS:
@@ -254,10 +258,28 @@ Device::Control(uint32 op, void* buffer, size_t length)
 			return B_ERROR;
 
 		case B_MULTI_GET_MIX:
-			return _MultiGetMix((multi_mix_value_info*)buffer);
+		case B_MULTI_SET_MIX: {
+			multi_mix_value_info info;
+			if (user_memcpy(&info, buffer, sizeof(multi_mix_value_info)) != B_OK)
+				return B_BAD_ADDRESS;
 
-		case B_MULTI_SET_MIX:
-			return _MultiSetMix((multi_mix_value_info*)buffer);
+			multi_mix_value* originalValues = info.values;
+			size_t mixValueSize = info.item_count * sizeof(multi_mix_value);
+			multi_mix_value* values = (multi_mix_value*)alloca(mixValueSize);
+			if (user_memcpy(values, info.values, mixValueSize) != B_OK)
+				return B_BAD_ADDRESS;
+			info.values = values;
+
+			status_t status;
+			if (op == B_MULTI_GET_MIX)
+				status = _MultiGetMix(&info);
+			else
+				status = _MultiSetMix(&info);
+			if (status != B_OK)
+				return status;
+			// the multi_mix_value_info is not modified
+			return user_memcpy(originalValues, values, mixValueSize);
+		}
 
 		case B_MULTI_LIST_MIX_CHANNELS:
 			TRACE(ERR, "B_MULTI_LIST_MIX_CHANNELS n/i\n");
@@ -476,27 +498,19 @@ Device::_MultiGetDescription(multi_description* multiDescription)
 
 	Description.control_panel[0] = '\0';
 
-	Vector<_AudioControl*>	USBTerminals;
+	Vector<multi_channel_info> Channels;
 
-	// channels (USB I/O  terminals) are already in fStreams
-	// in outputs->inputs order, use them.
+	// channels (USB I/O terminals) are already in fStreams in outputs->inputs order.
 	for (int i = 0; i < fStreams.Count(); i++) {
-		uint8 id = fStreams[i]->TerminalLink();
-		_AudioControl* control = fAudioControl.Find(id);
-		// if (control->SubType() == USB_AUDIO_AC_OUTPUT_TERMINAL) {
-		// if (control->SubType() == USB_AUDIO_AC_INPUT_TERMINAL) {
-		//	USBTerminals.PushFront(control);
-		//	fStreams[i]->GetFormatsAndRates(Description);
-		// } else
-		// if (control->SubType() == IDSInputTerminal) {
-			USBTerminals.PushBack(control);
-			fStreams[i]->GetFormatsAndRates(&Description);
-		// }
+		Vector<_AudioControl*> USBTerminal;
+		USBTerminal.PushBack(fAudioControl.Find(fStreams[i]->TerminalLink()));
+
+		fAudioControl.GetChannelsDescription(Channels, &Description, USBTerminal,
+			fStreams[i]->IsInput());
+		fStreams[i]->GetFormatsAndRates(&Description);
 	}
 
-	Vector<multi_channel_info> Channels;
-	fAudioControl.GetChannelsDescription(Channels, &Description, USBTerminals);
-	fAudioControl.GetBusChannelsDescription(Channels, &Description );
+	fAudioControl.GetBusChannelsDescription(Channels, &Description);
 
 	// Description.request_channel_count = channels + bus_channels;
 
@@ -685,23 +699,25 @@ Device::_MultiBufferExchange(multi_buffer_info* multiInfo)
 		return B_BAD_ADDRESS;
 	}
 
-	for (int i = 0; i < fStreams.Count(); i++)
+	for (int i = 0; i < fStreams.Count(); i++) {
 		if (!fStreams[i]->IsRunning())
 			fStreams[i]->Start();
+	}
 
 	status_t status = acquire_sem_etc(fBuffersReadySem, 1,
-		B_RELATIVE_TIMEOUT | B_CAN_INTERRUPT, 50000);
+		B_CAN_INTERRUPT, 0);
 	if (status == B_TIMED_OUT) {
 		TRACE(ERR, "Timeout during buffers exchange.\n");
 		return status;
 	}
 
 	status = B_ERROR;
-	for (int i = 0; i < fStreams.Count(); i++)
+	for (int i = 0; i < fStreams.Count(); i++) {
 		if (fStreams[i]->ExchangeBuffer(&Info)) {
 			status = B_OK;
 			break;
 		}
+	}
 
 	if (status != B_OK) {
 		TRACE(ERR, "Error processing buffers:%08x.\n", status);
@@ -784,6 +800,8 @@ Device::_SetupEndpoints()
 
 	for (size_t i = 0; i < config->interface_count; i++) {
 		usb_interface_info* Interface = config->interface[i].active;
+		if (Interface == NULL || Interface->descr == NULL)
+			continue;
 		if (Interface->descr->interface_class != USB_AUDIO_INTERFACE_AUDIO_CLASS)
 			continue;
 
@@ -795,7 +813,7 @@ Device::_SetupEndpoints()
 				{
 					Stream* stream = new(std::nothrow) Stream(this, i,
 						&config->interface[i]);
-					if (B_OK == stream->Init()) {
+					if (stream->Init() == B_OK) {
 						// put the stream in the correct order:
 						// first output that input ones.
 						if (stream->IsInput())
@@ -815,7 +833,10 @@ Device::_SetupEndpoints()
 
 	if (fAudioControl.InitCheck() == B_OK && fStreams.Count() > 0) {
 		TRACE(INF, "Found device %#06x:%#06x\n", fVendorID, fProductID);
-		gUSBModule->set_configuration(fDevice, config);
+
+		status_t status = gUSBModule->set_configuration(fDevice, config);
+		if (status != B_OK)
+			return status;
 
 		for (int i = 0; i < fStreams.Count(); i++)
 			fStreams[i]->OnSetConfiguration(fDevice, config);

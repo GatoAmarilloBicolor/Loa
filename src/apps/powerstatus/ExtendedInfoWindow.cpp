@@ -102,6 +102,8 @@ BatteryInfoView::_GetTextForLine(size_t line)
 				string = B_TRANSLATE("Battery charging");
 			else if ((fBatteryInfo.state & BATTERY_DISCHARGING) != 0)
 				string = B_TRANSLATE("Battery discharging");
+			else if ((fBatteryInfo.state & BATTERY_NOT_CHARGING) != 0)
+				string = B_TRANSLATE("Battery not charging");
 			else if ((fBatteryInfo.state & BATTERY_CRITICAL_STATE) != 0
 				&& fBatteryExtendedInfo.model_number[0] == '\0'
 				&& fBatteryExtendedInfo.serial_number[0] == '\0'
@@ -109,7 +111,7 @@ BatteryInfoView::_GetTextForLine(size_t line)
 				&& fBatteryExtendedInfo.oem_info[0] == '\0')
 				string = B_TRANSLATE("Empty battery slot");
 			else if ((fBatteryInfo.state & BATTERY_CRITICAL_STATE) != 0)
-				string = B_TRANSLATE("Damaged battery");
+				string = B_TRANSLATE("Damaged or missing battery");
 			else
 				string = B_TRANSLATE("Battery unused");
 			break;
@@ -313,7 +315,7 @@ ExtPowerStatusView::IsCritical()
 
 
 void
-ExtPowerStatusView::Update(bool force)
+ExtPowerStatusView::Update(bool force, bool notify)
 {
 	PowerStatusView::Update(force);
 	if (!fSelected)
@@ -343,9 +345,8 @@ ExtendedInfoWindow::ExtendedInfoWindow(PowerStatusDriverInterface* interface)
 {
 	fDriverInterface->AcquireReference();
 
-	float scale = be_plain_font->Size() / 12.0f;
-	float tabHeight = 70.0f * scale;
-	BRect batteryRect(0, 0, 50 * scale, 50 * scale);
+	BRect batteryRect(BPoint(0, 0), be_control_look->ComposeIconSize(50));
+	float tabHeight = ceilf(batteryRect.Height() * 1.4f);
 	fBatteryTabView = new BatteryTabView("tabview");
 	fBatteryTabView->SetBorder(B_NO_BORDER);
 	fBatteryTabView->SetTabHeight(tabHeight);

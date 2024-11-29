@@ -64,13 +64,14 @@ TrackSlider::AttachedToWindow()
 void
 TrackSlider::_InitBitmap()
 {
-	if (fBitmapView) {
-		fBitmap->RemoveChild(fBitmapView);
-		delete fBitmapView;
-	}
-	if (fBitmap)
+	if (fBitmap != NULL) {
+		if (fBitmapView != NULL) {
+			fBitmap->RemoveChild(fBitmapView);
+			delete fBitmapView;
+		}
 		delete fBitmap;
-		
+	}
+
 	BRect rect = Bounds();
 	
 	fBitmap = new BBitmap(rect, BScreen().ColorSpace(), true);
@@ -339,7 +340,7 @@ TrackSlider::_UpdatePosition(BPoint point)
 		Invoke(&msg);
 		_RenderBitmap();
 		
-		//printf("fLeftPos : %Ld\n", fLeftTime);
+		//printf("fLeftPos : %lld\n", fLeftTime);
 	} else if (!fMainTracking && (fRightTracking 
 		|| ((point.x > fBitmapView->fPositionX+4) 
 		&& rightRect.Contains(point)))) {
@@ -368,7 +369,7 @@ TrackSlider::_UpdatePosition(BPoint point)
 		Invoke(&msg);
 		_RenderBitmap();
 		
-		//printf("fRightPos : %Ld\n", fRightTime);
+		//printf("fRightPos : %lld\n", fRightTime);
 	} else {
 		fBitmapView->fPositionX = MIN(MAX(point.x, 15), fBitmapView->fRight);
 		fMainTime = (bigtime_t)(MAX(MIN((fBitmapView->fPositionX - 15) 
@@ -391,7 +392,7 @@ TrackSlider::_UpdatePosition(BPoint point)
 		}
 		
 		Invoke(&msg);
-		//printf("fPosition : %Ld\n", fMainTime);
+		//printf("fPosition : %lld\n", fMainTime);
 	}
 	Draw(Bounds());
 	Flush();

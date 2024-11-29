@@ -11,19 +11,24 @@
 
 #include "MediaTypes.h"
 
-#include <net/if_media.h>
+#include <stdint.h>
 #include <string.h>
+
+extern "C" {
+#	include <freebsd_network/compat/net/if_media.h>
+}
 
 
 struct media_type {
 	int			type;
 	const char*	name;
 	const char* pretty;
+	int 		subtype_mask;
 	struct {
 		int subtype;
 		const char* name;
 		const char* pretty;
-	} subtypes [6];
+	} subtypes [10];
 	struct {
 		int option;
 		bool read_only;
@@ -35,25 +40,10 @@ struct media_type {
 
 const media_type kMediaTypes[] = {
 	{
-		0, // for generic options
-		"all",
-		"All",
-		{
-			{ IFM_AUTO, "auto", "Auto-select" },
-			{ -1, NULL, NULL }
-		},
-		{
-			{ IFM_FULL_DUPLEX, true, "fullduplex", "Full Duplex" },
-			{ IFM_HALF_DUPLEX, true, "halfduplex", "Half Duplex" },
-			{ IFM_LOOP, true, "loop", "Loop" },
-			//{ IFM_ACTIVE, false, "active", "Active" },
-			{ -1, false, NULL, NULL }
-		}
-	},
-	{
 		IFM_ETHER,
 		"ether",
 		"Ethernet",
+		IFM_TMASK,
 		{
 			//{ IFM_AUTO, "auto", "Auto-select" },
 			//{ IFM_AUI, "AUI", "10 MBit, AUI" },
@@ -63,13 +53,53 @@ const media_type kMediaTypes[] = {
 			{ IFM_1000_T, "1000baseT", "1 GBit, 1000BASE-T" },
 			{ IFM_1000_SX, "1000baseSX", "1 GBit, 1000BASE-SX" },
 			{ IFM_10G_T, "10GbaseT", "10 GBit, 10GBASE-T" },
+			{ IFM_10G_SR, "10GbaseSR", "10 Gbit, 850 nm Fibre"},
+			{ IFM_10G_LR, "10GbaseLR", "10 Gbit, 1310 nm Fibre"},
+			{ IFM_10G_LRM, "10GbaseLRM", "10 Gbit, 1300 nm Fibre"},
+			{ IFM_10G_TWINAX, "10GbaseCR", "10 Gbit, Direct Attach"},
 			{ -1, NULL, NULL }
 		},
 		{
 			{ -1, false, NULL, NULL }
 		}
 	},
-	{ -1, NULL, NULL, {{ -1, NULL, NULL }}, {{ -1, false, NULL, NULL }} }
+	{
+		IFM_IEEE80211,
+		"80211",
+		"Wireless Ethernet",
+		IFM_MMASK,
+		{
+			{ IFM_IEEE80211_11A, "802.11a", "802.11a" },
+			{ IFM_IEEE80211_11B, "802.11b", "802.11b" },
+			{ IFM_IEEE80211_11G, "802.11g", "802.11g" },
+			{ IFM_IEEE80211_FH, "802.11 FH", "802.11 FH" },
+			{ IFM_IEEE80211_11NA, "802.11n(a)", "802.11n(a)" },
+			{ IFM_IEEE80211_11NG, "802.11n(g)", "802.11n(g)" },
+			{ IFM_IEEE80211_VHT5G, "802.11ac", "802.11ac" },
+			{ -1, NULL, NULL }
+		},
+		{
+			{ -1, false, NULL, NULL }
+		}
+	},
+	{
+		0, // for generic options
+		"all",
+		"All",
+		IFM_TMASK,
+		{
+			{ IFM_AUTO, "auto", "Auto-select" },
+			{ -1, NULL, NULL }
+		},
+		{
+			{ IFM_FDX, true, "fullduplex", "Full Duplex" },
+			{ IFM_HDX, true, "halfduplex", "Half Duplex" },
+			{ IFM_LOOP, true, "loop", "Loop" },
+			//{ IFM_ACTIVE, false, "active", "Active" },
+			{ -1, false, NULL, NULL }
+		}
+	},
+	{ -1, NULL, NULL, -1, {{ -1, NULL, NULL }}, {{ -1, false, NULL, NULL }} }
 };
 
 
@@ -128,8 +158,9 @@ media_type_to_string(int media)
 			&& kMediaTypes[i].type != IFM_TYPE(media))
 			continue;
 
+		const int subtype = (media & kMediaTypes[i].subtype_mask);
 		for (size_t j = 0; kMediaTypes[i].subtypes[j].subtype >= 0; j++) {
-			if (kMediaTypes[i].subtypes[j].subtype == IFM_SUBTYPE(media)) {
+			if (kMediaTypes[i].subtypes[j].subtype == subtype) {
 				// found a match
 				return kMediaTypes[i].subtypes[j].pretty;
 			}

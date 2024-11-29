@@ -1,5 +1,5 @@
 /*
- * Copyright 2009, Haiku, Inc. All Rights Reserved.
+ * Copyright 2009-2021, Haiku, Inc. All Rights Reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -12,6 +12,7 @@
 #include <Alert.h>
 #include <Application.h>
 #include <Bitmap.h>
+#include <Catalog.h>
 #include <Deskbar.h>
 #include <IconUtils.h>
 #include <MenuItem.h>
@@ -23,7 +24,8 @@
 
 #include <bluetoothserver_p.h>
 
-extern "C" _EXPORT BView *instantiate_deskbar_item(void);
+
+extern "C" _EXPORT BView *instantiate_deskbar_item(float maxWidth, float maxHeight);
 status_t our_image(image_info& image);
 
 const uint32 kMsgOpenBluetoothPreferences = 'obtp';
@@ -32,12 +34,17 @@ const uint32 kMsgQuitBluetoothServer = 'qbts';
 const char* kDeskbarItemName = "BluetoothServerReplicant";
 const char* kClassName = "DeskbarReplicant";
 
+
+#undef B_TRANSLATION_CONTEXT
+#define B_TRANSLATION_CONTEXT "BluetoothReplicant"
+
+
 //	#pragma mark -
 
 
 DeskbarReplicant::DeskbarReplicant(BRect frame, int32 resizingMode)
 	: BView(frame, kDeskbarItemName, resizingMode,
-		B_WILL_DRAW | B_FRAME_EVENTS)
+		B_WILL_DRAW | B_TRANSPARENT_BACKGROUND | B_FRAME_EVENTS)
 {
 	_Init();
 }
@@ -116,7 +123,10 @@ DeskbarReplicant::AttachedToWindow()
 	BView::AttachedToWindow();
 	AdoptParentColors();
 
-	SetLowColor(ViewColor());
+	if (ViewUIColor() == B_NO_COLOR)
+		SetLowColor(ViewColor());
+	else
+		SetLowUIColor(ViewUIColor());
 }
 
 
@@ -167,17 +177,19 @@ DeskbarReplicant::MouseDown(BPoint where)
 
 	BPopUpMenu* menu = new BPopUpMenu(B_EMPTY_STRING, false, false);
 
-	menu->AddItem(new BMenuItem("Settings" B_UTF8_ELLIPSIS,
+	menu->AddItem(new BMenuItem(B_TRANSLATE("Settings" B_UTF8_ELLIPSIS),
 		new BMessage(kMsgOpenBluetoothPreferences)));
 
 	// TODO show list of known/paired devices
 
-	menu->AddItem(new BMenuItem("Quit",
+	menu->AddItem(new BMenuItem(B_TRANSLATE("Quit"),
 		new BMessage(kMsgQuitBluetoothServer)));
 
 	menu->SetTargetForItems(this);
 	ConvertToScreen(&point);
 	menu->Go(point, true, true, true);
+
+	delete menu;
 }
 
 
@@ -194,7 +206,8 @@ DeskbarReplicant::_QuitBluetoothServer()
 	status_t status = BMessenger(BLUETOOTH_SIGNATURE).SendMessage(
 		B_QUIT_REQUESTED);
 	if (status < B_OK) {
-		_ShowErrorAlert("Stopping the Bluetooth server failed.", status);
+		_ShowErrorAlert(B_TRANSLATE("Stopping the Bluetooth server failed."),
+			status);
 	}
 }
 
@@ -202,21 +215,26 @@ DeskbarReplicant::_QuitBluetoothServer()
 void
 DeskbarReplicant::_ShowErrorAlert(BString msg, status_t status)
 {
-	msg << "\n\nError: " << strerror(status);
-	BAlert* alert = new BAlert("Bluetooth error", msg.String(), "OK");
+	BString error = B_TRANSLATE("Error: %status%");
+	error.ReplaceFirst("%status%", strerror(status));
+	msg << "\n\n" << error;
+	BAlert* alert = new BAlert(B_TRANSLATE("Bluetooth error"), msg.String(),
+		B_TRANSLATE("OK"));
 	alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 	alert->Go(NULL);
 }
+
 
 //	#pragma mark -
 
 
 extern "C" _EXPORT BView *
-instantiate_deskbar_item(void)
+instantiate_deskbar_item(float maxWidth, float maxHeight)
 {
-	return new DeskbarReplicant(BRect(0, 0, 15, 15),
-		B_FOLLOW_LEFT | B_FOLLOW_TOP);
+	return new DeskbarReplicant(BRect(0, 0, maxHeight - 1, maxHeight - 1),
+		B_FOLLOW_NONE);
 }
+
 
 //	#pragma mark -
 

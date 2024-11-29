@@ -9,6 +9,8 @@
 
 #include "usb_raw.h"
 
+#include <util/AutoLock.h>
+#include <AutoDeleter.h>
 #include <KernelExport.h>
 #include <Drivers.h>
 #include <algorithm>
@@ -94,6 +96,17 @@ usb_raw_device_removed(void *cookie)
 {
 	TRACE((DRIVER_NAME": device_removed(0x%p)\n", cookie));
 	raw_device *device = (raw_device *)cookie;
+
+	// cancel all pending transfers to make sure no one keeps waiting forever
+	// in syscalls.
+	const usb_configuration_info *configurationInfo =
+		gUSBModule->get_configuration(device->device);
+	if (configurationInfo != NULL) {
+		struct usb_interface_info* interface
+			= configurationInfo->interface->active;
+		for (unsigned int i = 0; i < interface->endpoint_count; i++)
+			gUSBModule->cancel_queued_transfers(interface->endpoint[i].handle);
+	}
 
 	mutex_lock(&gDeviceListLock);
 	if (gDeviceList == device) {
@@ -530,20 +543,33 @@ usb_raw_ioctl(void *cookie, uint32 op, void *buffer, size_t length)
 				return B_BUFFER_OVERFLOW;
 
 			size_t actualLength = 0;
-			uint8 firstTwoBytes[2];
+			uint8 temp[4];
 			status = B_OK;
 
+			// We need to fetch the default language code, first.
 			if (gUSBModule->get_descriptor(device->device,
-				USB_DESCRIPTOR_STRING, command.string.string_index, 0,
-				firstTwoBytes, 2, &actualLength) < B_OK
+				USB_DESCRIPTOR_STRING, 0, 0,
+				temp, 4, &actualLength) < B_OK
+				|| actualLength != 4
+				|| temp[1] != USB_DESCRIPTOR_STRING) {
+				command.string.status = B_USB_RAW_STATUS_ABORTED;
+				command.string.length = 0;
+				break;
+			}
+			const uint16 langid = (temp[2] | (temp[3] << 8));
+
+			// Now fetch the string length.
+			if (gUSBModule->get_descriptor(device->device,
+				USB_DESCRIPTOR_STRING, command.string.string_index, langid,
+				temp, 2, &actualLength) < B_OK
 				|| actualLength != 2
-				|| firstTwoBytes[1] != USB_DESCRIPTOR_STRING) {
+				|| temp[1] != USB_DESCRIPTOR_STRING) {
 				command.string.status = B_USB_RAW_STATUS_ABORTED;
 				command.string.length = 0;
 				break;
 			}
 
-			uint8 stringLength = MIN(firstTwoBytes[0], command.string.length);
+			uint8 stringLength = MIN(temp[0], command.string.length);
 			char *string = (char *)malloc(stringLength);
 			if (string == NULL) {
 				command.string.status = B_USB_RAW_STATUS_ABORTED;
@@ -553,7 +579,7 @@ usb_raw_ioctl(void *cookie, uint32 op, void *buffer, size_t length)
 			}
 
 			if (gUSBModule->get_descriptor(device->device,
-				USB_DESCRIPTOR_STRING, command.string.string_index, 0,
+				USB_DESCRIPTOR_STRING, command.string.string_index, langid,
 				string, stringLength, &actualLength) < B_OK
 				|| actualLength != stringLength) {
 				command.string.status = B_USB_RAW_STATUS_ABORTED;
@@ -693,6 +719,10 @@ usb_raw_ioctl(void *cookie, uint32 op, void *buffer, size_t length)
 				return B_BUFFER_OVERFLOW;
 
 			void *controlData = malloc(command.control.length);
+			if (controlData == NULL)
+				return B_NO_MEMORY;
+			MemoryDeleter dataDeleter(controlData);
+
 			bool inTransfer = (command.control.request_type
 				& USB_ENDPOINT_ADDR_DIR_IN) != 0;
 			if (!IS_USER_ADDRESS(command.control.data)
@@ -701,7 +731,7 @@ usb_raw_ioctl(void *cookie, uint32 op, void *buffer, size_t length)
 				return B_BAD_ADDRESS;
 			}
 
-			mutex_lock(&device->lock);
+			MutexLocker deviceLocker(device->lock);
 			if (gUSBModule->queue_request(device->device,
 				command.control.request_type, command.control.request,
 				command.control.value, command.control.index,
@@ -709,24 +739,26 @@ usb_raw_ioctl(void *cookie, uint32 op, void *buffer, size_t length)
 				usb_raw_callback, device) < B_OK) {
 				command.control.status = B_USB_RAW_STATUS_FAILED;
 				command.control.length = 0;
-				mutex_unlock(&device->lock);
-				free(controlData);
 				status = B_OK;
 				break;
 			}
 
-			acquire_sem(device->notify);
+			status = acquire_sem_etc(device->notify, 1, B_KILL_CAN_INTERRUPT, 0);
+			if (status != B_OK) {
+				gUSBModule->cancel_queued_requests(device->device);
+				acquire_sem(device->notify);
+			}
+
 			command.control.status = device->status;
 			command.control.length = device->actual_length;
-			mutex_unlock(&device->lock);
+			deviceLocker.Unlock();
 
-			status = B_OK;
+			if (command.control.status == B_OK)
+				status = B_OK;
 			if (inTransfer && user_memcpy(command.control.data, controlData,
 				command.control.length) != B_OK) {
 				status = B_BAD_ADDRESS;
 			}
-
-			free(controlData);
 			break;
 		}
 
@@ -772,6 +804,8 @@ usb_raw_ioctl(void *cookie, uint32 op, void *buffer, size_t length)
 			size_t descriptorsSize = 0;
 			usb_iso_packet_descriptor *packetDescriptors = NULL;
 			void *transferData = NULL;
+			MemoryDeleter descriptorsDeleter, dataDeleter;
+
 			bool inTransfer = (endpointInfo->descr->endpoint_address
 				& USB_ENDPOINT_ADDR_DIR_IN) != 0;
 			if (op == B_USB_RAW_COMMAND_ISOCHRONOUS_TRANSFER) {
@@ -787,13 +821,13 @@ usb_raw_ioctl(void *cookie, uint32 op, void *buffer, size_t length)
 					command.transfer.length = 0;
 					break;
 				}
+				descriptorsDeleter.SetTo(packetDescriptors);
 
 				if (!IS_USER_ADDRESS(command.isochronous.data)
 					|| !IS_USER_ADDRESS(command.isochronous.packet_descriptors)
 					|| user_memcpy(packetDescriptors,
 						command.isochronous.packet_descriptors,
 						descriptorsSize) != B_OK) {
-					free(packetDescriptors);
 					return B_BAD_ADDRESS;
 				}
 			} else {
@@ -803,17 +837,17 @@ usb_raw_ioctl(void *cookie, uint32 op, void *buffer, size_t length)
 					command.transfer.length = 0;
 					break;
 				}
+				dataDeleter.SetTo(transferData);
 
 				if (!IS_USER_ADDRESS(command.transfer.data) || (!inTransfer
 						&& user_memcpy(transferData, command.transfer.data,
 							command.transfer.length) != B_OK)) {
-					free(transferData);
 					return B_BAD_ADDRESS;
 				}
 			}
 
 			status_t status;
-			mutex_lock(&device->lock);
+			MutexLocker deviceLocker(device->lock);
 			if (op == B_USB_RAW_COMMAND_INTERRUPT_TRANSFER) {
 				status = gUSBModule->queue_interrupt(endpointInfo->handle,
 					transferData, command.transfer.length,
@@ -832,32 +866,32 @@ usb_raw_ioctl(void *cookie, uint32 op, void *buffer, size_t length)
 			if (status < B_OK) {
 				command.transfer.status = B_USB_RAW_STATUS_FAILED;
 				command.transfer.length = 0;
-				free(packetDescriptors);
-				free(transferData);
-				mutex_unlock(&device->lock);
 				status = B_OK;
 				break;
 			}
 
-			acquire_sem(device->notify);
+			status = acquire_sem_etc(device->notify, 1, B_KILL_CAN_INTERRUPT, 0);
+			if (status != B_OK) {
+				gUSBModule->cancel_queued_transfers(endpointInfo->handle);
+				acquire_sem(device->notify);
+			}
+
 			command.transfer.status = device->status;
 			command.transfer.length = device->actual_length;
-			mutex_unlock(&device->lock);
+			deviceLocker.Unlock();
 
-			status = B_OK;
+			if (command.transfer.status == B_OK)
+				status = B_OK;
 			if (op == B_USB_RAW_COMMAND_ISOCHRONOUS_TRANSFER) {
 				if (user_memcpy(command.isochronous.packet_descriptors,
 						packetDescriptors, descriptorsSize) != B_OK) {
 					status = B_BAD_ADDRESS;
 				}
-
-				free(packetDescriptors);
 			} else {
 				if (inTransfer && user_memcpy(command.transfer.data,
 					transferData, command.transfer.length) != B_OK) {
 					status = B_BAD_ADDRESS;
 				}
-				free(transferData);
 			}
 
 			break;

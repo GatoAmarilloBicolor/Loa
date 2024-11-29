@@ -12,6 +12,7 @@
 
 #include <cpu.h>
 #include <arch/cpu.h>
+#include <arch/system_info.h>
 
 #include <string.h>
 
@@ -22,10 +23,12 @@
 #include <kscheduler.h>
 #include <thread_types.h>
 #include <util/AutoLock.h>
+#include <util/ThreadAutoLock.h>
 
 
 /* global per-cpu structure */
 cpu_ent gCPU[SMP_MAX_CPUS];
+CPUSet gCPUEnabled;
 
 uint32 gCPUCacheLevelCount;
 static cpu_topology_node sCPUTopology;
@@ -88,6 +91,8 @@ load_cpufreq_module()
 
 	if (sCPUPerformanceModule == NULL)
 		dprintf("no valid cpufreq module found\n");
+	else
+		scheduler_update_policy();
 }
 
 
@@ -145,6 +150,7 @@ cpu_preboot_init_percpu(kernel_args *args, int curr_cpu)
 	// we can use it for get_current_cpu
 	memset(&gCPU[curr_cpu], 0, sizeof(gCPU[curr_cpu]));
 	gCPU[curr_cpu].cpu_num = curr_cpu;
+	gCPUEnabled.SetBitAtomic(curr_cpu);
 
 	list_init(&gCPU[curr_cpu].irqs);
 	B_INITIALIZE_SPINLOCK(&gCPU[curr_cpu].irqs_lock);
@@ -171,10 +177,24 @@ cpu_get_active_time(int32 cpu)
 }
 
 
+uint64
+cpu_frequency(int32 cpu)
+{
+	if (cpu < 0 || cpu >= smp_get_num_cpus())
+		return 0;
+	uint64 frequency = 0;
+	arch_get_frequency(&frequency, cpu);
+	return frequency;
+}
+
+
 void
 clear_caches(void *address, size_t length, uint32 flags)
 {
-	// ToDo: implement me!
+	// TODO: data cache
+	if ((B_INVALIDATE_ICACHE & flags) != 0) {
+		arch_cpu_sync_icache(address, length);
+	}
 }
 
 
@@ -367,6 +387,8 @@ _user_set_cpu_enabled(int32 cpu, bool enabled)
 {
 	int32 i, count;
 
+	if (geteuid() != 0)
+		return B_PERMISSION_DENIED;
 	if (cpu < 0 || cpu >= smp_get_num_cpus())
 		return B_BAD_VALUE;
 

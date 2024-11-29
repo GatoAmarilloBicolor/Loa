@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2017 Haiku, Inc. All rights reserved.
+ * Copyright 2001-2019 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -169,6 +169,10 @@ ViewState::ViewState()
 	font = *be_plain_font;
 	font_flags = font.Flags();
 	font_aliasing = false;
+
+	parent_composite_transform.Reset();
+	parent_composite_scale = 1.0f;
+	parent_composite_origin.Set(0, 0);
 
 	// We only keep the B_VIEW_CLIP_REGION_BIT flag invalidated,
 	// because we should get the clipping region from app_server.
@@ -340,7 +344,8 @@ ViewState::UpdateFrom(BPrivate::PortLink &link)
 		clipping_region_used = false;
 	}
 
-	valid_flags = ~B_VIEW_CLIP_REGION_BIT;
+	valid_flags = ~(B_VIEW_CLIP_REGION_BIT | B_VIEW_PARENT_COMPOSITE_BIT)
+		| (valid_flags & B_VIEW_PARENT_COMPOSITE_BIT);
 }
 
 }	// namespace BPrivate
@@ -1050,7 +1055,8 @@ BView::SetFlags(uint32 flags)
 
 		uint32 changesFlags = flags ^ fFlags;
 		if (changesFlags & (B_WILL_DRAW | B_FULL_UPDATE_ON_RESIZE
-				| B_FRAME_EVENTS | B_SUBPIXEL_PRECISE)) {
+				| B_FRAME_EVENTS | B_SUBPIXEL_PRECISE
+				| B_TRANSPARENT_BACKGROUND)) {
 			_CheckLockAndSwitchCurrent();
 
 			fOwner->fLink->StartMessage(AS_VIEW_SET_FLAGS);
@@ -1836,6 +1842,8 @@ BView::PushState()
 
 	fOwner->fLink->StartMessage(AS_VIEW_PUSH_STATE);
 
+	fState->valid_flags &= ~B_VIEW_PARENT_COMPOSITE_BIT;
+
 	// initialize origin, scale and transform, new states start "clean".
 	fState->valid_flags |= B_VIEW_SCALE_BIT | B_VIEW_ORIGIN_BIT
 		| B_VIEW_TRANSFORM_BIT;
@@ -1985,6 +1993,71 @@ BView::Transform() const
 	}
 
 	return fState->transform;
+}
+
+
+BAffineTransform
+BView::TransformTo(coordinate_space basis) const
+{
+	if (basis == B_CURRENT_STATE_COORDINATES)
+		return B_AFFINE_IDENTITY_TRANSFORM;
+
+	if (!fState->IsValid(B_VIEW_PARENT_COMPOSITE_BIT) && fOwner != NULL) {
+		_CheckLockAndSwitchCurrent();
+
+		fOwner->fLink->StartMessage(AS_VIEW_GET_PARENT_COMPOSITE);
+
+		int32 code;
+		if (fOwner->fLink->FlushWithReply(code) == B_OK && code == B_OK) {
+			fOwner->fLink->Read<BAffineTransform>(&fState->parent_composite_transform);
+			fOwner->fLink->Read<float>(&fState->parent_composite_scale);
+			fOwner->fLink->Read<BPoint>(&fState->parent_composite_origin);
+		}
+
+		fState->valid_flags |= B_VIEW_PARENT_COMPOSITE_BIT;
+	}
+
+	BAffineTransform transform = fState->parent_composite_transform * Transform();
+	float scale = fState->parent_composite_scale * Scale();
+	transform.PreScaleBy(scale, scale);
+	BPoint origin = Origin();
+	origin.x *= fState->parent_composite_scale;
+	origin.y *= fState->parent_composite_scale;
+	origin += fState->parent_composite_origin;
+	transform.TranslateBy(origin);
+
+	if (basis == B_PREVIOUS_STATE_COORDINATES) {
+		transform.TranslateBy(-fState->parent_composite_origin);
+		transform.PreMultiplyInverse(fState->parent_composite_transform);
+		transform.ScaleBy(1.0f / fState->parent_composite_scale);
+		return transform;
+	}
+
+	if (basis == B_VIEW_COORDINATES)
+		return transform;
+
+	origin = B_ORIGIN;
+
+	if (basis == B_PARENT_VIEW_COORDINATES || basis == B_PARENT_VIEW_DRAW_COORDINATES) {
+		BView* parent = Parent();
+		if (parent != NULL) {
+			ConvertToParent(&origin);
+			transform.TranslateBy(origin);
+			if (basis == B_PARENT_VIEW_DRAW_COORDINATES)
+				transform = transform.PreMultiplyInverse(parent->TransformTo(B_VIEW_COORDINATES));
+			return transform;
+		}
+		basis = B_WINDOW_COORDINATES;
+	}
+
+	ConvertToScreen(&origin);
+	if (basis == B_WINDOW_COORDINATES) {
+		BWindow* window = Window();
+		if (window != NULL)
+			origin -= window->Frame().LeftTop();
+	}
+	transform.TranslateBy(origin);
+	return transform;
 }
 
 
@@ -3121,6 +3194,38 @@ BView::DrawBitmap(const BBitmap* bitmap)
 
 
 void
+BView::DrawTiledBitmapAsync(const BBitmap* bitmap, BRect viewRect,
+	BPoint phase)
+{
+	if (bitmap == NULL || fOwner == NULL || !viewRect.IsValid())
+		return;
+
+	_CheckLockAndSwitchCurrent();
+
+	ViewDrawBitmapInfo info;
+	info.bitmapToken = bitmap->_ServerToken();
+	info.options = B_TILE_BITMAP;
+	info.viewRect = viewRect;
+	info.bitmapRect = bitmap->Bounds().OffsetToCopy(phase);
+
+	fOwner->fLink->StartMessage(AS_VIEW_DRAW_BITMAP);
+	fOwner->fLink->Attach<ViewDrawBitmapInfo>(info);
+
+	_FlushIfNotInTransaction();
+}
+
+
+void
+BView::DrawTiledBitmap(const BBitmap* bitmap, BRect viewRect, BPoint phase)
+{
+	if (fOwner) {
+		DrawTiledBitmapAsync(bitmap, viewRect, phase);
+		Sync();
+	}
+}
+
+
+void
 BView::DrawChar(char c)
 {
 	DrawString(&c, 1, PenLocation());
@@ -3962,7 +4067,7 @@ BView::StrokeShape(BShape* shape, ::pattern pattern)
 	if (shape == NULL || fOwner == NULL)
 		return;
 
-	shape_data* sd = (shape_data*)shape->fPrivateData;
+	shape_data* sd = BShape::Private(*shape).PrivateData();
 	if (sd->opCount == 0 || sd->ptCount == 0)
 		return;
 
@@ -3971,10 +4076,7 @@ BView::StrokeShape(BShape* shape, ::pattern pattern)
 
 	fOwner->fLink->StartMessage(AS_STROKE_SHAPE);
 	fOwner->fLink->Attach<BRect>(shape->Bounds());
-	fOwner->fLink->Attach<int32>(sd->opCount);
-	fOwner->fLink->Attach<int32>(sd->ptCount);
-	fOwner->fLink->Attach(sd->opList, sd->opCount * sizeof(uint32));
-	fOwner->fLink->Attach(sd->ptList, sd->ptCount * sizeof(BPoint));
+	fOwner->fLink->AttachShape(*shape);
 
 	_FlushIfNotInTransaction();
 }
@@ -3986,7 +4088,7 @@ BView::FillShape(BShape* shape, ::pattern pattern)
 	if (shape == NULL || fOwner == NULL)
 		return;
 
-	shape_data* sd = (shape_data*)(shape->fPrivateData);
+	shape_data* sd = BShape::Private(*shape).PrivateData();
 	if (sd->opCount == 0 || sd->ptCount == 0)
 		return;
 
@@ -3995,10 +4097,7 @@ BView::FillShape(BShape* shape, ::pattern pattern)
 
 	fOwner->fLink->StartMessage(AS_FILL_SHAPE);
 	fOwner->fLink->Attach<BRect>(shape->Bounds());
-	fOwner->fLink->Attach<int32>(sd->opCount);
-	fOwner->fLink->Attach<int32>(sd->ptCount);
-	fOwner->fLink->Attach(sd->opList, sd->opCount * sizeof(int32));
-	fOwner->fLink->Attach(sd->ptList, sd->ptCount * sizeof(BPoint));
+	fOwner->fLink->AttachShape(*shape);
 
 	_FlushIfNotInTransaction();
 }
@@ -4010,7 +4109,7 @@ BView::FillShape(BShape* shape, const BGradient& gradient)
 	if (shape == NULL || fOwner == NULL)
 		return;
 
-	shape_data* sd = (shape_data*)(shape->fPrivateData);
+	shape_data* sd = BShape::Private(*shape).PrivateData();
 	if (sd->opCount == 0 || sd->ptCount == 0)
 		return;
 
@@ -4018,10 +4117,7 @@ BView::FillShape(BShape* shape, const BGradient& gradient)
 
 	fOwner->fLink->StartMessage(AS_FILL_SHAPE_GRADIENT);
 	fOwner->fLink->Attach<BRect>(shape->Bounds());
-	fOwner->fLink->Attach<int32>(sd->opCount);
-	fOwner->fLink->Attach<int32>(sd->ptCount);
-	fOwner->fLink->Attach(sd->opList, sd->opCount * sizeof(int32));
-	fOwner->fLink->Attach(sd->ptList, sd->ptCount * sizeof(BPoint));
+	fOwner->fLink->AttachShape(*shape);
 	fOwner->fLink->AttachGradient(gradient);
 
 	_FlushIfNotInTransaction();
@@ -4905,6 +5001,40 @@ BView::MessageReceived(BMessage* message)
 {
 	if (!message->HasSpecifiers()) {
 		switch (message->what) {
+			case B_INVALIDATE:
+			{
+				BRect rect;
+				if (message->FindRect("be:area", &rect) == B_OK)
+					Invalidate(rect);
+				else
+					Invalidate();
+				break;
+			}
+
+			case B_KEY_DOWN:
+			{
+				// TODO: cannot use "string" here if we support having different
+				// font encoding per view (it's supposed to be converted by
+				// BWindow::_HandleKeyDown() one day)
+				const char* string;
+				ssize_t bytes;
+				if (message->FindData("bytes", B_STRING_TYPE,
+						(const void**)&string, &bytes) == B_OK)
+					KeyDown(string, bytes - 1);
+				break;
+			}
+
+			case B_KEY_UP:
+			{
+				// TODO: same as above
+				const char* string;
+				ssize_t bytes;
+				if (message->FindData("bytes", B_STRING_TYPE,
+						(const void**)&string, &bytes) == B_OK)
+					KeyUp(string, bytes - 1);
+				break;
+			}
+
 			case B_VIEW_RESIZED:
 				FrameResized(message->GetInt32("width", 0),
 					message->GetInt32("height", 0));
@@ -4913,6 +5043,14 @@ BView::MessageReceived(BMessage* message)
 			case B_VIEW_MOVED:
 				FrameMoved(fParentOffset);
 				break;
+
+			case B_MOUSE_DOWN:
+			{
+				BPoint where;
+				message->FindPoint("be:view_where", &where);
+				MouseDown(where);
+				break;
+			}
 
 			case B_MOUSE_IDLE:
 			{
@@ -4925,6 +5063,85 @@ BView::MessageReceived(BMessage* message)
 					ShowToolTip(tip);
 				else
 					BHandler::MessageReceived(message);
+				break;
+			}
+
+			case B_MOUSE_MOVED:
+			{
+				uint32 eventOptions = fEventOptions | fMouseEventOptions;
+				bool noHistory = eventOptions & B_NO_POINTER_HISTORY;
+				bool dropIfLate = !(eventOptions & B_FULL_POINTER_HISTORY);
+
+				bigtime_t eventTime;
+				if (message->FindInt64("when", (int64*)&eventTime) < B_OK)
+					eventTime = system_time();
+
+				uint32 transit;
+				message->FindInt32("be:transit", (int32*)&transit);
+				// don't drop late messages with these important transit values
+				if (transit == B_ENTERED_VIEW || transit == B_EXITED_VIEW)
+					dropIfLate = false;
+
+				// TODO: The dropping code may have the following problem: On
+				// slower computers, 20ms may just be to abitious a delay.
+				// There, we might constantly check the message queue for a
+				// newer message, not find any, and still use the only but later
+				// than 20ms message, which of course makes the whole thing
+				// later than need be. An adaptive delay would be kind of neat,
+				// but would probably use additional BWindow members to count
+				// the successful versus fruitless queue searches and the delay
+				// value itself or something similar.
+				if (noHistory
+					|| (dropIfLate && (system_time() - eventTime > 20000))) {
+					// filter out older mouse moved messages in the queue
+					BWindow* window = Window();
+					window->_DequeueAll();
+					BMessageQueue* queue = window->MessageQueue();
+					queue->Lock();
+
+					BMessage* moved;
+					for (int32 i = 0; (moved = queue->FindMessage(i)) != NULL;
+						 i++) {
+						if (moved != message && moved->what == B_MOUSE_MOVED) {
+							// there is a newer mouse moved message in the
+							// queue, just ignore the current one, the newer one
+							// will be handled here eventually
+							queue->Unlock();
+							return;
+						}
+					}
+					queue->Unlock();
+				}
+
+				BPoint where;
+				uint32 buttons;
+				message->FindPoint("be:view_where", &where);
+				message->FindInt32("buttons", (int32*)&buttons);
+
+				if (transit == B_EXITED_VIEW || transit == B_OUTSIDE_VIEW)
+					HideToolTip();
+
+				BMessage* dragMessage = NULL;
+				if (message->HasMessage("be:drag_message")) {
+					dragMessage = new BMessage();
+					if (message->FindMessage("be:drag_message", dragMessage)
+						!= B_OK) {
+						delete dragMessage;
+						dragMessage = NULL;
+					}
+				}
+
+				MouseMoved(where, transit, dragMessage);
+				delete dragMessage;
+				break;
+			}
+
+			case B_MOUSE_UP:
+			{
+				BPoint where;
+				message->FindPoint("be:view_where", &where);
+				fMouseEventOptions = 0;
+				MouseUp(where);
 				break;
 			}
 
@@ -4968,13 +5185,19 @@ BView::MessageReceived(BMessage* message)
 				break;
 
 			case B_SCREEN_CHANGED:
+			case B_WORKSPACE_ACTIVATED:
+			case B_WORKSPACES_CHANGED:
 			{
-				// propegate message to child views
+				BWindow* window = Window();
+				if (window == NULL)
+					break;
+
+				// propagate message to child views
 				int32 childCount = CountChildren();
 				for (int32 i = 0; i < childCount; i++) {
 					BView* view = ChildAt(i);
 					if (view != NULL)
-						view->MessageReceived(message);
+						window->PostMessage(message, view);
 				}
 				break;
 			}
@@ -5754,17 +5977,14 @@ BView::_ClipToShape(BShape* shape, bool inverse)
 	if (shape == NULL)
 		return;
 
-	shape_data* sd = (shape_data*)shape->fPrivateData;
+	shape_data* sd = BShape::Private(*shape).PrivateData();
 	if (sd->opCount == 0 || sd->ptCount == 0)
 		return;
 
 	if (_CheckOwnerLockAndSwitchCurrent()) {
 		fOwner->fLink->StartMessage(AS_VIEW_CLIP_TO_SHAPE);
 		fOwner->fLink->Attach<bool>(inverse);
-		fOwner->fLink->Attach<int32>(sd->opCount);
-		fOwner->fLink->Attach<int32>(sd->ptCount);
-		fOwner->fLink->Attach(sd->opList, sd->opCount * sizeof(uint32));
-		fOwner->fLink->Attach(sd->ptList, sd->ptCount * sizeof(BPoint));
+		fOwner->fLink->AttachShape(*shape);
 		_FlushIfNotInTransaction();
 	}
 }

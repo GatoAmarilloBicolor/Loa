@@ -542,7 +542,7 @@ guarded_heap_free(void* address, uint32 flags)
 
 
 static void*
-guarded_heap_realloc(void* address, size_t newSize)
+guarded_heap_realloc(void* address, size_t newSize, uint32 flags)
 {
 	guarded_heap_area* area = guarded_heap_get_locked_area_for(sGuardedHeap,
 		address);
@@ -562,19 +562,44 @@ guarded_heap_realloc(void* address, size_t newSize)
 	if (oldSize == newSize)
 		return address;
 
-	void* newBlock = memalign(0, newSize);
+	void* newBlock = malloc_etc(newSize, flags);
 	if (newBlock == NULL)
 		return NULL;
 
 	memcpy(newBlock, address, min_c(oldSize, newSize));
 
-	free(address);
+	free_etc(address, flags);
 
 	return newBlock;
 }
 
 
 // #pragma mark - Debugger commands
+
+
+static void
+dump_guarded_heap_stack_trace(guarded_heap_page& page)
+{
+#if GUARDED_HEAP_STACK_TRACE_DEPTH > 0
+	kprintf("stack trace:\n");
+	for (size_t i = 0; i < page.stack_trace_depth; i++) {
+		addr_t address = page.stack_trace[i];
+
+		const char* symbol;
+		const char* imageName;
+		bool exactMatch;
+		addr_t baseAddress;
+
+		if (elf_debug_lookup_symbol_address(address, &baseAddress, &symbol,
+				&imageName, &exactMatch) == B_OK) {
+			kprintf("  %p  %s + 0x%lx (%s)%s\n", (void*)address, symbol,
+				address - baseAddress, imageName,
+				exactMatch ? "" : " (nearest)");
+		} else
+			kprintf("  %p\n", (void*)address);
+	}
+#endif
+}
 
 
 static int
@@ -627,26 +652,7 @@ dump_guarded_heap_page(int argc, char** argv)
 	kprintf("allocating team: %" B_PRId32 "\n", page.team);
 	kprintf("allocating thread: %" B_PRId32 "\n", page.thread);
 
-#if GUARDED_HEAP_STACK_TRACE_DEPTH > 0
-	kprintf("stack trace:\n");
-	for (size_t i = 0; i < page.stack_trace_depth; i++) {
-		addr_t address = page.stack_trace[i];
-
-		const char* symbol;
-		const char* imageName;
-		bool exactMatch;
-		addr_t baseAddress;
-
-		if (elf_debug_lookup_symbol_address(address, &baseAddress, &symbol,
-				&imageName, &exactMatch) == B_OK) {
-			kprintf("  %p  %s + 0x%lx (%s)%s\n", (void*)address, symbol,
-				address - baseAddress, imageName,
-				exactMatch ? "" : " (nearest)");
-		} else
-			kprintf("  %p\n", (void*)address);
-	}
-#endif
-
+	dump_guarded_heap_stack_trace(page);
 	return 0;
 }
 
@@ -783,6 +789,7 @@ dump_guarded_heap_allocations(int argc, char** argv)
 	thread_id thread = -1;
 	addr_t address = 0;
 	bool statsOnly = false;
+	bool stackTrace = false;
 
 	for (int32 i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "team") == 0)
@@ -793,6 +800,10 @@ dump_guarded_heap_allocations(int argc, char** argv)
 			address = parse_expression(argv[++i]);
 		else if (strcmp(argv[i], "stats") == 0)
 			statsOnly = true;
+#if GUARDED_HEAP_STACK_TRACE_DEPTH > 0
+		else if (strcmp(argv[i], "trace") == 0)
+			stackTrace = true;
+#endif
 		else {
 			print_debugger_command_usage(argv[0]);
 			return 0;
@@ -818,6 +829,9 @@ dump_guarded_heap_allocations(int argc, char** argv)
 						"address: 0x%08" B_PRIxADDR "; size: %" B_PRIuSIZE
 						" bytes\n", page.team, page.thread,
 						(addr_t)page.allocation_base, page.allocation_size);
+
+					if (stackTrace)
+						dump_guarded_heap_stack_trace(page);
 				}
 
 				totalSize += page.allocation_size;
@@ -892,10 +906,18 @@ heap_init_post_sem()
 		0);
 	add_debugger_command_etc("allocations", &dump_guarded_heap_allocations,
 		"Dump current heap allocations",
+#if GUARDED_HEAP_STACK_TRACE_DEPTH == 0
 		"[\"stats\"] [team] [thread] [address]\n"
+#else
+		"[\"stats\"|\"trace\"] [team] [thread] [address]\n"
+#endif
 		"If no parameters are given, all current alloactions are dumped.\n"
 		"If the optional argument \"stats\" is specified, only the allocation\n"
 		"counts and no individual allocations are printed.\n"
+#if GUARDED_HEAP_STACK_TRACE_DEPTH > 0
+		"If the optional argument \"trace\" is specified, a stack trace for\n"
+		"each allocation is printed.\n"
+#endif
 		"If a specific allocation address is given, only this allocation is\n"
 		"dumped.\n"
 		"If a team and/or thread is specified, only allocations of this\n"
@@ -922,6 +944,17 @@ memalign_etc(size_t alignment, size_t size, uint32 flags)
 }
 
 
+extern "C" int
+posix_memalign(void** _pointer, size_t alignment, size_t size)
+{
+	if ((alignment & (sizeof(void*) - 1)) != 0 || _pointer == NULL)
+		return B_BAD_VALUE;
+
+	*_pointer = guarded_heap_allocate(sGuardedHeap, size, alignment, 0);
+	return 0;
+}
+
+
 void
 free_etc(void *address, uint32 flags)
 {
@@ -944,17 +977,24 @@ free(void* address)
 
 
 void*
-realloc(void* address, size_t newSize)
+realloc_etc(void* address, size_t newSize, uint32 flags)
 {
 	if (newSize == 0) {
-		free(address);
+		free_etc(address, flags);
 		return NULL;
 	}
 
 	if (address == NULL)
-		return memalign(0, newSize);
+		return malloc_etc(newSize, flags);
 
-	return guarded_heap_realloc(address, newSize);
+	return guarded_heap_realloc(address, newSize, flags);
+}
+
+
+void*
+realloc(void* address, size_t newSize)
+{
+	return realloc_etc(address, newSize, 0);
 }
 
 

@@ -8,51 +8,253 @@
  *		Salvatore Benedetto <salvatore.benedetto@gmail.com>
  */
 
+
+#include <stdio.h>
+
 #include <module.h>
-#include <PCI.h>
-#include <PCI_x86.h>
+#include <bus/PCI.h>
 #include <USB3.h>
 #include <KernelExport.h>
 
 #include "uhci.h"
 
+
+#define CALLED(x...)	TRACE_MODULE("CALLED %s\n", __PRETTY_FUNCTION__)
+
 #define USB_MODULE_NAME "uhci"
 
-pci_module_info *UHCI::sPCIModule = NULL;
-pci_x86_module_info *UHCI::sPCIx86Module = NULL;
+device_manager_info* gDeviceManager;
+static usb_for_controller_interface* gUSB;
 
 
-static int32
-uhci_std_ops(int32 op, ...)
+#define UHCI_PCI_DEVICE_MODULE_NAME "busses/usb/uhci/pci/driver_v1"
+#define UHCI_PCI_USB_BUS_MODULE_NAME "busses/usb/uhci/device_v1"
+
+
+typedef struct {
+	UHCI* uhci;
+	pci_device_module_info* pci;
+	pci_device* device;
+
+	pci_info pciinfo;
+
+	device_node* node;
+	device_node* driver_node;
+} uhci_pci_sim_info;
+
+
+//	#pragma mark -
+
+
+static status_t
+init_bus(device_node* node, void** bus_cookie)
 {
-	switch (op) {
-		case B_MODULE_INIT:
-			TRACE_MODULE("init module\n");
-			return B_OK;
-		case B_MODULE_UNINIT:
-			TRACE_MODULE("uninit module\n");
-			break;
-		default:
-			return EINVAL;
+	CALLED();
+
+	driver_module_info* driver;
+	uhci_pci_sim_info* bus;
+	device_node* parent = gDeviceManager->get_parent_node(node);
+	gDeviceManager->get_driver(parent, &driver, (void**)&bus);
+	gDeviceManager->put_node(parent);
+
+	Stack *stack;
+	if (gUSB->get_stack((void**)&stack) != B_OK)
+		return B_ERROR;
+
+	UHCI *uhci = new(std::nothrow) UHCI(&bus->pciinfo, bus->pci, bus->device, stack, node);
+	if (uhci == NULL) {
+		return B_NO_MEMORY;
 	}
+
+	if (uhci->InitCheck() < B_OK) {
+		TRACE_MODULE_ERROR("bus failed init check\n");
+		delete uhci;
+		return B_ERROR;
+	}
+
+	if (uhci->Start() != B_OK) {
+		delete uhci;
+		return B_ERROR;
+	}
+
+	*bus_cookie = uhci;
 
 	return B_OK;
 }
 
 
-usb_host_controller_info uhci_module = {
+static void
+uninit_bus(void* bus_cookie)
+{
+	CALLED();
+	UHCI* uhci = (UHCI*)bus_cookie;
+	delete uhci;
+}
+
+
+static status_t
+register_child_devices(void* cookie)
+{
+	CALLED();
+	uhci_pci_sim_info* bus = (uhci_pci_sim_info*)cookie;
+	device_node* node = bus->driver_node;
+
+	char prettyName[25];
+	sprintf(prettyName, "UHCI Controller %" B_PRIu16, 0);
+
+	device_attr attrs[] = {
+		// properties of this controller for the usb bus manager
+		{ B_DEVICE_PRETTY_NAME, B_STRING_TYPE,
+			{ .string = prettyName }},
+		{ B_DEVICE_FIXED_CHILD, B_STRING_TYPE,
+			{ .string = USB_FOR_CONTROLLER_MODULE_NAME }},
+
+		// private data to identify the device
+		{ NULL }
+	};
+
+	return gDeviceManager->register_node(node, UHCI_PCI_USB_BUS_MODULE_NAME,
+		attrs, NULL, NULL);
+}
+
+
+static status_t
+init_device(device_node* node, void** device_cookie)
+{
+	CALLED();
+	uhci_pci_sim_info* bus = (uhci_pci_sim_info*)calloc(1,
+		sizeof(uhci_pci_sim_info));
+	if (bus == NULL)
+		return B_NO_MEMORY;
+
+	pci_device_module_info* pci;
+	pci_device* device;
 	{
-		"busses/usb/uhci",
-		0,
-		uhci_std_ops
-	},
-	NULL,
-	UHCI::AddTo
+		device_node* pciParent = gDeviceManager->get_parent_node(node);
+		gDeviceManager->get_driver(pciParent, (driver_module_info**)&pci,
+			(void**)&device);
+		gDeviceManager->put_node(pciParent);
+	}
+
+	bus->pci = pci;
+	bus->device = device;
+	bus->driver_node = node;
+
+	pci_info *pciInfo = &bus->pciinfo;
+	pci->get_pci_info(device, pciInfo);
+
+	*device_cookie = bus;
+	return B_OK;
+}
+
+
+static void
+uninit_device(void* device_cookie)
+{
+	CALLED();
+	uhci_pci_sim_info* bus = (uhci_pci_sim_info*)device_cookie;
+	free(bus);
+}
+
+
+static status_t
+register_device(device_node* parent)
+{
+	CALLED();
+	device_attr attrs[] = {
+		{B_DEVICE_PRETTY_NAME, B_STRING_TYPE, {.string = "UHCI PCI"}},
+		{}
+	};
+
+	return gDeviceManager->register_node(parent,
+		UHCI_PCI_DEVICE_MODULE_NAME, attrs, NULL, NULL);
+}
+
+
+static float
+supports_device(device_node* parent)
+{
+	CALLED();
+	const char* bus;
+	uint16 type, subType, api;
+
+	// make sure parent is a UHCI PCI device node
+	if (gDeviceManager->get_attr_string(parent, B_DEVICE_BUS, &bus, false)
+		< B_OK) {
+		return -1;
+	}
+
+	if (strcmp(bus, "pci") != 0)
+		return 0.0f;
+
+	if (gDeviceManager->get_attr_uint16(parent, B_DEVICE_SUB_TYPE, &subType,
+			false) < B_OK
+		|| gDeviceManager->get_attr_uint16(parent, B_DEVICE_TYPE, &type,
+			false) < B_OK
+		|| gDeviceManager->get_attr_uint16(parent, B_DEVICE_INTERFACE, &api,
+			false) < B_OK) {
+		TRACE_MODULE("Could not find type/subtype/interface attributes\n");
+		return -1;
+	}
+
+	if (type == PCI_serial_bus && subType == PCI_usb && api == PCI_usb_uhci) {
+		pci_device_module_info* pci;
+		pci_device* device;
+		gDeviceManager->get_driver(parent, (driver_module_info**)&pci,
+			(void**)&device);
+		TRACE_MODULE("UHCI Device found!\n");
+
+		return 0.8f;
+	}
+
+	return 0.0f;
+}
+
+
+module_dependency module_dependencies[] = {
+	{ USB_FOR_CONTROLLER_MODULE_NAME, (module_info**)&gUSB },
+	{ B_DEVICE_MANAGER_MODULE_NAME, (module_info**)&gDeviceManager },
+	{}
 };
 
 
-module_info *modules[] = {
-	(module_info *)&uhci_module,
+static usb_bus_interface gUHCIPCIDeviceModule = {
+	{
+		{
+			UHCI_PCI_USB_BUS_MODULE_NAME,
+			0,
+			NULL
+		},
+		NULL,  // supports device
+		NULL,  // register device
+		init_bus,
+		uninit_bus,
+		NULL,  // register child devices
+		NULL,  // rescan
+		NULL,  // device removed
+	},
+};
+
+// Root device that binds to the PCI bus. It will register an usb_bus_interface
+// node for each device.
+static driver_module_info sUHCIDevice = {
+	{
+		UHCI_PCI_DEVICE_MODULE_NAME,
+		0,
+		NULL
+	},
+	supports_device,
+	register_device,
+	init_device,
+	uninit_device,
+	register_child_devices,
+	NULL, // rescan
+	NULL, // device removed
+};
+
+module_info* modules[] = {
+	(module_info* )&sUHCIDevice,
+	(module_info* )&gUHCIPCIDeviceModule,
 	NULL
 };
 
@@ -215,7 +417,7 @@ Queue::AppendTransfer(uhci_qh *transfer, bool lock)
 	} else {
 		// append the transfer queue to the list
 		uhci_qh *element = fQueueTop;
-		while (element && element->link_log)
+		while (element->link_log != NULL)
 			element = (uhci_qh *)element->link_log;
 
 		element->link_log = transfer;
@@ -298,9 +500,12 @@ Queue::PrintToStream()
 //
 
 
-UHCI::UHCI(pci_info *info, Stack *stack)
-	:	BusManager(stack),
+UHCI::UHCI(pci_info *info, pci_device_module_info* pci, pci_device* device, Stack *stack,
+	device_node* node)
+	:	BusManager(stack, node),
 		fPCIInfo(info),
+		fPci(pci),
+		fDevice(device),
 		fStack(stack),
 		fEnabledInterrupts(0),
 		fFrameArea(-1),
@@ -341,8 +546,7 @@ UHCI::UHCI(pci_info *info, Stack *stack)
 	TRACE("constructing new UHCI host controller driver\n");
 	fInitOK = false;
 
-	fRegisterBase = sPCIModule->read_pci_config(fPCIInfo->bus,
-		fPCIInfo->device, fPCIInfo->function, PCI_memory_base, 4);
+	fRegisterBase = fPci->read_pci_config(fDevice, PCI_memory_base, 4);
 	fRegisterBase &= PCI_address_io_mask;
 	TRACE("iospace offset: 0x%08" B_PRIx32 "\n", fRegisterBase);
 
@@ -353,18 +557,15 @@ UHCI::UHCI(pci_info *info, Stack *stack)
 
 	// enable pci address access
 	uint16 command = PCI_command_io | PCI_command_master | PCI_command_memory;
-	command |= sPCIModule->read_pci_config(fPCIInfo->bus, fPCIInfo->device,
-		fPCIInfo->function, PCI_command, 2);
+	command |= fPci->read_pci_config(fDevice, PCI_command, 2);
 
-	sPCIModule->write_pci_config(fPCIInfo->bus, fPCIInfo->device,
-		fPCIInfo->function, PCI_command, 2, command);
+	fPci->write_pci_config(fDevice, PCI_command, 2, command);
 
 	// disable interrupts
 	WriteReg16(UHCI_USBINTR, 0);
 
 	// make sure we gain control of the UHCI controller instead of the BIOS
-	sPCIModule->write_pci_config(fPCIInfo->bus, fPCIInfo->device,
-		fPCIInfo->function, PCI_LEGSUP, 2, PCI_LEGSUP_USBPIRQDEN
+	fPci->write_pci_config(fDevice, PCI_LEGSUP, 2, PCI_LEGSUP_USBPIRQDEN
 		| PCI_LEGSUP_CLEAR_SMI);
 
 	// do a global and host reset
@@ -483,17 +684,23 @@ UHCI::UHCI(pci_info *info, Stack *stack)
 
 	// Find the right interrupt vector, using MSIs if available.
 	fIRQ = fPCIInfo->u.h0.interrupt_line;
-	if (sPCIx86Module != NULL && sPCIx86Module->get_msi_count(fPCIInfo->bus,
-			fPCIInfo->device, fPCIInfo->function) >= 1) {
-		uint8 msiVector = 0;
-		if (sPCIx86Module->configure_msi(fPCIInfo->bus, fPCIInfo->device,
-				fPCIInfo->function, 1, &msiVector) == B_OK
-			&& sPCIx86Module->enable_msi(fPCIInfo->bus, fPCIInfo->device,
-				fPCIInfo->function) == B_OK) {
+		if (fIRQ == 0xFF)
+			fIRQ = 0;
+
+	if (fPci->get_msi_count(fDevice) >= 1) {
+		uint32 msiVector = 0;
+		if (fPci->configure_msi(fDevice, 1, &msiVector) == B_OK
+			&& fPci->enable_msi(fDevice) == B_OK) {
 			TRACE_ALWAYS("using message signaled interrupts\n");
 			fIRQ = msiVector;
 			fUseMSI = true;
 		}
+	}
+
+	if (fIRQ == 0) {
+		TRACE_MODULE_ERROR("device PCI:%d:%d:%d was assigned an invalid IRQ\n",
+			fPCIInfo->bus, fPCIInfo->device, fPCIInfo->function);
+		return;
 	}
 
 	// Install the interrupt handler
@@ -554,17 +761,11 @@ UHCI::~UHCI()
 	delete fRootHub;
 	delete_area(fFrameArea);
 
-	if (fUseMSI && sPCIx86Module != NULL) {
-		sPCIx86Module->disable_msi(fPCIInfo->bus,
-			fPCIInfo->device, fPCIInfo->function);
-		sPCIx86Module->unconfigure_msi(fPCIInfo->bus,
-			fPCIInfo->device, fPCIInfo->function);
+	if (fUseMSI) {
+		fPci->disable_msi(fDevice);
+		fPci->unconfigure_msi(fDevice);
 	}
-	put_module(B_PCI_MODULE_NAME);
-	if (sPCIx86Module != NULL) {
-		sPCIx86Module = NULL;
-		put_module(B_PCI_X86_MODULE_NAME);
-	}
+
 	Unlock();
 }
 
@@ -613,6 +814,8 @@ UHCI::Start()
 
 	SetRootHub(fRootHub);
 
+	fRootHub->RegisterNode(Node());
+
 	TRACE("controller is started. status: %u curframe: %u\n",
 		ReadReg16(UHCI_USBSTS), ReadReg16(UHCI_FRNUM));
 	TRACE_ALWAYS("successfully started the controller\n");
@@ -633,8 +836,14 @@ UHCI::SubmitTransfer(Transfer *transfer)
 		return SubmitRequest(transfer);
 
 	// Process isochronous transfers
+#if 0
 	if (pipe->Type() & USB_OBJECT_ISO_PIPE)
 		return SubmitIsochronous(transfer);
+#else
+	// At present, isochronous transfers cause busylooping, and do not seem to work.
+	if (pipe->Type() & USB_OBJECT_ISO_PIPE)
+		return B_NOT_SUPPORTED;
+#endif
 
 	uhci_td *firstDescriptor = NULL;
 	uhci_qh *transferQueue = NULL;
@@ -724,11 +933,11 @@ UHCI::CheckDebugTransfer(Transfer *transfer)
 		uint8 lastDataToggle = 0;
 		if (transfer->TransferPipe()->Direction() == Pipe::In) {
 			// data to read out
-			iovec *vector = transfer->Vector();
+			generic_io_vec *vector = transfer->Vector();
 			size_t vectorCount = transfer->VectorCount();
 
 			ReadDescriptorChain(transferData->first_descriptor,
-				vector, vectorCount, &lastDataToggle);
+				vector, vectorCount, transfer->IsPhysical(), &lastDataToggle);
 		} else {
 			// read the actual length that was sent
 			ReadActualLength(transferData->first_descriptor, &lastDataToggle);
@@ -797,18 +1006,13 @@ UHCI::CancelQueuedTransfers(Pipe *pipe, bool force)
 				descriptor = (uhci_td *)descriptor->link_log;
 			}
 
-			if (!force) {
-				// if the transfer is canceled by force, the one causing the
-				// cancel is probably not the one who initiated the transfer
-				// and the callback is likely not safe anymore
-				transfer_entry *entry
-					= (transfer_entry *)malloc(sizeof(transfer_entry));
-				if (entry != NULL) {
-					entry->transfer = current->transfer;
-					current->transfer = NULL;
-					entry->next = list;
-					list = entry;
-				}
+			transfer_entry *entry
+				= (transfer_entry *)malloc(sizeof(transfer_entry));
+			if (entry != NULL) {
+				entry->transfer = current->transfer;
+				current->transfer = NULL;
+				entry->next = list;
+				list = entry;
 			}
 
 			current->canceled = true;
@@ -820,7 +1024,13 @@ UHCI::CancelQueuedTransfers(Pipe *pipe, bool force)
 
 	while (list != NULL) {
 		transfer_entry *next = list->next;
-		list->transfer->Finished(B_CANCELED, 0);
+
+		// if the transfer is canceled by force, the one causing the
+		// cancel is possibly not the one who initiated the transfer
+		// and the callback is likely not safe anymore
+		if (!force)
+			list->transfer->Finished(B_CANCELED, 0);
+
 		delete list->transfer;
 		free(list);
 		list = next;
@@ -885,10 +1095,10 @@ UHCI::SubmitRequest(Transfer *transfer)
 		return B_NO_MEMORY;
 	}
 
-	iovec vector;
-	vector.iov_base = requestData;
-	vector.iov_len = sizeof(usb_request_data);
-	WriteDescriptorChain(setupDescriptor, &vector, 1);
+	generic_io_vec vector;
+	vector.base = (generic_addr_t)requestData;
+	vector.length = sizeof(usb_request_data);
+	WriteDescriptorChain(setupDescriptor, &vector, 1, false);
 
 	statusDescriptor->status |= TD_CONTROL_IOC;
 	statusDescriptor->token |= TD_TOKEN_DATA1;
@@ -900,7 +1110,7 @@ UHCI::SubmitRequest(Transfer *transfer)
 		uhci_td *lastDescriptor = NULL;
 		status_t result = CreateDescriptorChain(pipe, &dataDescriptor,
 			&lastDescriptor, directionIn ? TD_TOKEN_IN : TD_TOKEN_OUT,
-			transfer->VectorLength());
+			transfer->FragmentLength());
 
 		if (result < B_OK) {
 			FreeDescriptor(setupDescriptor);
@@ -910,7 +1120,7 @@ UHCI::SubmitRequest(Transfer *transfer)
 
 		if (!directionIn) {
 			WriteDescriptorChain(dataDescriptor, transfer->Vector(),
-				transfer->VectorCount());
+				transfer->VectorCount(), transfer->IsPhysical());
 		}
 
 		LinkDescriptors(setupDescriptor, dataDescriptor);
@@ -971,6 +1181,21 @@ UHCI::AddPendingTransfer(Transfer *transfer, Queue *queue,
 	if (!Lock()) {
 		delete data;
 		return B_ERROR;
+	}
+
+	// We do not support queuing other transfers in tandem with a fragmented one.
+	transfer_data *it = fFirstTransfer;
+	while (it) {
+		if (it->transfer && it->transfer->TransferPipe() == transfer->TransferPipe()
+				&& it->transfer->IsFragmented()) {
+			TRACE_ERROR("cannot submit transfer: a fragmented transfer is queued\n");
+
+			Unlock();
+			delete data;
+			return B_DEV_RESOURCE_CONFLICT;
+		}
+
+		it = it->link;
 	}
 
 	if (fLastTransfer)
@@ -1090,15 +1315,9 @@ UHCI::SubmitIsochronous(Transfer *transfer)
 
 	// If direction is out set every descriptor data
 	if (!directionIn) {
-		iovec *vector = transfer->Vector();
+		generic_io_vec *vector = transfer->Vector();
 		WriteIsochronousDescriptorChain(isoRequest,
 			isochronousData->packet_count, vector);
-	} else {
-		// Initialize the packet descriptors
-		for (uint32 i = 0; i < isochronousData->packet_count; i++) {
-			isochronousData->packet_descriptors[i].actual_length = 0;
-			isochronousData->packet_descriptors[i].status = B_NO_INIT;
-		}
 	}
 
 	TRACE("isochronous submitted size=%ld bytes, TDs=%" B_PRId32 ", "
@@ -1312,7 +1531,7 @@ UHCI::FinishTransfers()
 						// the error counter counted down to zero, report why
 						int32 reasons = 0;
 						if (status & TD_STATUS_ERROR_BUFFER) {
-							callbackStatus = transfer->incoming ? B_DEV_DATA_OVERRUN : B_DEV_DATA_UNDERRUN;
+							callbackStatus = transfer->incoming ? B_DEV_WRITE_ERROR : B_DEV_READ_ERROR;
 							reasons++;
 						}
 						if (status & TD_STATUS_ERROR_TIMEOUT) {
@@ -1332,7 +1551,7 @@ UHCI::FinishTransfers()
 							callbackStatus = B_DEV_MULTIPLE_ERRORS;
 					} else if (status & TD_STATUS_ERROR_BABBLE) {
 						// there is a babble condition
-						callbackStatus = transfer->incoming ? B_DEV_FIFO_OVERRUN : B_DEV_FIFO_UNDERRUN;
+						callbackStatus = transfer->incoming ? B_DEV_DATA_OVERRUN : B_DEV_DATA_UNDERRUN;
 					} else {
 						// if the error counter didn't count down to zero
 						// and there was no babble, then this halt was caused
@@ -1392,13 +1611,13 @@ UHCI::FinishTransfers()
 					uint8 lastDataToggle = 0;
 					if (transfer->data_descriptor && transfer->incoming) {
 						// data to read out
-						iovec *vector = transfer->transfer->Vector();
+						generic_io_vec *vector = transfer->transfer->Vector();
 						size_t vectorCount = transfer->transfer->VectorCount();
 
 						transfer->transfer->PrepareKernelAccess();
 						actualLength = ReadDescriptorChain(
 							transfer->data_descriptor,
-							vector, vectorCount,
+							vector, vectorCount, transfer->transfer->IsPhysical(),
 							&lastDataToggle);
 					} else if (transfer->data_descriptor) {
 						// read the actual length that was sent
@@ -1412,9 +1631,9 @@ UHCI::FinishTransfers()
 						// this transfer may still have data left
 						TRACE("advancing fragmented transfer\n");
 						transfer->transfer->AdvanceByFragment(actualLength);
-						if (transfer->transfer->VectorLength() > 0) {
+						if (transfer->transfer->FragmentLength() > 0) {
 							TRACE("still %ld bytes left on transfer\n",
-								transfer->transfer->VectorLength());
+								transfer->transfer->FragmentLength());
 
 							Transfer *resubmit = transfer->transfer;
 
@@ -1567,7 +1786,7 @@ UHCI::FinishIsochronousTransfers()
 					// remove the descriptors.
 				if (transfer && transfer->is_active) {
 					if (current->token & TD_TOKEN_IN) {
-						iovec *vector = transfer->transfer->Vector();
+						generic_io_vec *vector = transfer->transfer->Vector();
 						transfer->transfer->PrepareKernelAccess();
 						ReadIsochronousDescriptorChain(transfer, vector);
 					}
@@ -1860,89 +2079,6 @@ UHCI::Interrupt()
 
 
 status_t
-UHCI::AddTo(Stack *stack)
-{
-#ifdef TRACE_USB
-	set_dprintf_enabled(true);
-#endif
-
-	if (!sPCIModule) {
-		status_t status = get_module(B_PCI_MODULE_NAME, (module_info **)&sPCIModule);
-		if (status < B_OK) {
-			TRACE_MODULE_ERROR("AddTo(): getting pci module failed! 0x%08"
-				B_PRIx32 "\n", status);
-			return status;
-		}
-	}
-
-	TRACE_MODULE("AddTo(): setting up hardware\n");
-
-	bool found = false;
-	pci_info *item = new(std::nothrow) pci_info;
-	if (!item) {
-		sPCIModule = NULL;
-		put_module(B_PCI_MODULE_NAME);
-		return B_NO_MEMORY;
-	}
-
-	// Try to get the PCI x86 module as well so we can enable possible MSIs.
-	if (sPCIx86Module == NULL && get_module(B_PCI_X86_MODULE_NAME,
-			(module_info **)&sPCIx86Module) != B_OK) {
-		// If it isn't there, that's not critical though.
-		TRACE_MODULE_ERROR("failed to get pci x86 module\n");
-		sPCIx86Module = NULL;
-	}
-
-	for (int32 i = 0; sPCIModule->get_nth_pci_info(i, item) >= B_OK; i++) {
-
-		if (item->class_base == PCI_serial_bus && item->class_sub == PCI_usb
-			&& item->class_api == PCI_usb_uhci) {
-			if (item->u.h0.interrupt_line == 0
-				|| item->u.h0.interrupt_line == 0xFF) {
-				TRACE_MODULE_ERROR("AddTo(): found with invalid IRQ - check IRQ assignement\n");
-				continue;
-			}
-
-			TRACE_MODULE("AddTo(): found at IRQ %u\n",
-				item->u.h0.interrupt_line);
-			UHCI *bus = new(std::nothrow) UHCI(item, stack);
-			if (!bus) {
-				delete item;
-				sPCIModule = NULL;
-				put_module(B_PCI_MODULE_NAME);
-				return B_NO_MEMORY;
-			}
-
-			if (bus->InitCheck() < B_OK) {
-				TRACE_MODULE_ERROR("AddTo(): InitCheck() failed 0x%08" B_PRIx32
-					"\n", bus->InitCheck());
-				delete bus;
-				continue;
-			}
-
-			// the bus took it away
-			item = new(std::nothrow) pci_info;
-
-			bus->Start();
-			stack->AddBusManager(bus);
-			found = true;
-		}
-	}
-
-	if (!found) {
-		TRACE_MODULE_ERROR("no devices found\n");
-		delete item;
-		sPCIModule = NULL;
-		put_module(B_PCI_MODULE_NAME);
-		return ENODEV;
-	}
-
-	delete item;
-	return B_OK;
-}
-
-
-status_t
 UHCI::CreateFilledTransfer(Transfer *transfer, uhci_td **_firstDescriptor,
 	uhci_qh **_transferQueue)
 {
@@ -1953,7 +2089,7 @@ UHCI::CreateFilledTransfer(Transfer *transfer, uhci_td **_firstDescriptor,
 	uhci_td *lastDescriptor = NULL;
 	status_t result = CreateDescriptorChain(pipe, &firstDescriptor,
 		&lastDescriptor, directionIn ? TD_TOKEN_IN : TD_TOKEN_OUT,
-		transfer->VectorLength());
+		transfer->FragmentLength());
 
 	if (result < B_OK)
 		return result;
@@ -1966,7 +2102,7 @@ UHCI::CreateFilledTransfer(Transfer *transfer, uhci_td **_firstDescriptor,
 
 	if (!directionIn) {
 		WriteDescriptorChain(firstDescriptor, transfer->Vector(),
-			transfer->VectorCount());
+			transfer->VectorCount(), transfer->IsPhysical());
 	}
 
 	uhci_qh *transferQueue = CreateTransferQueue(firstDescriptor);
@@ -2138,8 +2274,8 @@ UHCI::LinkDescriptors(uhci_td *first, uhci_td *second)
 
 
 size_t
-UHCI::WriteDescriptorChain(uhci_td *topDescriptor, iovec *vector,
-	size_t vectorCount)
+UHCI::WriteDescriptorChain(uhci_td *topDescriptor, generic_io_vec *vector,
+	size_t vectorCount, bool physical)
 {
 	uhci_td *current = topDescriptor;
 	size_t actualLength = 0;
@@ -2153,19 +2289,21 @@ UHCI::WriteDescriptorChain(uhci_td *topDescriptor, iovec *vector,
 
 		while (true) {
 			size_t length = min_c(current->buffer_size - bufferOffset,
-				vector[vectorIndex].iov_len - vectorOffset);
+				vector[vectorIndex].length - vectorOffset);
 
 			TRACE("copying %ld bytes to bufferOffset %ld from"
 				" vectorOffset %ld at index %ld of %ld\n", length, bufferOffset,
 				vectorOffset, vectorIndex, vectorCount);
-			memcpy((uint8 *)current->buffer_log + bufferOffset,
-				(uint8 *)vector[vectorIndex].iov_base + vectorOffset, length);
+			status_t status = generic_memcpy(
+				(generic_addr_t)current->buffer_log + bufferOffset, false,
+				vector[vectorIndex].base + vectorOffset, physical, length);
+			ASSERT_ALWAYS(status == B_OK);
 
 			actualLength += length;
 			vectorOffset += length;
 			bufferOffset += length;
 
-			if (vectorOffset >= vector[vectorIndex].iov_len) {
+			if (vectorOffset >= vector[vectorIndex].length) {
 				if (++vectorIndex >= vectorCount) {
 					TRACE("wrote descriptor chain (%ld bytes, no more vectors)\n",
 						actualLength);
@@ -2193,8 +2331,8 @@ UHCI::WriteDescriptorChain(uhci_td *topDescriptor, iovec *vector,
 
 
 size_t
-UHCI::ReadDescriptorChain(uhci_td *topDescriptor, iovec *vector,
-	size_t vectorCount, uint8 *lastDataToggle)
+UHCI::ReadDescriptorChain(uhci_td *topDescriptor, generic_io_vec *vector,
+	size_t vectorCount, bool physical, uint8 *lastDataToggle)
 {
 	uint8 dataToggle = 0;
 	uhci_td *current = topDescriptor;
@@ -2212,19 +2350,21 @@ UHCI::ReadDescriptorChain(uhci_td *topDescriptor, iovec *vector,
 
 		while (true) {
 			size_t length = min_c(bufferSize - bufferOffset,
-				vector[vectorIndex].iov_len - vectorOffset);
+				vector[vectorIndex].length - vectorOffset);
 
 			TRACE("copying %ld bytes to vectorOffset %ld from"
 				" bufferOffset %ld at index %ld of %ld\n", length, vectorOffset,
 				bufferOffset, vectorIndex, vectorCount);
-			memcpy((uint8 *)vector[vectorIndex].iov_base + vectorOffset,
-				(uint8 *)current->buffer_log + bufferOffset, length);
+			status_t status = generic_memcpy(
+				vector[vectorIndex].base + vectorOffset, physical,
+				(generic_addr_t)current->buffer_log + bufferOffset, false, length);
+			ASSERT_ALWAYS(status == B_OK);
 
 			actualLength += length;
 			vectorOffset += length;
 			bufferOffset += length;
 
-			if (vectorOffset >= vector[vectorIndex].iov_len) {
+			if (vectorOffset >= vector[vectorIndex].length) {
 				if (++vectorIndex >= vectorCount) {
 					TRACE("read descriptor chain (%ld bytes, no more vectors)\n",
 						actualLength);
@@ -2283,13 +2423,13 @@ UHCI::ReadActualLength(uhci_td *topDescriptor, uint8 *lastDataToggle)
 
 void
 UHCI::WriteIsochronousDescriptorChain(uhci_td **isoRequest, uint32 packetCount,
-	iovec *vector)
+	generic_io_vec *vector)
 {
 	size_t vectorOffset = 0;
 	for (uint32 i = 0; i < packetCount; i++) {
 		size_t bufferSize = isoRequest[i]->buffer_size;
 		memcpy((uint8 *)isoRequest[i]->buffer_log,
-			(uint8 *)vector->iov_base + vectorOffset, bufferSize);
+			(uint8 *)vector->base + vectorOffset, bufferSize);
 		vectorOffset += bufferSize;
 	}
 }
@@ -2297,7 +2437,7 @@ UHCI::WriteIsochronousDescriptorChain(uhci_td **isoRequest, uint32 packetCount,
 
 void
 UHCI::ReadIsochronousDescriptorChain(isochronous_transfer_data *transfer,
-	iovec *vector)
+	generic_io_vec *vector)
 {
 	size_t vectorOffset = 0;
 	usb_isochronous_data *isochronousData
@@ -2318,7 +2458,7 @@ UHCI::ReadIsochronousDescriptorChain(isochronous_transfer_data *transfer,
 			vectorOffset += bufferSize;
 			continue;
 		}
-		memcpy((uint8 *)vector->iov_base + vectorOffset,
+		memcpy((uint8 *)vector->base + vectorOffset,
 			(uint8 *)current->buffer_log, bufferSize);
 
 		vectorOffset += bufferSize;
@@ -2343,40 +2483,40 @@ UHCI::UnlockIsochronous()
 inline void
 UHCI::WriteReg8(uint32 reg, uint8 value)
 {
-	sPCIModule->write_io_8(fRegisterBase + reg, value);
+	fPci->write_io_8(fDevice, fRegisterBase + reg, value);
 }
 
 
 inline void
 UHCI::WriteReg16(uint32 reg, uint16 value)
 {
-	sPCIModule->write_io_16(fRegisterBase + reg, value);
+	fPci->write_io_16(fDevice, fRegisterBase + reg, value);
 }
 
 
 inline void
 UHCI::WriteReg32(uint32 reg, uint32 value)
 {
-	sPCIModule->write_io_32(fRegisterBase + reg, value);
+	fPci->write_io_32(fDevice, fRegisterBase + reg, value);
 }
 
 
 inline uint8
 UHCI::ReadReg8(uint32 reg)
 {
-	return sPCIModule->read_io_8(fRegisterBase + reg);
+	return fPci->read_io_8(fDevice, fRegisterBase + reg);
 }
 
 
 inline uint16
 UHCI::ReadReg16(uint32 reg)
 {
-	return sPCIModule->read_io_16(fRegisterBase + reg);
+	return fPci->read_io_16(fDevice, fRegisterBase + reg);
 }
 
 
 inline uint32
 UHCI::ReadReg32(uint32 reg)
 {
-	return sPCIModule->read_io_32(fRegisterBase + reg);
+	return fPci->read_io_32(fDevice, fRegisterBase + reg);
 }

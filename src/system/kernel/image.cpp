@@ -18,6 +18,7 @@
 #include <thread_types.h>
 #include <user_debugger.h>
 #include <util/AutoLock.h>
+#include <util/ThreadAutoLock.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -209,19 +210,25 @@ count_images(Team *team)
 status_t
 remove_images(Team *team)
 {
-	struct image *image;
+	struct image *image = NULL;
 
 	ASSERT(team != NULL);
 
 	mutex_lock(&sImageMutex);
 
-	while ((image = (struct image*)list_remove_head_item(&team->image_list))
-			!= NULL) {
+	struct list images = {};
+	list_move_to_list(&team->image_list, &images);
+	while ((image = (struct image*)list_get_next_item(&images,
+			image)) != NULL) {
 		sImageTable->Remove(image);
-		free(image);
 	}
 
 	mutex_unlock(&sImageMutex);
+
+	while ((image = (struct image*)list_remove_head_item(&images))
+			!= NULL) {
+		free(image);
+	}
 
 	return B_OK;
 }
@@ -425,21 +432,18 @@ notify_loading_app(status_t result, bool suspend)
 
 	TeamLocker teamLocker(team);
 
-	if (team->loading_info) {
+	if (team->loading_info != NULL) {
 		// there's indeed someone waiting
-		struct team_loading_info* loadingInfo = team->loading_info;
-		team->loading_info = NULL;
-
-		loadingInfo->result = result;
-		loadingInfo->done = true;
-
-		// we're done with the team stuff, get the scheduler lock instead
-		teamLocker.Unlock();
 
 		thread_prepare_suspend();
 
 		// wake up the waiting thread
-		thread_continue(loadingInfo->thread);
+		team->loading_info->result = result;
+		team->loading_info->condition.NotifyAll();
+		team->loading_info = NULL;
+
+		// we're done with the team stuff
+		teamLocker.Unlock();
 
 		// suspend ourselves, if desired
 		if (suspend)

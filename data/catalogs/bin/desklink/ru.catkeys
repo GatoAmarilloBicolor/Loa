@@ -1,15 +1,16 @@
-1	russian	x-vnd.Haiku-desklink	4132238754
-Control physical output	MediaReplicant		Управлять физическим выходом
-Couldn't launch 	MediaReplicant		Не удалось запустить 
+1	russian	x-vnd.Haiku-desklink	2223625451
+desklink	MediaReplicant	Title of an alert box	desklink
 Muted	MediaReplicant		Приглушено
-OK	MediaReplicant		ОК
-Sound preferences…	MediaReplicant		Настройки звуков…
 %g dB	MediaReplicant		%g дБ
-Open %name	DeskButton	Don't translate variable %name	Открыть %name
-No media server running	VolumeControl		Медиа сервер не запущен
-Media preferences…	MediaReplicant		Настройки медиа…
+OK	MediaReplicant		ОК
+Sounds preferences…	MediaReplicant		Настройки звука…
+Couldn't launch 	MediaReplicant		Не удалось запустить 
+Volume	VolumeControl		Громкость
 Open MediaPlayer	MediaReplicant		Открыть Медиаплеер
-desklink	MediaReplicant		desklink
+%ld dB	VolumeControl		%ld дБ
+Media preferences…	MediaReplicant		Настройки медиа…
 Options	MediaReplicant		Настройки
 Beep	MediaReplicant		Сигнал
-Volume	VolumeControl		Громкость
+Open %name	DeskButton	Don't translate variable %name	Открыть %name
+Control physical output	MediaReplicant		Управлять физическим выходом
+No media server running	VolumeControl		Медиа сервер не запущен

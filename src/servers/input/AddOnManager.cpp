@@ -17,6 +17,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <syslog.h>
 
 #include <Autolock.h>
 #include <Deskbar.h>
@@ -126,6 +127,7 @@ AddOnManager::AddOnManager()
 	AddOnMonitor(),
 	fHandler(new(std::nothrow) MonitorHandler(this))
 {
+	openlog("input_server", LOG_PERROR, LOG_USER);
 	SetHandler(fHandler);
 }
 
@@ -152,6 +154,9 @@ AddOnManager::MessageReceived(BMessage* message)
 			break;
 		case IS_WATCH_DEVICES:
 			status = _HandleWatchDevices(message, &reply);
+			break;
+		case IS_NOTIFY_DEVICE:
+			status = _HandleNotifyDevice(message, &reply);
 			break;
 		case IS_IS_DEVICE_RUNNING:
 			status = _HandleIsDeviceRunning(message, &reply);
@@ -750,7 +755,79 @@ AddOnManager::_HandleFindDevices(BMessage* message, BMessage* reply)
 status_t
 AddOnManager::_HandleWatchDevices(BMessage* message, BMessage* reply)
 {
-	// TODO
+	BMessenger watcherMessenger;
+	if (message->FindMessenger("target", &watcherMessenger) != B_OK)
+		return B_ERROR;
+
+	bool startWatching;
+	if (message->FindBool("start", &startWatching) != B_OK)
+		return B_ERROR;
+
+	if (fWatcherMessengerList.find(watcherMessenger)
+		== fWatcherMessengerList.end()) {
+		if (startWatching)
+			fWatcherMessengerList.insert(watcherMessenger);
+		else
+			return B_BAD_VALUE;
+	} else {
+		if (!startWatching)
+			fWatcherMessengerList.erase(watcherMessenger);
+	}
+
+	return B_OK;
+}
+
+
+status_t
+AddOnManager::_HandleNotifyDevice(BMessage* message, BMessage* reply)
+{
+	if (!message->HasBool("added") && !message->HasBool("started"))
+		return B_BAD_VALUE;
+
+	syslog(LOG_NOTICE, "Notify of added/removed/started/stopped device");
+
+	BMessage changeMessage(B_INPUT_DEVICES_CHANGED);
+
+	bool deviceAdded;
+	if (message->FindBool("added", &deviceAdded) == B_OK) {
+		if (deviceAdded)
+			changeMessage.AddInt32("be:opcode", B_INPUT_DEVICE_ADDED);
+		else
+			changeMessage.AddInt32("be:opcode", B_INPUT_DEVICE_REMOVED);
+	}
+
+	bool deviceStarted;
+	if (message->FindBool("started", &deviceStarted) == B_OK) {
+		if (deviceStarted)
+			changeMessage.AddInt32("be:opcode", B_INPUT_DEVICE_STARTED);
+		else
+			changeMessage.AddInt32("be:opcode", B_INPUT_DEVICE_STOPPED);
+	}
+
+	BString deviceName;
+	if (message->FindString("name", &deviceName) != B_OK)
+		return B_BAD_VALUE;
+
+	changeMessage.AddString("be:device_name", deviceName);
+
+	input_device_type deviceType = B_UNDEFINED_DEVICE;
+	if (message->FindInt32("type", deviceType) != B_OK)
+		return B_BAD_VALUE;
+
+	changeMessage.AddInt32("be:device_type", deviceType);
+
+	std::set<BMessenger>::iterator it = fWatcherMessengerList.begin();
+	while (it != fWatcherMessengerList.end()) {
+		const BMessenger& currentMessenger = *it;
+
+		status_t result = currentMessenger.SendMessage(&changeMessage);
+
+		if (result != B_OK && !currentMessenger.IsValid())
+			fWatcherMessengerList.erase(it++);
+		else
+			it++;
+	}
+
 	return B_OK;
 }
 
@@ -871,6 +948,7 @@ AddOnManager::_HandleDeviceMonitor(BMessage* message)
 
 				addOn->Device()->Control(NULL, NULL, B_NODE_MONITOR, message);
 			}
+
 			break;
 		}
 	}

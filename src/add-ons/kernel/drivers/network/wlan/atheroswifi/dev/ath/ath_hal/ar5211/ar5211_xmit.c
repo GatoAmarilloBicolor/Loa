@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2006 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5211/ar5211_xmit.c 239051 2012-08-05 10:12:27Z adrian $
  */
 #include "opt_ah.h"
 
@@ -190,7 +190,6 @@ setTxQInterrupts(struct ath_hal *ah, HAL_TX_QUEUE_INFO *qi)
 	OS_REG_RMW_FIELD(ah, AR_IMR_S2,
 		AR_IMR_S2_QCU_TXURN, ahp->ah_txUrnInterruptMask);
 }
-
 
 /*
  * Free a tx DCU/QCU combination.
@@ -674,7 +673,6 @@ ar5211GetTxCompletionRates(struct ath_hal *ah, const struct ath_desc *ds0, int *
 {
 	return AH_FALSE;
 }
-
 
 void
 ar5211SetTxDescLink(struct ath_hal *ah, void *ds, uint32_t link)

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2013 Adrian Chadd <adrian@FreeBSD.org>
  * All rights reserved.
  *
@@ -25,12 +27,8 @@
  * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/if_ath_lna_div.c 298939 2016-05-02 19:56:48Z pfg $
  */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: releng/11.1/sys/dev/ath/if_ath_lna_div.c 298939 2016-05-02 19:56:48Z pfg $");
-
 /*
  * This module handles LNA diversity for those chips which implement LNA
  * mixing (AR9285/AR9485.)
@@ -40,7 +38,7 @@ __FBSDID("$FreeBSD: releng/11.1/sys/dev/ath/if_ath_lna_div.c 298939 2016-05-02 1
 #include "opt_wlan.h"
 
 #include <sys/param.h>
-#include <sys/systm.h>
+#include <sys/systm.h> 
 #include <sys/sysctl.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
@@ -77,7 +75,7 @@ __FBSDID("$FreeBSD: releng/11.1/sys/dev/ath/if_ath_lna_div.c 298939 2016-05-02 1
 /*
  * XXX these don't handle rounding, underflow, overflow, wrapping!
  */
-#define	msecs_to_jiffies(a)		( (a) * hz / 1000 )
+#define	msecs_to_jiffies(a)		( (a) * _hz / 1000 )
 
 /*
  * Methods which are required
@@ -187,7 +185,7 @@ ath_lna_div_ioctl(struct ath_softc *sc, struct ath_diag *ad)
 		 * pointer for us to use below in reclaiming the buffer;
 		 * may want to be more defensive.
 		 */
-		outdata = malloc(outsize, M_TEMP, M_NOWAIT);
+		outdata = malloc(outsize, M_TEMP, M_NOWAIT | M_ZERO);
 		if (outdata == NULL) {
 			error = ENOMEM;
 			goto bad;
@@ -196,6 +194,7 @@ ath_lna_div_ioctl(struct ath_softc *sc, struct ath_diag *ad)
 	switch (id) {
 		default:
 			error = EINVAL;
+			goto bad;
 	}
 	if (outsize < ad->ad_out_size)
 		ad->ad_out_size = outsize;
@@ -709,7 +708,7 @@ ath_ant_adjust_fast_divbias(struct if_ath_ant_comb_state *antcomb,
 /* Antenna diversity and combining */
 void
 ath_lna_rx_comb_scan(struct ath_softc *sc, struct ath_rx_status *rs,
-    unsigned long ticks, int thz)
+    unsigned long _ticks, int _hz)
 {
 	HAL_ANT_COMB_CONFIG div_ant_conf;
 	struct if_ath_ant_comb_state *antcomb = sc->sc_lna_div;
@@ -766,7 +765,7 @@ ath_lna_rx_comb_scan(struct ath_softc *sc, struct ath_rx_status *rs,
 
 	/* Short scan check */
 	if (antcomb->scan && antcomb->alt_good) {
-		if (ieee80211_time_after(ticks, antcomb->scan_start_time +
+		if (ieee80211_time_after(_ticks, antcomb->scan_start_time +
 		    msecs_to_jiffies(ATH_ANT_DIV_COMB_SHORT_SCAN_INTR)))
 			short_scan = AH_TRUE;
 		else
@@ -1008,7 +1007,7 @@ div_comb_done:
 		DPRINTF(sc, ATH_DEBUG_DIVERSITY, "%s: fast_div_bias: %x -> %x\n",
 		    __func__, curr_bias, div_ant_conf.fast_div_bias);
 
-	antcomb->scan_start_time = ticks;
+	antcomb->scan_start_time = _ticks;
 	antcomb->total_pkt_count = 0;
 	antcomb->main_total_rssi = 0;
 	antcomb->alt_total_rssi = 0;

@@ -23,7 +23,7 @@ int
 creat(const char *path, mode_t mode)
 {
 	RETURN_AND_SET_ERRNO_TEST_CANCEL(
-		_kern_open(-1, path, O_CREAT | O_TRUNC | O_WRONLY, mode & ~__gUmask));
+		_kern_open(AT_FDCWD, path, O_CREAT | O_TRUNC | O_WRONLY, mode & ~__gUmask));
 		// adapt the permissions as required by POSIX
 }
 
@@ -40,7 +40,7 @@ open(const char *path, int openMode, ...)
 		va_end(args);
 	}
 
-	RETURN_AND_SET_ERRNO_TEST_CANCEL(_kern_open(-1, path, openMode, perms));
+	RETURN_AND_SET_ERRNO_TEST_CANCEL(_kern_open(AT_FDCWD, path, openMode, perms));
 }
 
 
@@ -74,4 +74,41 @@ fcntl(int fd, int op, ...)
 		pthread_testcancel();
 
 	RETURN_AND_SET_ERRNO(error);
+}
+
+
+int
+posix_fadvise(int fd, off_t offset, off_t len, int advice)
+{
+	if (len < 0 || offset < 0 || advice < POSIX_FADV_NORMAL
+		|| advice > POSIX_FADV_NOREUSE) {
+		return EINVAL;
+	}
+
+	struct stat stat;
+	if (fstat(fd, &stat) < 0)
+		return EBADF;
+	if (S_ISFIFO(stat.st_mode))
+		return ESPIPE;
+
+	// Haiku does not use this information.
+	return 0;
+}
+
+
+int
+posix_fallocate(int fd, off_t offset, off_t len)
+{
+	if (len == 0 || offset < 0)
+		return EINVAL;
+
+	int error = _kern_preallocate(fd, offset, len);
+	if (error == B_UNSUPPORTED) {
+		// While the official specification for this function does not
+		// prescribe which error code to use when the underlying file system
+		// does not support preallocation, we will convert B_UNSUPPORTED to
+		// EOPNOTSUPP for better compatibility with existing applications.
+		return EOPNOTSUPP;
+	}
+	return error;
 }

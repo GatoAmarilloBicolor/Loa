@@ -75,7 +75,7 @@ DriveItem::DriveItem(const BDiskDevice& device, const BootMenuList& menus)
 	else
 		fName = B_TRANSLATE_COMMENT("Hard Drive", "Default disk name");
 
-	fIcon = new BBitmap(BRect(0, 0, B_LARGE_ICON - 1, B_LARGE_ICON - 1),
+	fIcon = new BBitmap(BRect(BPoint(0, 0), be_control_look->ComposeIconSize(B_LARGE_ICON)),
 		B_RGBA32);
 	if (device.GetIcon(fIcon, B_LARGE_ICON) != B_OK)
 		memset(fIcon->Bits(), 0, fIcon->BitsLength());
@@ -195,6 +195,10 @@ DriveItem::DrawItem(BView* owner, BRect frame, bool complete)
 				message = B_TRANSLATE_COMMENT("Incompatible format!",
 					"Cannot install");
 				break;
+			case B_READ_ONLY_DEVICE:
+				message = B_TRANSLATE_COMMENT("Read only!",
+					"Cannot install");
+				break;
 			default:
 				message = B_TRANSLATE_COMMENT("Cannot access!",
 					"Cannot install");
@@ -273,8 +277,8 @@ DrivesPage::DrivesPage(WizardView* wizardView, const BootMenuList& menus,
 	SetLayout(new BGroupLayout(B_VERTICAL));
 
 	BLayoutBuilder::Group<>((BGroupLayout*)GetLayout())
-		.Add(description, 0.5)
-		.Add(scrollView, 1);
+		.Add(description)
+		.Add(scrollView, 10.0);
 
 	_UpdateWizardButtons(NULL);
 	_FillDrivesView(menus);

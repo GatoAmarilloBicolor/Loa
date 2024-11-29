@@ -176,8 +176,8 @@ auvia_ac97_set_mix(void *card, const void *cookie, int32 type, float *values) {
 
 
 static int32
-auvia_create_group_control(multi_dev *multi, int32 *index, int32 parent,
-	int32 string, const char* name)
+auvia_create_group_control(multi_dev* multi, uint32* index, int32 parent, int32 string,
+	const char* name)
 {
 	int32 i = *index;
 	(*index)++;
@@ -186,9 +186,10 @@ auvia_create_group_control(multi_dev *multi, int32 *index, int32 parent,
 	multi->controls[i].mix_control.flags = B_MULTI_MIX_GROUP;
 	multi->controls[i].mix_control.master = EMU_MULTI_CONTROL_MASTERID;
 	multi->controls[i].mix_control.string = string;
-	if (name)
+	if (name) {
 		strlcpy(multi->controls[i].mix_control.name, name,
 			sizeof(multi->controls[i].mix_control.name));
+	}
 
 	return multi->controls[i].mix_control.id;
 }
@@ -198,7 +199,6 @@ static status_t
 auvia_create_controls_list(multi_dev *multi)
 {
 	uint32 	i = 0, index = 0, count, id, parent, parent2, parent3;
-	auvia_dev *card = (auvia_dev*)multi->card;
 	const ac97_source_info *info;
 
 	parent = auvia_create_group_control(multi, &index, 0, 0, "Record");
@@ -390,7 +390,7 @@ auvia_create_controls_list(multi_dev *multi)
 	}
 
 	multi->control_count = index;
-	PRINT(("multi->control_count %lu\n", multi->control_count));
+	PRINT(("multi->control_count %" B_PRIu32 "\n", multi->control_count));
 	return B_OK;
 }
 
@@ -402,8 +402,9 @@ auvia_get_mix(auvia_dev *card, multi_mix_value_info * mmvi)
 	multi_mixer_control *control = NULL;
 	for (i = 0; i < mmvi->item_count; i++) {
 		id = mmvi->values[i].id - EMU_MULTI_CONTROL_FIRSTID;
-		if (id < 0 || id >= card->multi.control_count) {
-			PRINT(("auvia_get_mix : invalid control id requested : %li\n", id));
+		if (id < 0 || (uint32)id >= card->multi.control_count) {
+			PRINT(("auvia_get_mix : "
+				"invalid control id requested : %" B_PRIi32 "\n", id));
 			continue;
 		}
 		control = &card->multi.controls[id];
@@ -442,8 +443,9 @@ auvia_set_mix(auvia_dev *card, multi_mix_value_info * mmvi)
 	multi_mixer_control *control = NULL;
 	for (i = 0; i < mmvi->item_count; i++) {
 		id = mmvi->values[i].id - EMU_MULTI_CONTROL_FIRSTID;
-		if (id < 0 || id >= card->multi.control_count) {
-			PRINT(("auvia_set_mix : invalid control id requested : %li\n", id));
+		if (id < 0 || (uint32)id >= card->multi.control_count) {
+			PRINT(("auvia_set_mix : "
+				"invalid control id requested : %" B_PRIi32 "\n", id));
 			continue;
 		}
 		control = &card->multi.controls[id];
@@ -452,8 +454,9 @@ auvia_set_mix(auvia_dev *card, multi_mix_value_info * mmvi)
 			multi_mixer_control *control2 = NULL;
 			if (i + 1 < mmvi->item_count) {
 				id = mmvi->values[i + 1].id - EMU_MULTI_CONTROL_FIRSTID;
-				if (id < 0 || id >= card->multi.control_count) {
-					PRINT(("auvia_set_mix : invalid control id requested : %li\n", id));
+				if (id < 0 || (uint32)id >= card->multi.control_count) {
+					PRINT(("auvia_set_mix : "
+						"invalid control id requested : %" B_PRIi32 "\n", id));
 				} else {
 					control2 = &card->multi.controls[id];
 					if (control2->mix_control.master != control->mix_control.id)
@@ -503,7 +506,7 @@ static status_t
 auvia_list_mix_controls(auvia_dev *card, multi_mix_control_info * mmci)
 {
 	multi_mix_control	*mmc;
-	int32 i;
+	uint32 i;
 
 	mmc = mmci->controls;
 	if (mmci->control_count < 24)
@@ -570,7 +573,8 @@ static void
 auvia_create_channels_list(multi_dev *multi)
 {
 	auvia_stream *stream;
-	uint32 index, i, mode, designations;
+	uint32 index, i, designations;
+	int32 mode;
 	multi_channel_info *chans;
 	uint32 chan_designations[] = {
 		B_CHANNEL_LEFT,
@@ -597,7 +601,8 @@ auvia_create_channels_list(multi_dev *multi)
 
 			for (i = 0; i < stream->channels; i++) {
 				chans[index].channel_id = index;
-				chans[index].kind = (mode == AUVIA_USE_PLAY) ? B_MULTI_OUTPUT_CHANNEL : B_MULTI_INPUT_CHANNEL;
+				chans[index].kind =
+					(mode == AUVIA_USE_PLAY) ? B_MULTI_OUTPUT_CHANNEL : B_MULTI_INPUT_CHANNEL;
 				chans[index].designations = designations | chan_designations[i];
 				chans[index].connectors = 0;
 				index++;
@@ -703,7 +708,7 @@ auvia_get_description(auvia_dev *card, multi_description *data)
 	// channels and input bus channels and finally auxillary channels,
 
 	LOG(("request_channel_count = %d\n",data->request_channel_count));
-	if (data->request_channel_count >= size) {
+	if (data->request_channel_count >= (int32)size) {
 		LOG(("copying data\n"));
 		memcpy(data->channels, card->multi.chans, size * sizeof(card->multi.chans[0]));
 	}
@@ -796,10 +801,10 @@ auvia_get_buffers(auvia_dev *card, multi_buffer_list *data)
 	pchannels = card->pstream->channels;
 	rchannels = card->rstream->channels;
 
-	if (data->request_playback_buffers < BUFFER_COUNT ||
-		data->request_playback_channels < (pchannels) ||
-		data->request_record_buffers < BUFFER_COUNT ||
-		data->request_record_channels < (rchannels)) {
+	if (data->request_playback_buffers < BUFFER_COUNT
+		|| data->request_playback_channels < (int32)(pchannels)
+		|| data->request_record_buffers < BUFFER_COUNT
+		|| data->request_record_channels < (int32)(rchannels)) {
 		LOG(("not enough channels/buffers\n"));
 	}
 

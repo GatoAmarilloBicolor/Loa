@@ -126,7 +126,8 @@ simonThread(void* cookie)
 			noPause = 0;
 			waitEvent(objectView->drawEvent);
 		}
-		screen.WaitForRetrace();
+		if (objectView->LimitFps())
+			screen.WaitForRetrace();
 	}
 	return 0;
 }
@@ -138,6 +139,7 @@ ObjectView::ObjectView(BRect rect, const char *name, ulong resizingMode,
 	fHistEntries(0),
 	fOldestEntry(0),
 	fFps(true),
+	fLimitFps(true),
 	fLastGouraud(true),
 	fGouraud(true),
 	fLastZbuf(true),
@@ -391,6 +393,10 @@ ObjectView::MessageReceived(BMessage* msg)
 			fFog = !fFog;
 			toggleItem = true;
 			break;
+		case kMsgLimitFps:
+			fLimitFps = !fLimitFps;
+			toggleItem = true;
+			break;
 	}
 
 	if (toggleItem && msg->FindPointer("source", reinterpret_cast<void**>(&item)) == B_OK){
@@ -558,7 +564,7 @@ ObjectView::FrameResized(float width, float height)
 	width = Bounds().Width();
 	height = Bounds().Height();
 	fYxRatio = height / width;
-    glViewport(0, 0, (GLint)width + 1, (GLint)height + 1);
+	glViewport(0, 0, (GLint)width + 1, (GLint)height + 1);
 
 	// To prevent weird buffer contents
 	glClear(GL_COLOR_BUFFER_BIT);

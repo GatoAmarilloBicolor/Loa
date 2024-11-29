@@ -104,7 +104,7 @@ PackageVolumeState::Unset()
 const char*
 PackageVolumeState::DisplayName() const
 {
-	return fDisplayName != NULL ? fDisplayName : "Latest state";
+	return fDisplayName;
 }
 
 
@@ -115,7 +115,34 @@ PackageVolumeState::SetSystemPackage(const char* package)
 		free(fSystemPackage);
 
 	fSystemPackage = strdup(package);
-	return fSystemPackage != NULL ? B_OK : B_NO_MEMORY;
+	if (fSystemPackage == NULL)
+		return B_NO_MEMORY;
+
+	if (fName == NULL) {
+		free(fDisplayName);
+		fDisplayName = NULL;
+
+		const char* packageVersion = strchr(package, '-');
+		if (packageVersion == NULL) {
+			fDisplayName = strdup("Latest state");
+		} else {
+			ArrayDeleter<char> newDisplayName(new(std::nothrow) char[B_FILE_NAME_LENGTH]);
+			if (!newDisplayName.IsSet())
+				return B_NO_MEMORY;
+
+			packageVersion++;
+			const char* packageVersionEnd = strchr(packageVersion, '-');
+			int length = -1;
+			if (packageVersionEnd != NULL)
+				length = packageVersionEnd - packageVersion;
+
+			snprintf(newDisplayName.Get(), B_FILE_NAME_LENGTH,
+				"Latest state (%.*s)", length, packageVersion);
+			fDisplayName = newDisplayName.Detach();
+		}
+	}
+
+	return B_OK;
 }
 
 
@@ -152,7 +179,8 @@ PackageVolumeState::IsNewer(const PackageVolumeState* a,
 PackageVolumeInfo::PackageVolumeInfo()
 	:
 	BReferenceable(),
-	fStates()
+	fStates(),
+	fPackagesDir(NULL)
 {
 }
 
@@ -161,6 +189,9 @@ PackageVolumeInfo::~PackageVolumeInfo()
 {
 	while (PackageVolumeState* state = fStates.RemoveHead())
 		delete state;
+
+	if (fPackagesDir != NULL)
+		closedir(fPackagesDir);
 }
 
 
@@ -169,31 +200,46 @@ PackageVolumeInfo::SetTo(Directory* baseDirectory, const char* packagesPath)
 {
 	TRACE("PackageVolumeInfo::SetTo()\n");
 
+	if (fPackagesDir != NULL)
+		closedir(fPackagesDir);
+
 	// get the packages directory
-	DIR* dir = open_directory(baseDirectory, packagesPath);
-	if (dir == NULL) {
+	fPackagesDir = open_directory(baseDirectory, packagesPath);
+	if (fPackagesDir == NULL) {
 		TRACE("PackageVolumeInfo::SetTo(): failed to open packages directory: "
 			"%s\n", strerror(errno));
 		return errno;
 	}
-	CObjectDeleter<DIR, int> dirCloser(dir, &closedir);
 
-	Directory* packagesDirectory = directory_from(dir);
+	Directory* packagesDirectory = directory_from(fPackagesDir);
 	packagesDirectory->Acquire();
 
 	// add the current state
 	PackageVolumeState* state = _AddState(NULL);
 	if (state == NULL)
 		return B_NO_MEMORY;
-	status_t error = _InitState(packagesDirectory, dir, state);
+	status_t error = _InitState(packagesDirectory, fPackagesDir, state);
 	if (error != B_OK) {
 		TRACE("PackageVolumeInfo::SetTo(): failed to init current state: "
 			"%s\n", strerror(error));
 		return error;
 	}
 
-	// Iterate through the packages/administrative directory to find old state
-	// directories.
+	return B_OK;
+}
+
+
+status_t
+PackageVolumeInfo::LoadOldStates()
+{
+	if (fPackagesDir == NULL) {
+		TRACE("PackageVolumeInfo::LoadOldStates(): package directory is NULL");
+		return B_ERROR;
+	}
+
+	Directory* packagesDirectory = directory_from(fPackagesDir);
+	packagesDirectory->Acquire();
+
 	if (DIR* administrativeDir = open_directory(packagesDirectory,
 			kAdministrativeDirectory)) {
 		while (dirent* entry = readdir(administrativeDir)) {
@@ -208,13 +254,16 @@ PackageVolumeInfo::SetTo(Directory* baseDirectory, const char* packagesPath)
 		fStates.Sort(&PackageVolumeState::IsNewer);
 
 		// initialize the old states
+		PackageVolumeState* state = fStates.Head();
+		status_t error;
 		for (state = fStates.GetNext(state); state != NULL;) {
 			PackageVolumeState* nextState = fStates.GetNext(state);
-			if (state->Name()) {
-				error = _InitState(packagesDirectory, dir, state);
+			if (state->Name() != NULL) {
+				error = _InitState(packagesDirectory, fPackagesDir, state);
 				if (error != B_OK) {
-					TRACE("PackageVolumeInfo::SetTo(): failed to init state "
-						"\"%s\": %s\n", state->Name(), strerror(error));
+					TRACE("PackageVolumeInfo::LoadOldStates(): failed to "
+						"init state \"%s\": %s\n", state->Name(),
+						strerror(error));
 					fStates.Remove(state);
 					delete state;
 				}
@@ -222,8 +271,8 @@ PackageVolumeInfo::SetTo(Directory* baseDirectory, const char* packagesPath)
 			state = nextState;
 		}
 	} else {
-		TRACE("PackageVolumeInfo::SetTo(): failed to open administrative "
-			"directory: %s\n", strerror(errno));
+		TRACE("PackageVolumeInfo::LoadOldStates(): failed to open "
+			"administrative directory: %s\n", strerror(errno));
 	}
 
 	return B_OK;
@@ -233,17 +282,16 @@ PackageVolumeInfo::SetTo(Directory* baseDirectory, const char* packagesPath)
 PackageVolumeState*
 PackageVolumeInfo::_AddState(const char* stateName)
 {
-	PackageVolumeState* state = new(std::nothrow) PackageVolumeState;
-	if (state == NULL)
+	ObjectDeleter<PackageVolumeState> state(new(std::nothrow) PackageVolumeState);
+	if (!state.IsSet())
 		return NULL;
 
 	if (state->SetTo(stateName) != B_OK) {
-		delete state;
 		return NULL;
 	}
 
-	fStates.Add(state);
-	return state;
+	fStates.Add(state.Get());
+	return state.Detach();
 }
 
 
@@ -252,20 +300,25 @@ PackageVolumeInfo::_InitState(Directory* packagesDirectory, DIR* dir,
 	PackageVolumeState* state)
 {
 	// find the system package
-	char systemPackageName[B_FILE_NAME_LENGTH];
+	ArrayDeleter<char> systemPackageName(new(std::nothrow) char[B_FILE_NAME_LENGTH]);
+	if (!systemPackageName.IsSet())
+		return B_NO_MEMORY;
+	ArrayDeleter<char> packagePath(new(std::nothrow) char[B_PATH_NAME_LENGTH]);
+	if (!packagePath.IsSet())
+		return B_NO_MEMORY;
+
 	status_t error = _ParseActivatedPackagesFile(packagesDirectory, state,
-		systemPackageName, sizeof(systemPackageName));
+		systemPackageName.Get(), B_FILE_NAME_LENGTH);
 	if (error == B_OK) {
 		// check, if package exists
 		for (PackageVolumeState* otherState = state; otherState != NULL;
 				otherState = fStates.GetPrevious(otherState)) {
-			char packagePath[B_PATH_NAME_LENGTH];
-			otherState->GetPackagePath(systemPackageName, packagePath,
-				sizeof(packagePath));
+			otherState->GetPackagePath(systemPackageName.Get(), packagePath.Get(),
+				B_PATH_NAME_LENGTH);
 			struct stat st;
-			if (get_stat(packagesDirectory, packagePath, st) == B_OK
-				&& S_ISREG(st.st_mode)) {
-				state->SetSystemPackage(packagePath);
+			if (get_stat(packagesDirectory, packagePath.Get(), st) == B_OK
+					&& S_ISREG(st.st_mode)) {
+				state->SetSystemPackage(packagePath.Get());
 				break;
 			}
 		}
@@ -300,17 +353,19 @@ PackageVolumeInfo::_ParseActivatedPackagesFile(Directory* packagesDirectory,
 	PackageVolumeState* state, char* packageName, size_t packageNameSize)
 {
 	// open the activated-packages file
-	char path[3 * B_FILE_NAME_LENGTH + 2];
-	snprintf(path, sizeof(path), "%s/%s/%s",
+	static const size_t kBufferSize = 3 * B_FILE_NAME_LENGTH + 2;
+	ArrayDeleter<char> path(new(std::nothrow) char[kBufferSize]);
+	if (!path.IsSet())
+		return B_NO_MEMORY;
+	snprintf(path.Get(), kBufferSize, "%s/%s/%s",
 		kAdministrativeDirectory, state->Name() != NULL ? state->Name() : "",
 		kActivatedPackagesFile);
-	int fd = open_from(packagesDirectory, path, O_RDONLY);
-	if (fd < 0)
-		return fd;
-	FileDescriptorCloser fdCloser(fd);
+	FileDescriptorCloser fd(open_from(packagesDirectory, path.Get(), O_RDONLY));
+	if (!fd.IsSet())
+		return fd.Get();
 
 	struct stat st;
-	if (fstat(fd, &st) != 0)
+	if (fstat(fd.Get(), &st) != 0)
 		return errno;
 	if (!S_ISREG(st.st_mode))
 		return B_ENTRY_NOT_FOUND;
@@ -318,30 +373,31 @@ PackageVolumeInfo::_ParseActivatedPackagesFile(Directory* packagesDirectory,
 	// read the file until we find the system package line
 	size_t remainingBytes = 0;
 	for (;;) {
-		ssize_t bytesRead = read(fd, path + remainingBytes,
-			sizeof(path) - remainingBytes - 1);
+		ssize_t bytesRead = read(fd.Get(), path.Get() + remainingBytes,
+			kBufferSize - remainingBytes - 1);
 		if (bytesRead <= 0)
 			return B_ENTRY_NOT_FOUND;
 
 		remainingBytes += bytesRead;
 		path[remainingBytes] = '\0';
 
-		char* line = path;
+		char* line = path.Get();
 		while (char* lineEnd = strchr(line, '\n')) {
 			*lineEnd = '\0';
 			if (is_system_package(line)) {
-				return strlcpy(packageName, line, packageNameSize)
+				status_t result = strlcpy(packageName, line, packageNameSize)
 						< packageNameSize
 					?  B_OK : B_NAME_TOO_LONG;
+				return result;
 			}
 
 			line = lineEnd + 1;
 		}
 
 		// move the remainder to the start of the buffer
-		if (line < path + remainingBytes) {
-			size_t left = path + remainingBytes - line;
-			memmove(path, line, left);
+		if (line < path.Get() + remainingBytes) {
+			size_t left = path.Get() + remainingBytes - line;
+			memmove(path.Get(), line, left);
 			remainingBytes = left;
 		} else
 			remainingBytes = 0;

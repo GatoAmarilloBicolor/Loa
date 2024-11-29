@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -13,8 +15,6 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar5212/ar5212_attach.c 305614 2016-09-08 15:05:25Z pfg $
  */
 #include "opt_ah.h"
 
@@ -135,6 +135,8 @@ static const struct ath_hal_private ar5212hal = {{
 	.ah_setQuiet			= ar5212SetQuiet,
 	.ah_getMibCycleCounts		= ar5212GetMibCycleCounts,
 	.ah_setChainMasks		= ar5212SetChainMasks,
+	.ah_getNav			= ar5212GetNav,
+	.ah_setNav			= ar5212SetNav,
 
 	/* DFS Functions */
 	.ah_enableDfs			= ar5212EnableDfs,
@@ -899,7 +901,8 @@ ar5212FillCapabilityInfo(struct ath_hal *ah)
 		pCap->halBssidMatchSupport = AH_TRUE;
 	}
 
-	pCap->halTstampPrecision = 15;
+	pCap->halRxTstampPrecision = 15;
+	pCap->halTxTstampPrecision = 16;
 	pCap->halIntrMask = HAL_INT_COMMON
 			| HAL_INT_RX
 			| HAL_INT_TX

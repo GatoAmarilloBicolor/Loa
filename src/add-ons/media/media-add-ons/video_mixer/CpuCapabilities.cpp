@@ -19,12 +19,14 @@ CPUCapabilities::~CPUCapabilities()
 
 CPUCapabilities::CPUCapabilities()
 {
-	#ifdef __INTEL__
+	#ifdef __i386__
 		setIntelCapabilities();
 	#endif
 	
 	PrintCapabilities();
 }
+
+#ifdef __i386__
 
 void
 CPUCapabilities::setIntelCapabilities()
@@ -84,6 +86,8 @@ CPUCapabilities::setIntelCapabilities()
 		}
 	}
 }
+
+#endif
 
 bool
 CPUCapabilities::HasMMX()

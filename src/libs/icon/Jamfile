@@ -1,11 +1,11 @@
 SubDir HAIKU_TOP src libs icon ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
 AddSubDirSupportedPlatforms libbe_test ;
 
 # source directories
 local sourceDirs =
 	flat_icon
+	generic
 	message
 	shape
 	style
@@ -21,11 +21,17 @@ UsePrivateHeaders shared ;
 local architectureObject ;
 for architectureObject in [ MultiArchSubDirSetup ] {
 	on $(architectureObject) {
+		local architecture = $(TARGET_PACKAGING_ARCH) ;
+
 		local sourceDir ;
 		for sourceDir in $(sourceDirs) {
 			SEARCH_SOURCE
 				+= [ FDirName $(HAIKU_TOP) src libs icon $(sourceDir) ] ;
 		}
+
+		# Too many applications depend on libicon APIs being visible in libbe;
+		# so for now, prevent -fvisiblity=hidden from being set.
+		NO_HIDDEN_VISIBILITY on [ MultiArchDefaultGristFiles libicon.a ] = 1 ;
 
 		StaticLibrary [ MultiArchDefaultGristFiles libicon.a ] :
 			# flat_icon
@@ -39,26 +45,26 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			MessageImporter.cpp
 
 			# shape
-			PathContainer.cpp
+			PathSourceShape.cpp
+			ReferenceImage.cpp
 			Shape.cpp
-			ShapeContainer.cpp
 			VectorPath.cpp
 
 			# style
 			GradientTransformable.cpp
 			Style.cpp
-			StyleContainer.cpp
 
 			# transformable
 			Transformable.cpp
 
 			# transformer
 			AffineTransformer.cpp
+			CompoundStyleTransformer.cpp
 			ContourTransformer.cpp
 			PathSource.cpp
 			PerspectiveTransformer.cpp
 			StrokeTransformer.cpp
-			Transformer.cpp
+			StyleTransformer.cpp
 			TransformerFactory.cpp
 
 			Icon.cpp

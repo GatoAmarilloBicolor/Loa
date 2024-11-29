@@ -83,15 +83,13 @@ of their respective holders. All rights reserved.
 #define B_TRANSLATION_CONTEXT "Mail"
 
 
-const rgb_color kNormalTextColor = {0, 0, 0, 255};
 const rgb_color kSpellTextColor = {255, 0, 0, 255};
-const rgb_color kHyperLinkColor = {0, 0, 255, 255};
 const rgb_color kHeaderColor = {72, 72, 72, 255};
 
 const rgb_color kQuoteColors[] = {
-	{0, 0, 0x80, 0},		// 3rd, 6th, ... quote level color (blue)
-	{0, 0x80, 0, 0},		// 1st, 4th, ... quote level color (green)
-	{0x80, 0, 0, 0}			// 2nd, ... (red)
+	{0, 0, 0xff, 0},		// 3rd, 6th, ... quote level color (blue)
+	{0, 0xff, 0, 0},		// 1st, 4th, ... quote level color (green)
+	{0xff, 0, 0, 0}			// 2nd, 5th, ... quote level color (red)
 };
 const int32 kNumQuoteColors = 3;
 
@@ -212,7 +210,7 @@ FilterHTMLTag(int32 &first, char **t, char *end)
 			{"ograve;", 0x00f2},
 			{"ouml;",	0x00f6},
 			{"quot;",	'"'},
-			{"szlig;",	0x00f6},
+			{"szlig;",	0x00df},
 			{"uacute;", 0x00fa},
 			{"ucirc;",	0x00fb},
 			{"ugrave;", 0x00f9},
@@ -275,115 +273,59 @@ FilterHTMLTag(int32 &first, char **t, char *end)
 }
 
 
-/** Returns the type and length of the URL in the string if it is one.
- *	If the "url" string is specified, it will fill it with the complete
- *	URL that might differ from the one in the text itself (i.e. because
- *	of an prepended "http://").
+/*! Returns the type of the next URL in the string.
+ *
+ * If the "url" string is specified, it will fill it with the complete
+ * URL.
  */
-
 static uint8
-CheckForURL(const char *string, size_t &urlLength, BString *url = NULL)
+FindURL(const BString& string, int32 startIndex, int32& urlPos,
+	int32& urlLength, BString* urlString = NULL)
 {
-	const char *urlPrefixes[] = {
-		"http://",
-		"ftp://",
-		"shttp://",
-		"https://",
-		"finger://",
-		"telnet://",
-		"gopher://",
-		"news://",
-		"nntp://",
-		"file://",
-		NULL
-	};
-
-	//
-	//	Search for URL prefix
-	//
 	uint8 type = 0;
-	for (const char **prefix = urlPrefixes; *prefix != 0; prefix++) {
-		if (!cistrncmp(string, *prefix, strlen(*prefix))) {
-			type = TYPE_URL;
-			break;
-		}
-	}
+	urlPos = string.Length();
 
-	//
-	//	Not a URL? check for "mailto:" or "www."
-	//
-	if (type == 0 && !cistrncmp(string, "mailto:", 7))
-		type = TYPE_MAILTO;
-	if (type == 0 && !strncmp(string, "www.", 4)) {
-		// this type will be special cased later (and a http:// is added
-		// for the enclosure address)
-		type = TYPE_URL;
-	}
-	if (type == 0) {
-		// check for valid eMail addresses
-		const char *at = strchr(string, '@');
-		if (at) {
-			const char *pos = string;
-			bool readName = false;
-			for (; pos < at; pos++) {
-				// ToDo: are these all allowed characters?
-				if (!isalnum(pos[0]) && pos[0] != '_' && pos[0] != '.' && pos[0] != '-')
-					break;
-
-				readName = true;
-			}
-			if (pos == at && readName)
-				type = TYPE_MAILTO;
-		}
-	}
-
-	if (type == 0)
+	int32 baseOffset = string.FindFirst("://", startIndex),
+		mailtoOffset = string.FindFirst("mailto:", startIndex);
+	if (baseOffset == B_ERROR && mailtoOffset == B_ERROR)
 		return 0;
+	if (baseOffset == B_ERROR)
+		baseOffset = string.Length();
+	if (mailtoOffset == B_ERROR)
+		mailtoOffset = string.Length();
 
-	int32 index = strcspn(string, " \t<>)\"\\,\r\n");
+	if (baseOffset < mailtoOffset) {
+		type = TYPE_URL;
+
+		// Find the actual start of the URL
+		urlPos = baseOffset;
+		while (urlPos >= startIndex && (isalnum(string.ByteAt(urlPos - 1))
+				|| string.ByteAt(urlPos - 1) == '-'))
+			urlPos--;
+	} else if (mailtoOffset < baseOffset) {
+		type = TYPE_MAILTO;
+		urlPos = mailtoOffset;
+	}
+
+	// find the end of the URL based on word boundaries
+	const char* str = string.String() + urlPos;
+	urlLength = strcspn(str, " \t<>)\"\\,\r\n");
 
 	// filter out some punctuation marks if they are the last character
-	char suffix = string[index - 1];
-	if (suffix == '.'
-		|| suffix == ','
-		|| suffix == '?'
-		|| suffix == '!'
-		|| suffix == ':'
-		|| suffix == ';')
-		index--;
-
-	if (type == TYPE_URL) {
-		char *parenthesis = NULL;
-
-		// filter out a trailing ')' if there is no left parenthesis before
-		if (string[index - 1] == ')') {
-			char *parenthesis = strchr(string, '(');
-			if (parenthesis == NULL || parenthesis > string + index)
-				index--;
-		}
-
-		// filter out a trailing ']' if there is no left bracket before
-		if (parenthesis == NULL && string[index - 1] == ']') {
-			char *parenthesis = strchr(string, '[');
-			if (parenthesis == NULL || parenthesis > string + index)
-				index--;
-		}
+	while (urlLength > 0) {
+		char suffix = str[urlLength - 1];
+		if (suffix != '.'
+				&& suffix != ','
+				&& suffix != '?'
+				&& suffix != '!'
+				&& suffix != ':'
+				&& suffix != ';')
+			break;
+		urlLength--;
 	}
 
-	if (url != NULL) {
-		// copy the address to the specified string
-		if (type == TYPE_URL && string[0] == 'w') {
-			// URL starts with "www.", so add the protocol to it
-			url->SetTo("http://");
-			url->Append(string, index);
-		} else if (type == TYPE_MAILTO && cistrncmp(string, "mailto:", 7)) {
-			// eMail address had no "mailto:" prefix
-			url->SetTo("mailto:");
-			url->Append(string, index);
-		} else
-			url->SetTo(string, index);
-	}
-	urlLength = index;
+	if (urlString != NULL)
+		*urlString = BString(string.String() + urlPos, urlLength);
 
 	return type;
 }
@@ -542,8 +484,8 @@ FillInQuoteTextRuns(BTextView* view, quote_context* context, const char* line,
 
 				runs[index].offset = pos;
 				runs[index].font = font;
-				runs[index].color = level > 0
-					? kQuoteColors[level % kNumQuoteColors] : kNormalTextColor;
+				runs[index].color = level > 0 ? mix_color(ui_color(B_PANEL_TEXT_COLOR),
+					kQuoteColors[level % kNumQuoteColors], 120) : ui_color(B_PANEL_TEXT_COLOR);
 
 				pos = next;
 				if (++index >= maxStyles)
@@ -569,8 +511,8 @@ FillInQuoteTextRuns(BTextView* view, quote_context* context, const char* line,
 			if (wasDiff)
 				runs[index].color = kDiffColors[diff_mode('@') - 1];
 			else if (diffMode <= 0) {
-				runs[index].color = level > 0
-					? kQuoteColors[level % kNumQuoteColors] : kNormalTextColor;
+				runs[index].color = level > 0 ? mix_color(ui_color(B_PANEL_TEXT_COLOR),
+					kQuoteColors[level % kNumQuoteColors], 120) : ui_color(B_PANEL_TEXT_COLOR);
 			} else
 				runs[index].color = kDiffColors[diffMode - 1];
 
@@ -749,14 +691,14 @@ TContentView::MessageReceived(BMessage *msg)
 			break;
 		}
 
-		case M_QUOTE:
+		case M_ADD_QUOTE_LEVEL:
 		{
 			int32 start, finish;
 			fTextView->GetSelection(&start, &finish);
 			fTextView->AddQuote(start, finish);
 			break;
 		}
-		case M_REMOVE_QUOTE:
+		case M_SUB_QUOTE_LEVEL:
 		{
 			int32 start, finish;
 			fTextView->GetSelection(&start, &finish);
@@ -1095,12 +1037,20 @@ TTextView::KeyDown(const char *key, int32 count)
 						end++;
 					Select(start, end);
 					if (fYankBuffer) {
-						fYankBuffer = (char *)realloc(fYankBuffer,
+						char *result = (char *)realloc(fYankBuffer,
 									 strlen(fYankBuffer) + (end - start) + 1);
+						if (result == NULL) {
+							free(fYankBuffer);
+							fYankBuffer = NULL;
+							break;
+						}
+						fYankBuffer = result;
 						GetText(start, end - start,
 							    &fYankBuffer[strlen(fYankBuffer)]);
 					} else {
 						fYankBuffer = (char *)malloc(end - start + 1);
+						if (fYankBuffer == NULL)
+							break;
 						GetText(start, end - start, fYankBuffer);
 					}
 					Delete();
@@ -1419,7 +1369,7 @@ TTextView::MessageReceived(BMessage *msg)
 		case B_INPUT_METHOD_EVENT:
 		{
 			int32 im_op;
-			if (msg->FindInt32("be:opcode", &im_op) == B_OK){
+			if (msg->FindInt32("be:opcode", &im_op) == B_OK) {
 				switch (im_op) {
 					case B_INPUT_METHOD_STARTED:
 						fInputMethodUndoState.replace = true;
@@ -1430,7 +1380,7 @@ TTextView::MessageReceived(BMessage *msg)
 						if (fInputMethodUndoBuffer.CountItems() > 0) {
 							KUndoItem *undo = fInputMethodUndoBuffer.ItemAt(
 								fInputMethodUndoBuffer.CountItems() - 1);
-							if (undo->History == K_INSERTED){
+							if (undo->History == K_INSERTED) {
 								fUndoBuffer.MakeNewUndoItem();
 								fUndoBuffer.AddUndo(undo->RedoText, undo->Length,
 									undo->Offset, undo->History, undo->CursorPos);
@@ -1901,8 +1851,10 @@ TTextView::Open(hyper_text *enclosure)
 						char baseName[B_FILE_NAME_LENGTH];
 						strcpy(baseName, enclosure->name ? enclosure->name : "enclosure");
 						strcpy(name, baseName);
-						for (int32 index = 0; dir.Contains(name); index++)
-							sprintf(name, "%s_%" B_PRId32, baseName, index);
+						for (int32 index = 0; dir.Contains(name); index++) {
+							snprintf(name, B_FILE_NAME_LENGTH, "%s_%" B_PRId32,
+								baseName, index);
+						}
 
 						BEntry entry(path.Path());
 						entry_ref ref;
@@ -2151,9 +2103,14 @@ TTextView::AddAsContent(BEmailMessage *mail, bool wrap, uint32 charset, mail_enc
 	// hard-wrap, based on TextView's soft-wrapping
 	int32 numLines = CountLines();
 	bool spaceMoved = false;
-	char *content = (char *)malloc(textLength + numLines * 72);	// more we'll ever need
+	char *content = (char *)malloc(textLength + numLines * 72);
+		// more we'll ever need
 	if (content != NULL) {
 		int32 contentLength = 0;
+
+		int32 nextUrlAt = 0, nextUrlLength = 0;
+		BString textStr(text);
+		FindURL(text, 0, nextUrlAt, nextUrlLength, NULL);
 
 		for (int32 i = 0; i < numLines; i++) {
 			int32 startOffset = OffsetAt(i);
@@ -2164,42 +2121,41 @@ TTextView::AddAsContent(BEmailMessage *mail, bool wrap, uint32 charset, mail_enc
 			int32 endOffset = OffsetAt(i + 1);
 			int32 lineLength = endOffset - startOffset;
 
-			// quick hack to not break URLs into several parts
-			for (int32 pos = startOffset; pos < endOffset; pos++) {
-				size_t urlLength;
-				uint8 type = CheckForURL(text + pos, urlLength);
-				if (type != 0)
-					pos += urlLength;
+			// don't break URLs into several parts
+			if (nextUrlAt >= startOffset && nextUrlAt < endOffset
+					&& (nextUrlAt + nextUrlLength) > endOffset) {
+				int32 pos = nextUrlAt + nextUrlLength;
 
-				if (pos > endOffset) {
-					// find first break character after the URL
-					for (; text[pos]; pos++) {
-						if (isalnum(text[pos]) || isspace(text[pos]))
-							break;
-					}
-					if (text[pos] && isspace(text[pos]) && text[pos] != '\n')
-						pos++;
-
-					endOffset += pos - endOffset;
-					lineLength = endOffset - startOffset;
-
-					// insert a newline (and the same number of quotes) after the
-					// URL to make sure the rest of the text is properly wrapped
-
-					char buffer[64];
-					if (text[pos] == '\n')
-						buffer[0] = '\0';
-					else
-						strcpy(buffer, "\n");
-
-					size_t quoteLength;
-					CopyQuotes(text + startOffset, lineLength, buffer + strlen(buffer), quoteLength);
-
-					Insert(pos, buffer, strlen(buffer));
-					numLines = CountLines();
-					text = Text();
-					i++;
+				// find first break character after the URL
+				for (; text[pos]; pos++) {
+					if (isalnum(text[pos]) || isspace(text[pos]))
+						break;
 				}
+				if (text[pos] && isspace(text[pos]) && text[pos] != '\n')
+					pos++;
+
+				endOffset += pos - endOffset;
+				lineLength = endOffset - startOffset;
+
+				// insert a newline (and the same number of quotes) after the
+				// URL to make sure the rest of the text is properly wrapped
+
+				char buffer[64];
+				if (text[pos] == '\n')
+					buffer[0] = '\0';
+				else
+					strcpy(buffer, "\n");
+
+				size_t quoteLength;
+				CopyQuotes(text + startOffset, lineLength, buffer + strlen(buffer), quoteLength);
+
+				Insert(pos, buffer, strlen(buffer));
+				numLines = CountLines();
+				text = Text();
+				i++;
+
+				textStr = BString(text);
+				FindURL(text, endOffset, nextUrlAt, nextUrlLength, NULL);
 			}
 			if (text[endOffset - 1] != ' '
 				&& text[endOffset - 1] != '\n'
@@ -2286,7 +2242,7 @@ TTextView::Reader::ParseMail(BMailContainer *container,
 			if (enclosure == NULL)
 				return false;
 
-			memset(enclosure, 0, sizeof(hyper_text));
+			memset((void*)enclosure, 0, sizeof(hyper_text));
 
 			enclosure->type = TYPE_ENCLOSURE;
 
@@ -2316,7 +2272,7 @@ TTextView::Reader::ParseMail(BMailContainer *container,
 			if (enclosure == NULL)
 				return false;
 
-			memset(enclosure, 0, sizeof(hyper_text));
+			memset((void*)enclosure, 0, sizeof(hyper_text));
 
 			enclosure->type = TYPE_ENCLOSURE;
 			enclosure->component = component;
@@ -2339,7 +2295,7 @@ TTextView::Reader::ParseMail(BMailContainer *container,
 				strcpy(typeDescription, type.Type() ? type.Type() : B_EMPTY_STRING);
 
 			name = "\n<";
-			name.Append(B_TRANSLATE_COMMENT("Enclosure: %name% (Type: %type%)",
+			name.Append(B_TRANSLATE_COMMENT("Attachment: %name% (Type: %type%)",
 				"Don't translate the variables %name% and %type%."));
 			name.Append(">\n");
 			name.ReplaceFirst("%name%", enclosure->name);
@@ -2370,6 +2326,12 @@ TTextView::Reader::Process(const char *data, int32 data_len, bool isHeader)
 	char line[522];
 	int32 count = 0;
 
+	const BString dataStr(data, data_len);
+	BString nextUrl;
+	int32 nextUrlPos = 0, nextUrlLength = 0;
+	uint8 nextUrlType
+		= FindURL(dataStr, 0, nextUrlPos, nextUrlLength, &nextUrl);
+
 	for (int32 loop = 0; loop < data_len; loop++) {
 		if (fView->fStopLoading)
 			return false;
@@ -2379,9 +2341,7 @@ TTextView::Reader::Process(const char *data, int32 data_len, bool isHeader)
 			count += strlen(QUOTE);
 		}
 		if (!fRaw && fIncoming && (loop < data_len - 7)) {
-			size_t urlLength;
-			BString url;
-			uint8 type = CheckForURL(data + loop, urlLength, &url);
+			uint8 type = (nextUrlPos == loop) ? nextUrlType : 0;
 
 			if (type) {
 				if (!Insert(line, count, false, isHeader))
@@ -2392,21 +2352,25 @@ TTextView::Reader::Process(const char *data, int32 data_len, bool isHeader)
 				if (enclosure == NULL)
 					return false;
 
-				memset(enclosure, 0, sizeof(hyper_text));
+				memset((void*)enclosure, 0, sizeof(hyper_text));
 				fView->GetSelection(&enclosure->text_start,
-									&enclosure->text_end);
+					&enclosure->text_end);
 				enclosure->type = type;
-				enclosure->name = strdup(url.String());
+				enclosure->name = strdup(nextUrl.String());
 				if (enclosure->name == NULL) {
 					free(enclosure);
 					return false;
 				}
 
-				Insert(&data[loop], urlLength, true, isHeader);
-				enclosure->text_end += urlLength;
-				loop += urlLength - 1;
+				Insert(&data[loop], nextUrlLength, true, isHeader);
+				enclosure->text_end += nextUrlLength;
+				loop += nextUrlLength - 1;
 
 				fEnclosures->AddItem(enclosure);
+
+				nextUrlType
+					= FindURL(dataStr, loop,
+						nextUrlPos, nextUrlLength, &nextUrl);
 				continue;
 			}
 		}
@@ -2446,11 +2410,11 @@ TTextView::Reader::Insert(const char *line, int32 count, bool isHyperLink,
 		array.count = 1;
 		array.runs[0].offset = 0;
 		if (isHeader) {
-			array.runs[0].color = isHyperLink ? kHyperLinkColor : kHeaderColor;
+			array.runs[0].color = isHyperLink ? ui_color(B_LINK_TEXT_COLOR) : kHeaderColor;
 			font.SetSize(font.Size() * 0.9);
 		} else {
 			array.runs[0].color = isHyperLink
-				? kHyperLinkColor : kNormalTextColor;
+				? ui_color(B_LINK_TEXT_COLOR) : ui_color(B_PANEL_TEXT_COLOR);
 		}
 		array.runs[0].font = font;
 	}
@@ -2511,8 +2475,9 @@ TTextView::Reader::Run(void *_this)
 				eol += 2;	// CR+LF belong to the line
 				size_t length = eol - header;
 
-		 		buffer = (char *)realloc(buffer, length + 1);
-		 		if (buffer == NULL)
+				free(buffer);
+				buffer = (char *)malloc(length + 1);
+				if (buffer == NULL)
 		 			goto done;
 
 		 		memcpy(buffer, header, length);
@@ -2721,7 +2686,7 @@ TTextView::InsertText(const char *insertText, int32 length, int32 offset,
 		style.count = 1;
 		style.runs[0].offset = 0;
 		style.runs[0].font = fFont;
-		style.runs[0].color = kNormalTextColor;
+		style.runs[0].color = ui_color(B_PANEL_TEXT_COLOR);
 		runs = &style;
 	}
 
@@ -2813,6 +2778,8 @@ TTextView::CheckSpelling(int32 start, int32 end, int32 flags)
 	bool		isAlpha;
 	bool		isApost;
 
+	rgb_color normalColor = ui_color(B_PANEL_TEXT_COLOR);
+
 	for (next = text + start, endPtr = text + end; next <= endPtr; next++) {
 		//printf("next=%c\n", *next);
 		// ToDo: this has to be refined to other languages...
@@ -2890,7 +2857,7 @@ TTextView::CheckSpelling(int32 start, int32 end, int32 flags)
 	if (nextHighlight <= end
 		&& (flags & S_CLEAR_ERRORS) != 0
 		&& nextHighlight < TextLength())
-		SetFontAndColor(nextHighlight, end, NULL, B_FONT_ALL, &kNormalTextColor);
+		SetFontAndColor(nextHighlight, end, NULL, B_FONT_ALL, &normalColor);
 }
 
 
@@ -3080,7 +3047,7 @@ TTextView::WindowActivated(bool flag)
 		// WindowActivated(false) は、IM も Inactive になり、そのまま確定される。
 		// しかしこの場合、input_server が B_INPUT_METHOD_EVENT(B_INPUT_METHOD_STOPPED)
 		// を送ってこないまま矛盾してしまうので、やむを得ずここでつじつまあわせ処理している。
-		// OpenBeOSで修正されることを願って暫定処置としている。
+		// Haikuで修正されることを願って暫定処置としている。
 		fInputMethodUndoState.active = false;
 		// fInputMethodUndoBufferに溜まっている最後のデータがK_INSERTEDなら（確定）正規のバッファへ追加
 		if (fInputMethodUndoBuffer.CountItems() > 0) {
@@ -3134,12 +3101,14 @@ TTextView::AddQuote(int32 start, int32 finish)
 			// add quote to this line
 			int32 lineLength = index - lastLine + 1;
 
-			target = (char *)realloc(target, targetLength + lineLength + quoteLength);
-			if (target == NULL) {
-				// free the old buffer?
+			char* result = (char *)realloc(target,
+				targetLength + lineLength + quoteLength);
+			if (result == NULL) {
+				free(target);
 				free(text);
 				return;
 			}
+			target = result;
 
 			// copy the quote sign
 			memcpy(&target[targetLength], QUOTE, quoteLength);

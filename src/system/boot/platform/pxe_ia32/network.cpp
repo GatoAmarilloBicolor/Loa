@@ -92,7 +92,7 @@ PXEService::Init()
 	if (res != 0 || cached_info.Status != 0) {
 		char s[100];
 		snprintf(s, sizeof(s), "Can't determine IP address! PXENV_GET_CACHED_INFO res %x, status %x\n", res, cached_info.Status);
-		panic(s);
+		panic("%s", s);
 		return B_ERROR;
 	}
 
@@ -178,7 +178,7 @@ UNDI::Init()
 	if (error != B_OK)
 		return error;
 
-	dprintf("client-ip: %lu.%lu.%lu.%lu, server-ip: %lu.%lu.%lu.%lu\n",
+	dprintf("client-ip: %u.%u.%u.%u, server-ip: %u.%u.%u.%u\n",
 		(fClientIP >> 24) & 0xff, (fClientIP >> 16) & 0xff, (fClientIP >> 8) & 0xff, fClientIP & 0xff,
 		(fServerIP >> 24) & 0xff, (fServerIP >> 16) & 0xff, (fServerIP >> 8) & 0xff, fServerIP & 0xff);
 
@@ -428,7 +428,7 @@ TFTP::ReceiveFile(const char* fileName, uint8** data, size_t* size)
 	}
 
 	uint32 fileSize = getFileSize.file_size;
-	dprintf("size of boot archive \"%s\": %lu\n", fileName, fileSize);
+	dprintf("size of boot archive \"%s\": %u\n", fileName, fileSize);
 
 	// allocate memory for the data
 	uint8* fileData = NULL;

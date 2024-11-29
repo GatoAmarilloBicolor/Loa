@@ -11,6 +11,7 @@
 #include <boot/platform/generic/text_menu.h>
 
 #include <string.h>
+#include <system_revision.h>
 
 
 // position
@@ -66,6 +67,19 @@ print_centered(int32 line, const char *text, bool resetPosition = true)
 	if (resetPosition) {
 		console_set_cursor(0, 0);
 			// this avoids unwanted line feeds
+	}
+}
+
+
+static void
+print_right(int32 line, const char *text, bool resetPosition = true)
+{
+	console_set_cursor(console_width() - (strlen(text) + 1), line);
+	printf("%s", text);
+
+	if (resetPosition) {
+		console_set_cursor(0, 0);
+		// this avoids unwanted line feeds
 	}
 }
 
@@ -159,7 +173,9 @@ print_item_at(int32 line, MenuItem *item, bool clearHelp = true)
 		if (length > width * 2)
 			width += 2 * kOffsetX - 1;
 
-		char buffer[width + 1];
+		char* buffer = (char*)malloc(width + 1);
+		if (buffer == NULL)
+			return;
 		buffer[width] = '\0';
 			// make sure the buffer is always terminated
 
@@ -195,6 +211,8 @@ print_item_at(int32 line, MenuItem *item, bool clearHelp = true)
 			print_centered(console_height() - kHelpLines + row, buffer);
 			row++;
 		}
+
+		free(buffer);
 	}
 }
 
@@ -209,7 +227,10 @@ draw_menu(Menu *menu)
 	print_centered(2, "Haiku Boot Loader");
 
 	console_set_color(kCopyrightColor, kBackgroundColor);
-	print_centered(4, "Copyright 2004-2018 Haiku, Inc.");
+	print_right(console_height() - 1, get_haiku_revision());
+
+	console_set_color(kCopyrightColor, kBackgroundColor);
+	print_centered(4, "Copyright 2004-2022 Haiku, Inc.");
 
 	if (menu->Title()) {
 		console_set_cursor(kOffsetX, kFirstLine - 2);
@@ -412,7 +433,8 @@ run_menu(Menu* menu)
 
 		item = menu->ItemAt(selected);
 
-		if (TEXT_CONSOLE_IS_CURSOR_KEY(key)) {
+		if (TEXT_CONSOLE_IS_CURSOR_KEY(key) || key == 'j' || key == 'J'
+			|| key == 'k' || key == 'K') {
 			if (item == NULL)
 				continue;
 
@@ -420,9 +442,13 @@ run_menu(Menu* menu)
 
 			switch (key) {
 				case TEXT_CONSOLE_KEY_UP:
+				case 'k':
+				case 'K':
 					selected = select_previous_valid_item(menu, selected - 1);
 					break;
 				case TEXT_CONSOLE_KEY_DOWN:
+				case 'j':
+				case 'J':
 					selected = select_next_valid_item(menu, selected + 1);
 					break;
 				case TEXT_CONSOLE_KEY_PAGE_UP:
@@ -465,6 +491,37 @@ run_menu(Menu* menu)
 			|| key == TEXT_CONSOLE_KEY_SPACE) {
 			if (item != NULL && invoke_item(menu, item, selected, key))
 				break;
+		} else if (key == '\t') {
+			if (item == NULL)
+				continue;
+
+			int32 oldSelected = selected;
+
+			// Use tab to cycle between items (on some platforms, arrow keys
+			// are not available)
+			selected = select_next_valid_item(menu, selected + 1);
+
+			if (selected == oldSelected)
+				selected = first_selectable_item(menu);
+
+			// check if selected has changed
+			if (selected != oldSelected) {
+				MenuItem *item = menu->ItemAt(selected);
+				if (item != NULL)
+					item->Select(true);
+
+				make_item_visible(menu, selected);
+				// make sure that the new selected entry is visible
+				if (sMenuOffset > selected
+					|| sMenuOffset + menu_height() <= selected) {
+					if (sMenuOffset > selected)
+						sMenuOffset = selected;
+					else
+						sMenuOffset = selected + 1 - menu_height();
+
+					draw_menu(menu);
+				}
+			}
 		} else if (key == TEXT_CONSOLE_KEY_ESCAPE
 			&& menu->Type() != MAIN_MENU) {
 			// escape key was hit

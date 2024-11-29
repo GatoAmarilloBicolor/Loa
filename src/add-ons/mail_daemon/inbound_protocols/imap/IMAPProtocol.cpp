@@ -38,8 +38,23 @@ IMAPProtocol::IMAPProtocol(const BMailAccountSettings& settings)
 
 IMAPProtocol::~IMAPProtocol()
 {
-}
+	MutexLocker locker(fWorkerLock);
+	std::vector<thread_id> threads;
+	for (int32 i = 0; i < fWorkers.CountItems(); i++) {
+		threads.push_back(fWorkers.ItemAt(i)->Thread());
+		fWorkers.ItemAt(i)->Quit();
+	}
+	locker.Unlock();
 
+	for (uint32 i = 0; i < threads.size(); i++)
+		wait_for_thread(threads[i], NULL);
+
+	FolderMap::iterator iterator = fFolders.begin();
+	for (; iterator != fFolders.end(); iterator++) {
+		IMAPFolder* folder = iterator->second;
+		delete folder; // to stop thread
+	}
+}
 
 status_t
 IMAPProtocol::CheckSubscribedFolders(IMAP::Protocol& protocol, bool idle)
@@ -70,7 +85,7 @@ IMAPProtocol::CheckSubscribedFolders(IMAP::Protocol& protocol, bool idle)
 
 	if (newFolders.IsEmpty() && fWorkers.CountItems() == workersWanted) {
 		// Nothing to do - we've already distributed everything
-		return B_OK;
+		return _EnqueueCheckMailboxes();
 	}
 
 	// Remove mailboxes from workers
@@ -104,8 +119,9 @@ IMAPProtocol::CheckSubscribedFolders(IMAP::Protocol& protocol, bool idle)
 	// Update known mailboxes
 	for (int32 i = 0; i < newFolders.CountStrings(); i++) {
 		const BString& mailbox = newFolders.StringAt(i);
-		fFolders.insert(std::make_pair(mailbox,
-			_CreateFolder(mailbox, separator)));
+		IMAPFolder* folder = _CreateFolder(mailbox, separator);
+		if (folder != NULL)
+			fFolders.insert(std::make_pair(mailbox, folder));
 	}
 
 	// Distribute the mailboxes evenly to the workers
@@ -187,8 +203,8 @@ IMAPProtocol::SyncMessages()
 		worker->EnqueueCheckSubscribedFolders();
 		return worker->Run();
 	}
-
-	return _EnqueueCheckMailboxes();
+	fWorkers.ItemAt(0)->EnqueueCheckSubscribedFolders();
+	return B_OK;
 }
 
 
@@ -259,14 +275,24 @@ IMAPProtocol::_CreateFolder(const BString& mailbox, const BString& separator)
 		return NULL;
 	}
 
-	status_t status = create_directory(path.Path(), 0755);
-	if (status != B_OK) {
-		fprintf(stderr, "Could not create path %s: %s\n", path.Path(),
-			strerror(status));
-		return NULL;
-	}
+	status_t status;
+	BNode node(path.Path());
 
-	CopyMailFolderAttributes(path.Path());
+	if (node.InitCheck() == B_OK) {
+		if (!node.IsDirectory()) {
+			fprintf(stderr, "%s already exists and is not a directory\n",
+				path.Path());
+			return NULL;
+		}
+	} else {
+		status = create_directory(path.Path(), 0755);
+		if (status != B_OK) {
+			fprintf(stderr, "Could not create path %s: %s\n", path.Path(),
+				strerror(status));
+			return NULL;
+		}
+		CopyMailFolderAttributes(path.Path());
+	}
 
 	entry_ref ref;
 	status = get_ref_for_path(path.Path(), &ref);
@@ -281,6 +307,7 @@ IMAPProtocol::_CreateFolder(const BString& mailbox, const BString& separator)
 	if (status != B_OK) {
 		fprintf(stderr, "Initializing folder %s failed: %s\n", path.Path(),
 			strerror(status));
+		delete folder;
 		return NULL;
 	}
 

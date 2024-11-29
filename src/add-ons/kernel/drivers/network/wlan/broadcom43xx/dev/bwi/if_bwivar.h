@@ -1,13 +1,15 @@
-/*
- * Copyright (c) 2007 The DragonFly Project.  All rights reserved.
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
  *
+ * Copyright (c) 2007 The DragonFly Project.  All rights reserved.
+ * 
  * This code is derived from software contributed to The DragonFly Project
  * by Sepherosa Ziehau <sepherosa@gmail.com>
- *
+ * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
- *
+ * 
  * 1. Redistributions of source code must retain the above copyright
  *    notice, this list of conditions and the following disclaimer.
  * 2. Redistributions in binary form must reproduce the above copyright
@@ -17,7 +19,7 @@
  * 3. Neither the name of The DragonFly Project nor the names of its
  *    contributors may be used to endorse or promote products derived
  *    from this software without specific, prior written permission.
- *
+ * 
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
  * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
@@ -30,9 +32,8 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
  * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
+ * 
  * $DragonFly: src/sys/dev/netif/bwi/if_bwivar.h,v 1.14 2008/02/15 11:15:38 sephe Exp $
- * $FreeBSD: releng/11.1/sys/dev/bwi/if_bwivar.h 287197 2015-08-27 08:56:39Z glebius $
  */
 
 #ifndef _IF_BWIVAR_H
@@ -303,7 +304,7 @@ struct bwi_fw_iv {
 	union {
 		uint32_t	val32;
 		uint16_t	val16;
-	} 			iv_val;
+	} __packed		iv_val;
 } __packed;
 
 #define BWI_FW_IV_OFS_MASK	__BITS(14, 0)
@@ -511,7 +512,7 @@ struct bwi_tx_radiotap_hdr {
 	uint8_t		wt_rate;
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
-};
+} __packed;
 
 #define BWI_RX_RADIOTAP_PRESENT				\
 	((1 << IEEE80211_RADIOTAP_TSFT) |		\
@@ -531,7 +532,7 @@ struct bwi_rx_radiotap_hdr {
 	int8_t		wr_antsignal;
 	int8_t		wr_antnoise;
 	/* TODO: sq */
-};
+} __packed __aligned(8);
 
 struct bwi_vap {
 	struct ieee80211vap	bv_vap;

@@ -1,21 +1,7 @@
 /*
-	ProcessController © 2000, Georges-Edouard Berenger, All Rights Reserved.
-	Copyright (C) 2004 beunited.org
-
-	This library is free software; you can redistribute it and/or
-	modify it under the terms of the GNU Lesser General Public
-	License as published by the Free Software Foundation; either
-	version 2.1 of the License, or (at your option) any later version.
-
-	This library is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-	Lesser General Public License for more details.
-
-	You should have received a copy of the GNU Lesser General Public
-	License along with this library; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-*/
+ * Copyright 2000, Georges-Edouard Berenger. All rights reserved.
+ * Distributed under the terms of the MIT License.
+ */
 
 
 #include "Utilities.h"
@@ -26,6 +12,7 @@
 #include <AppMisc.h>
 #include <Alert.h>
 #include <Bitmap.h>
+#include <ControlLook.h>
 #include <Deskbar.h>
 #include <FindDirectory.h>
 #include <NodeInfo.h>
@@ -75,12 +62,20 @@ get_team_name_and_icon(info_pack& infoPack, bool icon)
 		B_PATH_NAME_LENGTH - 1);
 
 	if (icon) {
-		infoPack.team_icon = new BBitmap(BRect(0, 0, 15, 15), B_RGBA32);
+		infoPack.team_icon = new BBitmap(BRect(BPoint(0, 0),
+			be_control_look->ComposeIconSize(B_MINI_ICON)), B_RGBA32);
 		if (!tryTrackerIcon
 			|| BNodeInfo::GetTrackerIcon(&info.ref, infoPack.team_icon,
-				B_MINI_ICON) != B_OK) {
+				(icon_size)-1) != B_OK) {
 			BMimeType genericAppType(B_APP_MIME_TYPE);
-			status = genericAppType.GetIcon(infoPack.team_icon, B_MINI_ICON);
+			status = genericAppType.GetIcon(infoPack.team_icon,
+				(icon_size)(infoPack.team_icon->Bounds().IntegerWidth() + 1));
+			// failed to get icon
+			if (status != B_OK) {
+				delete infoPack.team_icon;
+				infoPack.team_icon = NULL;
+				return false;
+			}
 		}
 	} else
 		infoPack.team_icon = NULL;
@@ -174,5 +169,22 @@ make_window_visible(BWindow* window, bool mayResize)
 		window->MoveTo(screen.left, frame.top);
 	if (frame.top < screen.top)
 		window->MoveBy(0, screen.top-frame.top);
+}
+
+
+BRect
+bar_rect(BRect& frame, BFont* font)
+{
+	BRect rect(frame);
+	font_height metrics;
+	font->GetHeight(&metrics);
+	float barHeight = metrics.ascent;
+	rect.top = frame.top + (frame.Height() - barHeight) / 2;
+	rect.bottom = frame.top + (frame.Height() + barHeight) / 2;
+
+	rect.left = frame.right - kMargin - kBarWidth;
+	rect.right = frame.right - kMargin;
+
+	return rect;
 }
 

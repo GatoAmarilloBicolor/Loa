@@ -12,6 +12,7 @@
 #include <NodeMonitor.h>
 
 #include "CachedBlock.h"
+#include "CRCTable.h"
 #include "DataStream.h"
 #include "DirectoryIterator.h"
 #include "ExtentStream.h"
@@ -31,16 +32,22 @@
 #define ERROR(x...) dprintf("\33[34mext2:\33[0m " x)
 
 
+#define EXT2_EA_CHECKSUM_SIZE (offsetof(ext2_inode, checksum_high) \
+	+ sizeof(uint16) - EXT2_INODE_NORMAL_SIZE)
+
+
 Inode::Inode(Volume* volume, ino_t id)
 	:
 	fVolume(volume),
 	fID(id),
 	fCache(NULL),
 	fMap(NULL),
+	fUnlinked(false),
 	fHasExtraAttributes(false)
 {
 	rw_lock_init(&fLock, "ext2 inode");
 	recursive_lock_init(&fSmallDataLock, "ext2 inode small data");
+	memset(&fNode, 0, sizeof(fNode));
 
 	TRACE("Inode::Inode(): ext2_inode: %lu, disk inode: %" B_PRIu32
 		"\n", sizeof(ext2_inode), fVolume->InodeSize());
@@ -69,10 +76,12 @@ Inode::Inode(Volume* volume)
 	fID(0),
 	fCache(NULL),
 	fMap(NULL),
+	fUnlinked(false),
 	fInitStatus(B_NO_INIT)
 {
 	rw_lock_init(&fLock, "ext2 inode");
 	recursive_lock_init(&fSmallDataLock, "ext2 inode small data");
+	memset(&fNode, 0, sizeof(fNode));
 
 	TRACE("Inode::Inode(): ext2_inode: %lu, disk inode: %" B_PRIu32 "\n",
 		sizeof(ext2_inode), fVolume->InodeSize());
@@ -135,10 +144,18 @@ Inode::WriteBack(Transaction& transaction)
 		", node size: %" B_PRIu32 ", this: %p, node: %p\n",
 		fID, blockNum, inodeBlockData, fVolume->InodeBlockIndex(fID),
 		fVolume->InodeSize(), fNodeSize, this, &fNode);
-	memcpy(inodeBlockData +
-			fVolume->InodeBlockIndex(fID) * fVolume->InodeSize(),
-		(uint8*)&fNode, fNodeSize);
+	ext2_inode* inode = (ext2_inode*)(inodeBlockData +
+			fVolume->InodeBlockIndex(fID) * fVolume->InodeSize());
+	memcpy(inode, (uint8*)&fNode, fNodeSize);
 
+	if (fVolume->HasMetaGroupChecksumFeature()) {
+		uint32 checksum = _InodeChecksum(inode);
+		inode->checksum = checksum & 0xffff;
+		if (fNodeSize > EXT2_INODE_NORMAL_SIZE
+			&& fNode.ExtraInodeSize() >= EXT2_EA_CHECKSUM_SIZE) {
+			inode->checksum_high = checksum >> 16;
+		}
+	}
 	TRACE("Inode::WriteBack() finished %" B_PRId32 "\n", Node().stream.direct[0]);
 
 	return B_OK;
@@ -172,6 +189,21 @@ Inode::UpdateNodeFromDisk()
 
 	memcpy(&fNode, inode, fNodeSize);
 
+	if (fVolume->HasMetaGroupChecksumFeature()) {
+		uint32 checksum = _InodeChecksum(inode);
+		uint32 provided = fNode.checksum;
+		if (fNodeSize > EXT2_INODE_NORMAL_SIZE
+			&& fNode.ExtraInodeSize() >= EXT2_EA_CHECKSUM_SIZE) {
+			provided |= ((uint32)fNode.checksum_high << 16);
+		} else
+			checksum &= 0xffff;
+		if (provided != checksum) {
+			ERROR("Inode::UpdateNodeFromDisk(%" B_PRIdOFF "): "
+			"verification failed\n", blockNum);
+			return B_BAD_DATA;
+		}
+	}
+
 	uint32 numLinks = fNode.NumLinks();
 	fUnlinked = numLinks == 0 || (IsDirectory() && numLinks == 1);
 
@@ -195,7 +227,7 @@ status_t
 Inode::FindBlock(off_t offset, fsblock_t& block, uint32 *_count)
 {
 	if (Flags() & EXT2_INODE_EXTENTS) {
-		ExtentStream stream(fVolume, &fNode.extent_stream, Size());
+		ExtentStream stream(fVolume, this, &fNode.extent_stream, Size());
 		return stream.FindBlock(offset, block, _count);
 	}
 	DataStream stream(fVolume, &fNode.stream, Size());
@@ -206,22 +238,6 @@ Inode::FindBlock(off_t offset, fsblock_t& block, uint32 *_count)
 status_t
 Inode::ReadAt(off_t pos, uint8* buffer, size_t* _length)
 {
-	size_t length = *_length;
-
-	// set/check boundaries for pos/length
-	if (pos < 0) {
-		ERROR("inode %" B_PRIdINO ": ReadAt failed(pos %" B_PRIdOFF
-			", length %" B_PRIuSIZE ")\n", ID(), pos, length);
-		return B_BAD_VALUE;
-	}
-
-	if (pos >= Size() || length == 0) {
-		TRACE("inode %" B_PRIdINO ": ReadAt 0 (pos %" B_PRIdOFF ", length %"
-			B_PRIuSIZE ")\n", ID(), pos, length);
-		*_length = 0;
-		return B_NO_ERROR;
-	}
-
 	return file_cache_read(FileCache(), NULL, pos, buffer, _length);
 }
 
@@ -389,7 +405,7 @@ Inode::InitDirectory(Transaction& transaction, Inode* parent)
 
 	fsblock_t blockNum;
 	if (Flags() & EXT2_INODE_EXTENTS) {
-		ExtentStream stream(fVolume, &fNode.extent_stream, Size());
+		ExtentStream stream(fVolume, this, &fNode.extent_stream, Size());
 		status = stream.FindBlock(0, blockNum);
 	} else {
 		DataStream stream(fVolume, &fNode.stream, Size());
@@ -409,13 +425,18 @@ Inode::InitDirectory(Transaction& transaction, Inode* parent)
 	root->dot_entry_name[0] = '.';
 
 	root->dotdot.inode_id = parent == NULL ? fID : parent->ID();
-	root->dotdot.entry_length = blockSize - 12;
+	uint32 dotdotlength = blockSize - 12;
+	if (fVolume->HasMetaGroupChecksumFeature())
+		dotdotlength -= sizeof(ext2_dir_entry_tail);
+	root->dotdot.entry_length = dotdotlength;
 	root->dotdot.name_length = 2;
 	root->dotdot.file_type = EXT2_TYPE_DIRECTORY;
 	root->dotdot_entry_name[0] = '.';
 	root->dotdot_entry_name[1] = '.';
 
 	parent->IncrementNumLinks(transaction);
+
+	SetDirEntryChecksum((uint8*)root);
 
 	return parent->WriteBack(transaction);
 }
@@ -427,8 +448,10 @@ Inode::Unlink(Transaction& transaction)
 	uint32 numLinks = fNode.NumLinks();
 	TRACE("Inode::Unlink(): Current links: %" B_PRIu32 "\n", numLinks);
 
-	if (numLinks == 0)
+	if (numLinks == 0) {
+		ERROR("Inode::Unlink(): no links\n");
 		return B_BAD_VALUE;
+	}
 
 	if ((IsDirectory() && numLinks == 2) || (numLinks == 1))  {
 		fUnlinked = true;
@@ -458,7 +481,7 @@ Inode::Unlink(Transaction& transaction)
 		status = remove_vnode(fVolume->FSVolume(), fID);
 		if (status != B_OK)
 			return status;
-	} else
+	} else if (!IsDirectory() || numLinks > 2)
 		fNode.SetNumLinks(--numLinks);
 
 	return WriteBack(transaction);
@@ -478,6 +501,13 @@ Inode::Create(Transaction& transaction, Inode* parent, const char* name,
 
 	if (parent != NULL) {
 		parent->WriteLockInTransaction(transaction);
+
+		// don't create anything in removed directories
+		bool removed;
+		if (get_vnode_removed(volume->FSVolume(), parent->ID(), &removed)
+				== B_OK && removed) {
+			return B_ENTRY_NOT_FOUND;
+		}
 
 		TRACE("Inode::Create(): Looking up entry destination\n");
 		HTree htree(volume, parent);
@@ -603,7 +633,7 @@ Inode::Create(Transaction& transaction, Inode* parent, const char* name,
 	if (volume->HasExtentsFeature()
 		&& (inode->IsDirectory() || inode->IsFile())) {
 		node.SetFlag(EXT2_INODE_EXTENTS);
-		ExtentStream stream(volume, &node.extent_stream, 0);
+		ExtentStream stream(volume, inode, &node.extent_stream, 0);
 		stream.Init();
 		ASSERT(stream.Check());
 	}
@@ -774,17 +804,8 @@ Inode::TransactionDone(bool success)
 {
 	if (!success) {
 		// Revert any changes to the inode
-		if (fInitStatus == B_OK && UpdateNodeFromDisk() != B_OK)
+		if (UpdateNodeFromDisk() != B_OK)
 			panic("Failed to reload inode from disk!\n");
-		else if (fInitStatus == B_NO_INIT) {
-			// TODO: Unpublish vnode?
-			panic("Failed to finish creating inode\n");
-		}
-	} else {
-		if (fInitStatus == B_NO_INIT) {
-			TRACE("Inode::TransactionDone(): Inode creation succeeded\n");
-			fInitStatus = B_OK;
-		}
 	}
 }
 
@@ -824,7 +845,7 @@ Inode::_EnlargeDataStream(Transaction& transaction, off_t size)
 
 	off_t end = size == 0 ? 0 : (size - 1) / fVolume->BlockSize() + 1;
 	if (Flags() & EXT2_INODE_EXTENTS) {
-		ExtentStream stream(fVolume, &fNode.extent_stream, Size());
+		ExtentStream stream(fVolume, this, &fNode.extent_stream, Size());
 		stream.Enlarge(transaction, end);
 		ASSERT(stream.Check());
 	} else {
@@ -836,7 +857,7 @@ Inode::_EnlargeDataStream(Transaction& transaction, off_t size)
 	fNode.SetSize(size);
 	TRACE("Inode::_EnlargeDataStream(): Setting allocated block count to %"
 		B_PRIdOFF "\n", end);
-	return _SetNumBlocks(_NumBlocks() + end * (fVolume->BlockSize() / 512));
+	return _SetNumBlocks(NumBlocks() + end * (fVolume->BlockSize() / 512));
 }
 
 
@@ -865,7 +886,7 @@ Inode::_ShrinkDataStream(Transaction& transaction, off_t size)
 
 	off_t end = size == 0 ? 0 : (size - 1) / fVolume->BlockSize() + 1;
 	if (Flags() & EXT2_INODE_EXTENTS) {
-		ExtentStream stream(fVolume, &fNode.extent_stream, Size());
+		ExtentStream stream(fVolume, this, &fNode.extent_stream, Size());
 		stream.Shrink(transaction, end);
 		ASSERT(stream.Check());
 	} else {
@@ -874,12 +895,12 @@ Inode::_ShrinkDataStream(Transaction& transaction, off_t size)
 	}
 
 	fNode.SetSize(size);
-	return _SetNumBlocks(_NumBlocks() - end * (fVolume->BlockSize() / 512));
+	return _SetNumBlocks(NumBlocks() - end * (fVolume->BlockSize() / 512));
 }
 
 
 uint64
-Inode::_NumBlocks()
+Inode::NumBlocks()
 {
 	if (fVolume->HugeFiles()) {
 		if (fNode.Flags() & EXT2_INODE_HUGE_FILE)
@@ -923,3 +944,123 @@ Inode::IncrementNumLinks(Transaction& transaction)
 		fVolume->ActivateDirNLink(transaction);
 	}
 }
+
+
+uint32
+Inode::_InodeChecksum(ext2_inode* inode)
+{
+	size_t offset = offsetof(ext2_inode, checksum);
+	uint32 number = fID;
+	uint32 checksum = calculate_crc32c(fVolume->ChecksumSeed(),
+		(uint8*)&number, sizeof(number));
+	uint32 gen = fNode.generation;
+	checksum = calculate_crc32c(checksum, (uint8*)&gen, sizeof(gen));
+	checksum = calculate_crc32c(checksum, (uint8*)inode, offset);
+	uint16 dummy = 0;
+	checksum = calculate_crc32c(checksum, (uint8*)&dummy, sizeof(dummy));
+	offset += sizeof(dummy);
+	checksum = calculate_crc32c(checksum, (uint8*)inode + offset,
+		EXT2_INODE_NORMAL_SIZE - offset);
+	if (fNodeSize > EXT2_INODE_NORMAL_SIZE) {
+		offset = offsetof(ext2_inode, checksum_high);
+		checksum = calculate_crc32c(checksum, (uint8*)inode
+			+ EXT2_INODE_NORMAL_SIZE, offset - EXT2_INODE_NORMAL_SIZE);
+		if (fNode.ExtraInodeSize() >= EXT2_EA_CHECKSUM_SIZE) {
+			checksum = calculate_crc32c(checksum, (uint8*)&dummy,
+				sizeof(dummy));
+			offset += sizeof(dummy);
+		}
+		checksum = calculate_crc32c(checksum, (uint8*)inode + offset,
+			fVolume->InodeSize() - offset);
+	}
+	return checksum;
+}
+
+
+ext2_dir_entry_tail*
+Inode::_DirEntryTail(uint8* block) const
+{
+	return (ext2_dir_entry_tail*)(block + fVolume->BlockSize()
+		- sizeof(ext2_dir_entry_tail));
+}
+
+
+uint32
+Inode::_DirEntryChecksum(uint8* block, uint32 id, uint32 gen) const
+{
+	uint32 number = id;
+	uint32 checksum = calculate_crc32c(fVolume->ChecksumSeed(),
+		(uint8*)&number, sizeof(number));
+	checksum = calculate_crc32c(checksum, (uint8*)&gen, sizeof(gen));
+	checksum = calculate_crc32c(checksum, block,
+		fVolume->BlockSize() - sizeof(ext2_dir_entry_tail));
+	return checksum;
+}
+
+
+void
+Inode::SetDirEntryChecksum(uint8* block, uint32 id, uint32 gen)
+{
+	if (fVolume->HasMetaGroupChecksumFeature()) {
+		ext2_dir_entry_tail* tail = _DirEntryTail(block);
+		tail->twelve = 12;
+		tail->hexade = 0xde;
+		tail->checksum = _DirEntryChecksum(block, id, gen);
+	}
+}
+
+
+void
+Inode::SetDirEntryChecksum(uint8* block)
+{
+	SetDirEntryChecksum(block, fID, fNode.generation);
+}
+
+
+uint32
+Inode::_ExtentLength(ext2_extent_stream* stream) const
+{
+	return sizeof(struct ext2_extent_header)
+		+ stream->extent_header.MaxEntries()
+			* sizeof(struct ext2_extent_entry);
+}
+
+
+uint32
+Inode::_ExtentChecksum(ext2_extent_stream* stream) const
+{
+	uint32 number = fID;
+	uint32 checksum = calculate_crc32c(fVolume->ChecksumSeed(),
+		(uint8*)&number, sizeof(number));
+	checksum = calculate_crc32c(checksum, (uint8*)&fNode.generation,
+		sizeof(fNode.generation));
+	checksum = calculate_crc32c(checksum, (uint8*)stream,
+		_ExtentLength(stream));
+	return checksum;
+}
+
+
+void
+Inode::SetExtentChecksum(ext2_extent_stream* stream)
+{
+	if (fVolume->HasMetaGroupChecksumFeature()) {
+		uint32 checksum = _ExtentChecksum(stream);
+		struct ext2_extent_tail *tail = (struct ext2_extent_tail *)
+			((uint8*)stream + _ExtentLength(stream));
+		tail->checksum = checksum;
+	}
+}
+
+
+bool
+Inode::VerifyExtentChecksum(ext2_extent_stream* stream)
+{
+	if (fVolume->HasMetaGroupChecksumFeature()) {
+		uint32 checksum = _ExtentChecksum(stream);
+		struct ext2_extent_tail *tail = (struct ext2_extent_tail *)
+			((uint8*)stream + _ExtentLength(stream));
+		return tail->checksum == checksum;
+	}
+	return true;
+}
+

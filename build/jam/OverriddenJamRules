@@ -1,15 +1,3 @@
-# Overridden to allow spaces in file names.
-actions Chmod1
-{
-	$(CHMOD) "$(MODE)" "$(1)"
-}
-
-# Overridden to allow spaces in file names.
-actions piecemeal together existing Clean
-{
-	$(RM) "$(>)"
-}
-
 #-------------------------------------------------------------------------------
 # Link rule/action are overwritten as they don't handle linking files who's name
 # contain spaces very well. Also adds resources and version to executable.
@@ -18,12 +6,13 @@ rule Link
 {
 	# Note: RESFILES must be set before invocation.
 
+	local architecture = [ on $(1) return $(TARGET_PACKAGING_ARCH) ] ;
 	if [ on $(1) return $(PLATFORM) ] = host {
 		LINK on $(1) = $(HOST_LINK) ;
 	 	LINKFLAGS on $(1) = $(HOST_LINKFLAGS) [ on $(1) return $(LINKFLAGS) ] ;
 	} else {
-		LINK on $(1) = $(TARGET_LINK_$(TARGET_PACKAGING_ARCH)) ;
-	 	LINKFLAGS on $(1) = $(TARGET_LINKFLAGS_$(TARGET_PACKAGING_ARCH))
+		LINK on $(1) = $(TARGET_LINK_$(architecture)) ;
+		LINKFLAGS on $(1) = $(TARGET_LINKFLAGS_$(architecture))
 			[ on $(1) return $(LINKFLAGS) ] ;
 	}
 
@@ -106,9 +95,12 @@ rule Object
 			if $(USES_BE_API) {
 				sysHeaders += $(HOST_BE_API_HEADERS) ;
 			}
-
 		} else {
-			sysHeaders += [ FStandardHeaders $(TARGET_PACKAGING_ARCH) ]
+			local language ;
+			if $(>:S) = .cpp || [ on $(2) return $(GENERATE_C++) ] {
+				language = C++ ;
+			}
+			sysHeaders += [ FStandardHeaders $(TARGET_PACKAGING_ARCH) : $(language) ]
 				$(TARGET_HDRS_$(TARGET_PACKAGING_ARCH)) ;
 			defines += $(TARGET_DEFINES_$(TARGET_PACKAGING_ARCH))
 				$(TARGET_DEFINES) ;
@@ -184,46 +176,46 @@ rule Object
 
 rule As
 {
-	local flags ;
-	local includesSeparator ;
-	local localIncludesOption ;
-	local systemIncludesOption ;
-	if [ on $(1) return $(PLATFORM) ] = host {
-		flags = [ on $(1) return $(HOST_ASFLAGS) $(ASFLAGS) ] ;
-
-		CC on $(1) = $(HOST_CC) ;
-
-		includesSeparator = $(HOST_INCLUDES_SEPARATOR) ;
-		localIncludesOption = $(HOST_LOCAL_INCLUDES_OPTION) ;
-		systemIncludesOption = $(HOST_SYSTEM_INCLUDES_OPTION) ;
-
-	} else {
-		flags = [ on $(1) return $(TARGET_ASFLAGS_$(TARGET_PACKAGING_ARCH))
-			$(ASFLAGS) ] ;
-
-		CC on $(1) = $(TARGET_CC_$(TARGET_PACKAGING_ARCH)) ;
-
-		includesSeparator
-			= $(TARGET_INCLUDES_SEPARATOR_$(TARGET_PACKAGING_ARCH)) ;
-		localIncludesOption
-			= $(TARGET_LOCAL_INCLUDES_OPTION_$(TARGET_PACKAGING_ARCH)) ;
-		systemIncludesOption
-			= $(TARGET_SYSTEM_INCLUDES_OPTION_$(TARGET_PACKAGING_ARCH)) ;
-	}
-
 	Depends $(<) : $(>) [ on $(1) return $(PLATFORM) ] ;
-	ASFLAGS on $(<) += $(flags) $(SUBDIRASFLAGS) ;
-	ASHDRS on $(<) = [ on $(<) FIncludes $(HDRS) : $(localIncludesOption) ]
-		$(includesSeparator)
-		[ on $(<) FSysIncludes $(SYSHDRS) : $(systemIncludesOption) ] ;
-	ASDEFS on $(<) = [ on $(<) FDefines $(DEFINES) ] ;
+
+	on $(1) {
+		local flags ;
+		local includesSeparator ;
+		local localIncludesOption ;
+		local systemIncludesOption ;
+
+		if $(PLATFORM) = host {
+			flags = $(HOST_ASFLAGS) $(ASFLAGS) ;
+
+			CC on $(1) = $(HOST_CC) ;
+
+			includesSeparator = $(HOST_INCLUDES_SEPARATOR) ;
+			localIncludesOption = $(HOST_LOCAL_INCLUDES_OPTION) ;
+			systemIncludesOption = $(HOST_SYSTEM_INCLUDES_OPTION) ;
+		} else {
+			flags = $(TARGET_ASFLAGS_$(TARGET_PACKAGING_ARCH)) $(ASFLAGS) ;
+
+			CC on $(1) = $(TARGET_CC_$(TARGET_PACKAGING_ARCH)) ;
+
+			includesSeparator
+				= $(TARGET_INCLUDES_SEPARATOR_$(TARGET_PACKAGING_ARCH)) ;
+			localIncludesOption
+				= $(TARGET_LOCAL_INCLUDES_OPTION_$(TARGET_PACKAGING_ARCH)) ;
+			systemIncludesOption
+				= $(TARGET_SYSTEM_INCLUDES_OPTION_$(TARGET_PACKAGING_ARCH)) ;
+		}
+
+		ASFLAGS on $(<) += $(flags) $(SUBDIRASFLAGS) ;
+		ASHDRS on $(<) = [ on $(<) FIncludes $(HDRS) : $(localIncludesOption) ]
+			$(includesSeparator)
+			[ on $(<) FSysIncludes $(SYSHDRS) : $(systemIncludesOption) ] ;
+		ASDEFS on $(<) = [ on $(<) FDefines $(DEFINES) ] ;
+	}
 }
 
-# TODO: The KERNEL_CCFLAGS were used here before. Check whether we need any
-# flags we don't have now.
 actions As
 {
-	$(CC) -c "$(2)" -O2 $(ASFLAGS) -D_ASSEMBLER $(ASDEFS) $(ASHDRS) -o "$(1)" ;
+	$(CC) -c "$(2)" -O2 $(ASFLAGS) -D_ASSEMBLER $(ASDEFS) $(ASHDRS) -o "$(1)"
 }
 
 rule Lex
@@ -302,7 +294,6 @@ rule Cc
 			includesSeparator = $(HOST_INCLUDES_SEPARATOR) ;
 			localIncludesOption = $(HOST_LOCAL_INCLUDES_OPTION) ;
 			systemIncludesOption = $(HOST_SYSTEM_INCLUDES_OPTION) ;
-
 		} else {
 			# warning flags
 			if $(WARNINGS) != 0 {
@@ -338,7 +329,7 @@ rule Cc
 
 actions Cc
 {
-	$(CC) $(CCFLAGS) -c "$(2)" $(CCDEFS) $(CCHDRS) -o "$(1)" ;
+	$(CC) $(CCFLAGS) -c "$(2)" $(CCDEFS) $(CCHDRS) -o "$(1)"
 }
 
 rule C++
@@ -380,7 +371,6 @@ rule C++
 			includesSeparator = $(HOST_INCLUDES_SEPARATOR) ;
 			localIncludesOption = $(HOST_LOCAL_INCLUDES_OPTION) ;
 			systemIncludesOption = $(HOST_SYSTEM_INCLUDES_OPTION) ;
-
 		} else {
 			# warning flags
 			if $(WARNINGS) != 0 {
@@ -416,13 +406,13 @@ rule C++
 
 actions C++
 {
-	$(C++) -c "$(2)" $(C++FLAGS) $(CCDEFS) $(CCHDRS) -o "$(1)" ;
+	$(C++) -c "$(2)" $(C++FLAGS) $(CCDEFS) $(CCHDRS) -o "$(1)"
 }
 
+# Force recreation of the archive to avoid build errors caused by
+# stale dependencies after renaming or deleting object files.
 actions together Archive
 {
-	# Force recreation of the archive to avoid build errors caused by
-	# stale dependencies after renaming or deleting object files.
 	$(RM) $(<)
 	$(AR) $(<) $(>)
 }
@@ -462,8 +452,7 @@ rule LibraryFromObjects
 
 		# library depends on its member objects
 
-		if $(KEEPOBJS)
-		{
+		if $(KEEPOBJS) {
 			LocalDepends obj : $(_s) ;
 		}
 
@@ -474,8 +463,7 @@ rule LibraryFromObjects
 		# For compatibility, we only do this if the library doesn't
 		# already have a path.
 
-		if ! $(_l:D)
-		{
+		if ! $(_l:D) {
 			# locate the library only, if it hasn't been located yet
 			local dir = $(LOCATE[1]) ;
 			if ! $(dir) {
@@ -487,16 +475,13 @@ rule LibraryFromObjects
 			MakeLocate $(_l)($(_s:BS)) : $(dir) ;
 		}
 
-		if $(NOARSCAN)
-		{
+		if $(NOARSCAN) {
 			# If we can't scan the library to timestamp its contents,
 			# we have to just make the library depend directly on the
 			# on-disk object files.
 
 			Depends $(_l) : $(_s) ;
-		}
-		else
-		{
+		} else {
 			# If we can scan the library, we make the library depend
 			# on its members and each member depend on the on-disk
 			# object file.
@@ -510,9 +495,6 @@ rule LibraryFromObjects
 		}
 
 		LocalClean clean : $(_l) ;
-
-		# bonefish: Not needed on the supported platforms. Maybe later...
-		# if $(CRELIB) { CreLib $(_l) : $(_s[1]) ; }
 
 		Archive $(_l) : $(_s) ;
 
@@ -573,8 +555,7 @@ rule MakeLocate
 {
 	local dir = $(2[1]) ;
 
-	if $(dir)
-	{
+	if $(dir) {
 		if ! $(dir:G) {
 			dir = $(dir:G=dir) ;
 		}
@@ -589,6 +570,14 @@ rule MakeLocate
 			}
 		}
 	}
+}
+
+# Overridden to use "-p", as Jam does not properly normalize
+# paths passed to NoUpdate, and so tries to make some directories
+# twice: once for the relative path, and once for the absolute path.
+actions MkDir1
+{
+	$(MKDIR) -p "$(<)"
 }
 
 rule MkDir
@@ -739,10 +728,4 @@ rule SubInclude
 
 	# restore SUBDIR_TOKENS
 	SUBDIR_TOKENS = $(oldSubDirTokens) ;
-}
-
-
-actions File
-{
-	$(CP) "$(>)" "$(<)"
 }

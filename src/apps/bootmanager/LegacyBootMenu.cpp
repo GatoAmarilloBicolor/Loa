@@ -18,6 +18,7 @@
 #include <Catalog.h>
 #include <DataIO.h>
 #include <DiskDevice.h>
+#include <DiskDeviceTypes.h>
 #include <DiskDeviceRoster.h>
 #include <DiskDeviceVisitor.h>
 #include <Drivers.h>
@@ -245,8 +246,8 @@ PartitionRecorder::Visit(BPartition* partition, int32 level)
 	partition->GetPath(&partitionPath);
 
 	BString buffer;
-	const char* name = partition->ContentName();
-	if (name == NULL) {
+	BString name = partition->ContentName();
+	if (name.Length() == 0) {
 		BString number;
 		number << ++fUnnamedIndex;
 		buffer << B_TRANSLATE_COMMENT("Unnamed %d",
@@ -318,12 +319,16 @@ LegacyBootMenu::CanBeInstalled(const BootDrive& drive)
 	PartitionVisitor visitor;
 	device.VisitEachDescendant(&visitor);
 
-	if (!visitor.HasPartitions())
+	if (!visitor.HasPartitions()
+			|| strcmp(device.ContentType(), kPartitionTypeIntel) != 0)
 		return B_ENTRY_NOT_FOUND;
 
 	// Enough space to write boot menu to drive?
 	if (visitor.FirstOffset() < (int)sizeof(kBootLoader))
 		return B_PARTITION_TOO_SMALL;
+
+	if (device.IsReadOnlyMedia())
+		return B_READ_ONLY_DEVICE;
 
 	return B_OK;
 }
@@ -609,7 +614,7 @@ LegacyBootMenu::_GetBIOSDrive(const char* device, int8& drive)
 	if (fd < 0)
 		return errno;
 
-	status_t status = ioctl(fd, B_GET_BIOS_DRIVE_ID, drive, 1);
+	status_t status = ioctl(fd, B_GET_BIOS_DRIVE_ID, &drive, 1);
 	close(fd);
 	return status;
 }

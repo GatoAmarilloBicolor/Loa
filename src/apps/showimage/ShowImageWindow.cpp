@@ -33,6 +33,7 @@
 #include <Entry.h>
 #include <File.h>
 #include <FilePanel.h>
+#include <GridLayout.h>
 #include <Locale.h>
 #include <Menu.h>
 #include <MenuBar.h>
@@ -56,6 +57,7 @@
 #include "ShowImageConstants.h"
 #include "ShowImageStatusView.h"
 #include "ShowImageView.h"
+#include "SupportingAppsMenu.h"
 #include "ToolBarIcons.h"
 
 
@@ -132,7 +134,7 @@ bs_printf(BString* string, const char* format, ...)
 ShowImageWindow::ShowImageWindow(BRect frame, const entry_ref& ref,
 	const BMessenger& trackerMessenger)
 	:
-	BWindow(frame, "", B_DOCUMENT_WINDOW, B_AUTO_UPDATE_SIZE_LIMITS),
+	BWindow(frame, "", B_DOCUMENT_WINDOW, 0),
 	fNavigator(ref, trackerMessenger),
 	fSavePanel(NULL),
 	fBar(NULL),
@@ -171,7 +173,6 @@ ShowImageWindow::ShowImageWindow(BRect frame, const entry_ref& ref,
 
 	// Create the tool bar
 	BRect viewFrame = contentView->Bounds();
-	viewFrame.right -= B_V_SCROLL_BAR_WIDTH;
 	fToolBar = new BToolBar(viewFrame);
 
 	// Add the tool icons.
@@ -222,24 +223,51 @@ ShowImageWindow::ShowImageWindow(BRect frame, const entry_ref& ref,
 	fToolBarVisible = fShowToolBar;
 
 	viewFrame.bottom = contentView->Bounds().bottom;
-	viewFrame.bottom -= B_H_SCROLL_BAR_HEIGHT;
+
+	// create the scroll area
+	fScrollArea = new BScrollView("image_scroller", NULL, 0,
+		false, false, B_PLAIN_BORDER);
+	BGridLayout* gridLayout = new BGridLayout(0, 0);
+	fScrollArea->SetLayout(gridLayout);
+	gridLayout->SetInsets(0, 1, -1, -1);
+
+	fScrollArea->MoveTo(viewFrame.LeftTop());
+	fScrollArea->ResizeTo(viewFrame.Size());
+	fScrollArea->SetResizingMode(B_FOLLOW_ALL);
+	contentView->AddChild(fScrollArea);
 
 	// create the image view
-	fImageView = new ShowImageView(viewFrame, "image_view", B_FOLLOW_ALL,
+	fImageView = new ShowImageView("image_view",
 		B_WILL_DRAW | B_FULL_UPDATE_ON_RESIZE | B_PULSE_NEEDED
 			| B_FRAME_EVENTS);
-	// wrap a scroll view around the view
-	fScrollView = new BScrollView("image_scroller", fImageView,
-		B_FOLLOW_ALL, 0, true, true, B_PLAIN_BORDER);
-	contentView->AddChild(fScrollView);
+	fImageView->SetExplicitMinSize(BSize(0, 0));
+	gridLayout->AddView(fImageView, 0, 0, 2, 1);
 
-	fStatusView = new ShowImageStatusView(fScrollView);
-	fScrollView->AddChild(fStatusView);
+	// create the scroll bars (wrapped to avoid double borders)
+	fVScrollBar = new BScrollBar(NULL, NULL, 0, 0, B_VERTICAL); {
+		BGroupView* vScrollBarContainer = new BGroupView(B_VERTICAL, 0);
+		vScrollBarContainer->GroupLayout()->AddView(fVScrollBar);
+		vScrollBarContainer->GroupLayout()->SetInsets(0, -1, 0, -1);
+		gridLayout->AddView(vScrollBarContainer, 2, 0);
+	}
+
+	fHScrollBar = new BScrollBar(NULL, NULL, 0, 0, B_HORIZONTAL); {
+		BGroupView* hScrollBarContainer = new BGroupView(B_VERTICAL, 0);
+		hScrollBarContainer->GroupLayout()->AddView(fHScrollBar);
+		hScrollBarContainer->GroupLayout()->SetInsets(0, -1, -1, -1);
+		gridLayout->AddView(hScrollBarContainer, 1, 1);
+	}
+
+	fVScrollBar->SetTarget(fImageView);
+	fHScrollBar->SetTarget(fImageView);
+
+	fStatusView = new ShowImageStatusView;
+	gridLayout->AddView(fStatusView, 0, 1);
 
 	// Update minimum window size
 	float toolBarMinWidth = fToolBar->MinSize().width;
-	SetSizeLimits(std::max(menuBarMinWidth, toolBarMinWidth), 100000, 100,
-		100000);
+	SetSizeLimits(std::max(menuBarMinWidth, toolBarMinWidth), 100000,
+		fBar->MinSize().height + gridLayout->MinSize().height, 100000);
 
 	// finish creating the window
 	if (_LoadImage() != B_OK) {
@@ -253,7 +281,13 @@ ShowImageWindow::ShowImageWindow(BRect frame, const entry_ref& ref,
 	_BuildViewMenu(menu, false);
 	fBar->AddItem(menu);
 
-	fBar->AddItem(_BuildRatingMenu());
+	menu = new BMenu(B_TRANSLATE_CONTEXT("Attributes", "Menus"));
+	menu->AddItem(_BuildRatingMenu());
+	BMessage* message = new BMessage(MSG_SET_RATING);
+	message->AddInt32("rating", 0);
+	fResetRatingItem = new BMenuItem(B_TRANSLATE("Reset rating"), message);
+	menu->AddItem(fResetRatingItem);
+	fBar->AddItem(menu);
 
 	SetPulseRate(100000);
 		// every 1/10 second; ShowImageView needs it for marching ants
@@ -350,7 +384,19 @@ ShowImageWindow::_BuildViewMenu(BMenu* menu, bool popupMenu)
 		menu->AddSeparatorItem();
 		_AddItemMenu(menu, B_TRANSLATE("Use as background" B_UTF8_ELLIPSIS),
 			MSG_DESKTOP_BACKGROUND, 0, 0, this);
+
+		BMenu* openWithMenu = new BMenu(B_TRANSLATE("Open with" B_UTF8_ELLIPSIS));
+		_UpdateOpenWithMenu(openWithMenu);
+		BMenuItem* item = new BMenuItem(openWithMenu, NULL);
+		menu->AddItem(item);
 	}
+}
+
+
+void
+ShowImageWindow::_UpdateOpenWithMenu(BMenu* menu)
+{
+	update_supporting_apps_menu(menu, fMimeType, MSG_OPEN_WITH, this);
 }
 
 
@@ -359,14 +405,13 @@ ShowImageWindow::_BuildRatingMenu()
 {
 	fRatingMenu = new BMenu(B_TRANSLATE("Rating"));
 	for (int32 i = 1; i <= 10; i++) {
-		BString label;
-		label << i;
 		BMessage* message = new BMessage(MSG_SET_RATING);
+		BString label;
+		fNumberFormat.Format(label, i);
 		message->AddInt32("rating", i);
 		fRatingMenu->AddItem(new BMenuItem(label.String(), message));
 	}
-	// NOTE: We may want to encapsulate the Rating menu within a more
-	// general "Attributes" menu.
+
 	return fRatingMenu;
 }
 
@@ -383,7 +428,12 @@ ShowImageWindow::_AddMenus(BMenuBar* bar)
 	item->SetShortcut('O', 0);
 	item->SetTarget(be_app);
 	menu->AddItem(item);
+
 	menu->AddSeparatorItem();
+
+	fOpenWithMenu = new BMenu(B_TRANSLATE("Open with" B_UTF8_ELLIPSIS));
+	item = new BMenuItem(fOpenWithMenu, NULL);
+	menu->AddItem(item);
 
 	BMenu* menuSaveAs = new BMenu(B_TRANSLATE("Save as" B_UTF8_ELLIPSIS),
 		B_ITEMS_IN_COLUMN);
@@ -391,16 +441,17 @@ ShowImageWindow::_AddMenus(BMenuBar* bar)
 		// Fill Save As submenu with all types that can be converted
 		// to from the Be bitmap image format
 	menu->AddItem(menuSaveAs);
-	_AddItemMenu(menu, B_TRANSLATE("Close"), B_QUIT_REQUESTED, 'W', 0, this);
 	_AddItemMenu(menu, B_TRANSLATE("Move to Trash"), kMsgDeleteCurrentFile, 'T', 0, this);
-	_AddItemMenu(menu, B_TRANSLATE("Get info" B_UTF8_ELLIPSIS),
-		MSG_GET_INFO, 'I', 0, this);
+	_AddItemMenu(menu, B_TRANSLATE("Use as background" B_UTF8_ELLIPSIS),
+		MSG_DESKTOP_BACKGROUND, 0, 0, this);
+	_AddItemMenu(menu, B_TRANSLATE("Get info"), MSG_GET_INFO, 'I', 0, this);
 	menu->AddSeparatorItem();
 	_AddItemMenu(menu, B_TRANSLATE("Page setup" B_UTF8_ELLIPSIS),
 		MSG_PAGE_SETUP, 0, 0, this);
 	_AddItemMenu(menu, B_TRANSLATE("Print" B_UTF8_ELLIPSIS),
 		MSG_PREPARE_PRINT, 'P', 0, this);
 	menu->AddSeparatorItem();
+	_AddItemMenu(menu, B_TRANSLATE("Close"), B_QUIT_REQUESTED, 'W', 0, this);
 	_AddItemMenu(menu, B_TRANSLATE("Quit"), B_QUIT_REQUESTED, 'Q', 0, be_app);
 	bar->AddItem(menu);
 
@@ -444,9 +495,6 @@ ShowImageWindow::_AddMenus(BMenuBar* bar)
 		MSG_FLIP_LEFT_TO_RIGHT, 0, 0, this);
 	_AddItemMenu(menu, B_TRANSLATE("Flip top to bottom"),
 		MSG_FLIP_TOP_TO_BOTTOM, 0, 0, this);
-	menu->AddSeparatorItem();
-	_AddItemMenu(menu, B_TRANSLATE("Use as background" B_UTF8_ELLIPSIS),
-		MSG_DESKTOP_BACKGROUND, 0, 0, this);
 
 	bar->AddItem(menu);
 }
@@ -494,9 +542,9 @@ ShowImageWindow::_ResizeWindowToImage()
 
 	// TODO: use View::GetPreferredSize() instead?
 	BRect r(bitmap->Bounds());
-	float width = r.Width() + B_V_SCROLL_BAR_WIDTH;
+	float width = r.Width() + be_control_look->GetScrollBarWidth(B_VERTICAL);
 	float height = r.Height() + 1 + fBar->Frame().Height()
-		+ B_H_SCROLL_BAR_HEIGHT;
+		+ be_control_look->GetScrollBarWidth(B_HORIZONTAL);
 
 	BRect frame = screen.Frame();
 	const float windowBorder = 5;
@@ -648,6 +696,9 @@ ShowImageWindow::MessageReceived(BMessage* message)
 					// to receive key messages
 				Show();
 			}
+
+			fMimeType = new BMimeType(message->FindString("mime"));
+			_UpdateOpenWithMenu(fOpenWithMenu);
 			_UpdateRatingMenu();
 			// Set width and height attributes of the currently showed file.
 			// This should only be a temporary solution.
@@ -750,6 +801,17 @@ ShowImageWindow::MessageReceived(BMessage* message)
 			break;
 		}
 
+		case MSG_OPEN_WITH:
+		{
+			BString appSig = "";
+			message->FindString("signature", &appSig);
+			entry_ref ref = fNavigator.CurrentRef();
+			BMessage openMsg(B_REFS_RECEIVED);
+			openMsg.AddRef("refs", &ref);
+			be_roster->Launch(appSig.String(), &openMsg);
+			break;
+		}
+
 		case MSG_SELECTION:
 		{
 			// The view sends this message when a selection is
@@ -846,8 +908,13 @@ ShowImageWindow::MessageReceived(BMessage* message)
 
 		case MSG_FILE_NEXT:
 		case kMsgNextSlide:
-			if (_ClosePrompt() && fNavigator.NextFile())
+			if (_ClosePrompt()) {
+				if (!fNavigator.NextFile()) {
+					// Wrap back around
+					fNavigator.FirstFile();
+				}
 				_LoadImage();
+			}
 			break;
 
 		case kMsgDeleteCurrentFile:
@@ -1035,8 +1102,8 @@ ShowImageWindow::MessageReceived(BMessage* message)
 			float offset;
 			if (message->FindFloat("offset", &offset) == B_OK) {
 				fToolBar->MoveBy(0, offset);
-				fScrollView->ResizeBy(0, -offset);
-				fScrollView->MoveBy(0, offset);
+				fScrollArea->ResizeBy(0, -offset);
+				fScrollArea->MoveBy(0, offset);
 				UpdateIfNeeded();
 				snooze(15000);
 			}
@@ -1054,8 +1121,8 @@ ShowImageWindow::MessageReceived(BMessage* message)
 					fToolBar->Hide();
 				BRect frame = fToolBar->Parent()->Bounds();
 				frame.top = fToolBar->Frame().bottom + 1;
-				fScrollView->MoveTo(fScrollView->Frame().left, frame.top);
-				fScrollView->ResizeTo(fScrollView->Bounds().Width(),
+				fScrollArea->MoveTo(fScrollArea->Frame().left, frame.top);
+				fScrollArea->ResizeTo(fScrollArea->Bounds().Width(),
 					frame.Height() + 1);
 			}
 			break;
@@ -1081,15 +1148,21 @@ ShowImageWindow::_GetFileInfo(const entry_ref& ref)
 void
 ShowImageWindow::_UpdateStatusText(const BMessage* message)
 {
-	BString frameText;
+	BString frameText, height, width;
 	if (fImageView->Bitmap() != NULL) {
 		BRect bounds = fImageView->Bitmap()->Bounds();
-		frameText << bounds.IntegerWidth() + 1
-			<< "x" << bounds.IntegerHeight() + 1;
+		fNumberFormat.Format(width, bounds.IntegerWidth() + 1);
+		fNumberFormat.Format(height, bounds.IntegerHeight() + 1);
+		frameText.SetToFormat("%s × %s", width.String(), height.String());
 	}
-	BString pages;
-	if (fNavigator.PageCount() > 1)
-		pages << fNavigator.CurrentPage() << "/" << fNavigator.PageCount();
+
+	BString currentPage, pageCount, pages;
+	if (fNavigator.PageCount() > 1) {
+		fNumberFormat.Format(currentPage, fNavigator.CurrentPage());
+		fNumberFormat.Format(pageCount, fNavigator.PageCount());
+		pages.SetToFormat("%s / %s", currentPage.String(), pageCount.String());
+	}
+
 	fStatusView->Update(fNavigator.CurrentRef(), frameText, pages, fImageType,
 		fImageView->Zoom());
 }
@@ -1114,10 +1187,9 @@ void
 ShowImageWindow::_SaveAs(BMessage* message)
 {
 	// Read the translator and output type the user chose
-	translator_id outTranslator;
+	int32 outTranslator;
 	uint32 outType;
-	if (message->FindInt32(kTranslatorField,
-			reinterpret_cast<int32 *>(&outTranslator)) != B_OK
+	if (message->FindInt32(kTranslatorField, &outTranslator) != B_OK
 		|| message->FindInt32(kTypeField,
 			reinterpret_cast<int32 *>(&outType)) != B_OK)
 		return;
@@ -1132,6 +1204,7 @@ ShowImageWindow::_SaveAs(BMessage* message)
 	BMessenger target(this);
 	fSavePanel = new (std::nothrow) BFilePanel(B_SAVE_PANEL,
 		&target, NULL, 0, false, &panelMsg);
+
 	if (!fSavePanel)
 		return;
 
@@ -1142,6 +1215,12 @@ ShowImageWindow::_SaveAs(BMessage* message)
 			settings->GetString("SaveDirectory", NULL));
 		settings->Unlock();
 	}
+
+	// Prefill current image's file name in save dialog
+	BEntry entry = fImageView->Image();
+	BPath path(&entry);
+	const char* filename = path.Leaf();
+	fSavePanel->SetSaveText(filename);
 
 	fSavePanel->Window()->SetWorkspaces(B_CURRENT_WORKSPACE);
 	fSavePanel->Show();
@@ -1162,10 +1241,9 @@ ShowImageWindow::_SaveToFile(BMessage* message)
 
 	// Read in the translator and type to be used
 	// to save the output image
-	translator_id outTranslator;
+	int32 outTranslator;
 	uint32 outType;
-	if (message->FindInt32(kTranslatorField,
-			reinterpret_cast<int32 *>(&outTranslator)) != B_OK
+	if (message->FindInt32(kTranslatorField, &outTranslator) != B_OK
 		|| message->FindInt32(kTypeField,
 			reinterpret_cast<int32 *>(&outType)) != B_OK)
 		return;
@@ -1246,6 +1324,10 @@ ShowImageWindow::_ClosePrompt()
 status_t
 ShowImageWindow::_LoadImage(bool forward)
 {
+	// If the user triggered a _LoadImage while in a slide show,
+	// make sure the new image is shown for the set delay:
+	_ResetSlideShowDelay();
+
 	BMessenger us(this);
 	status_t status = my_app->DefaultCache().RetrieveImage(
 		fNavigator.CurrentRef(), fNavigator.CurrentPage(), &us);
@@ -1290,8 +1372,8 @@ ShowImageWindow::_ToggleFullScreen()
 		fWindowFrame = Frame();
 		frame = screen.Frame();
 		frame.top -= fBar->Bounds().Height() + 1;
-		frame.right += B_V_SCROLL_BAR_WIDTH;
-		frame.bottom += B_H_SCROLL_BAR_HEIGHT;
+		frame.right += be_control_look->GetScrollBarWidth(B_VERTICAL);
+		frame.bottom += be_control_look->GetScrollBarWidth(B_HORIZONTAL);
 
 		SetFlags(Flags() | B_NOT_RESIZABLE | B_NOT_MOVABLE);
 
@@ -1509,6 +1591,14 @@ ShowImageWindow::_StopSlideShow()
 
 
 void
+ShowImageWindow::_ResetSlideShowDelay()
+{
+	if (fSlideShowRunner != NULL)
+		fSlideShowRunner->SetInterval(fSlideShowDelay);
+}
+
+
+void
 ShowImageWindow::_UpdateRatingMenu()
 {
 	BFile file(&fNavigator.CurrentRef(), B_READ_ONLY);
@@ -1526,6 +1616,7 @@ ShowImageWindow::_UpdateRatingMenu()
 			break;
 		item->SetMarked(i == rating);
 	}
+	fResetRatingItem->SetEnabled(rating > 0);
 }
 
 
@@ -1591,8 +1682,8 @@ ShowImageWindow::_SetToolBarVisible(bool visible, bool animate)
 		finalMessage.AddBool("show", visible);
 		PostMessage(&finalMessage, this);
 	} else {
-		fScrollView->ResizeBy(0, -diff);
-		fScrollView->MoveBy(0, diff);
+		fScrollArea->ResizeBy(0, -diff);
+		fScrollArea->MoveBy(0, diff);
 		fToolBar->MoveBy(0, diff);
 		if (!visible)
 			fToolBar->Hide();

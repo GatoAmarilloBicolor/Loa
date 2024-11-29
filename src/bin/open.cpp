@@ -97,7 +97,8 @@ main(int argc, char** argv)
 		} else if (strchr(*argv, ':')) {
 			// try to open it as an URI
 			BUrl url(*argv);
-			if (url.OpenWithPreferredApplication() == B_OK)
+			result = url.OpenWithPreferredApplication();
+			if (result == B_OK || result == B_ALREADY_RUNNING)
 				continue;
 
 			// maybe it's "file:line" or "file:line:col"

@@ -1,3 +1,5 @@
+#include <vm/vm.h>
+
 #include "soc_pxa.h"
 
 /* PXA Interrupt Controller Registers */
@@ -7,7 +9,7 @@
 #define PXA_ICMR2	0x28
 
 void
-PXAInterruptController::EnableInterrupt(int irq)
+PXAInterruptController::EnableInterrupt(int32 irq)
 {
 	if (irq <= 31) {
 		fRegBase[PXA_ICMR] |= 1 << irq;
@@ -19,7 +21,7 @@ PXAInterruptController::EnableInterrupt(int irq)
 
 
 void
-PXAInterruptController::DisableInterrupt(int irq)
+PXAInterruptController::DisableInterrupt(int32 irq)
 {
 	if (irq <= 31) {
 		fRegBase[PXA_ICMR] &= ~(1 << irq);
@@ -40,15 +42,18 @@ PXAInterruptController::HandleInterrupt()
 }
 
 
-PXAInterruptController::PXAInterruptController(fdt_module_info *fdt, fdt_device_node node)
-	: InterruptController(fdt, node) {
-	fRegArea = fFDT->map_reg_range(node, 0, (void**)&fRegBase);
+PXAInterruptController::PXAInterruptController(uint32_t reg_base)
+{
+	fRegArea = vm_map_physical_memory(B_SYSTEM_TEAM, "intc-pxa", (void**)&fRegBase,
+		B_ANY_KERNEL_ADDRESS, B_PAGE_SIZE, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
+		reg_base, false);
 	if (fRegArea < 0)
 		panic("PXAInterruptController: cannot map registers!");
 
 	fRegBase[PXA_ICMR] = 0;
 	fRegBase[PXA_ICMR2] = 0;
 }
+
 
 #define PXA_TIMERS_INTERRUPT	7 /* OST_4_11 */
 
@@ -87,7 +92,7 @@ PXATimer::SetTimeout(bigtime_t timeout)
 		}
 	}
 
-	dprintf("arch_timer_set_hardware_timer(val=%lu, res=%lu)\n", val, res);
+	dprintf("arch_timer_set_hardware_timer(val=%" B_PRIu32 ", res=%" B_PRIu32 ")\n", val, res);
 	fRegBase[PXA_OIER] |= (1 << 4);
 	fRegBase[PXA_OMCR4] = res;
 	fRegBase[PXA_OSMR4] = val;
@@ -138,10 +143,11 @@ PXATimer::HandleInterrupt()
 }
 
 
-PXATimer::PXATimer(fdt_module_info *fdt, fdt_device_node node)
-	: HardwareTimer(fdt, node)
+PXATimer::PXATimer(uint32_t reg_base)
 {
-	fRegArea = fFDT->map_reg_range(node, 0, (void**)&fRegBase);
+	fRegArea = vm_map_physical_memory(B_SYSTEM_TEAM, "pxa-timer", (void**)&fRegBase,
+		B_ANY_KERNEL_ADDRESS, B_PAGE_SIZE, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
+		reg_base, false);
 	if (fRegArea < 0)
 		panic("Cannot map PXATimer registers!");
 

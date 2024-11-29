@@ -1,42 +1,50 @@
-1	swedish	x-vnd.Haiku-libbe	3337473349
+1	swedish	x-vnd.Haiku-libbe	1445751563
+All Rights Reserved.	AboutWindow		Alla rättigheter resarverade.
+gold master	AboutWindow		guld mästare
+Undo	TextView		Ångra
+OK	PrintJob		OK
+OK	Dragger		OK
 gamma	AboutWindow		gamma
-beta	AboutWindow		beta
-%3.2f GiB	StringForSize		%3.2f GiB
-Written by:	AboutWindow		Skrivet av:
+development	AboutWindow		utveckling
+{0, plural, one{%s byte/s} other{%s bytes/s}}	StringForRate	units per second	{0, plural, one{%s byte/s} other{%s bytes/s}}
+Print Server is not responding.	PrintJob		Utskriftservern svarar inte.
 About %app%	AboutMenuItem		Om %app%
+Warning	Dragger		Varning
+Green:	ColorControl		Grön:
+Redo	TextView		Gör om
+No pages to print!	PrintJob		Inga sidor att skriva ut!
+beta	AboutWindow		beta
+%s MiB	StringForSize	size unit	%s MiB
+OK	ZombieReplicantView		OK
 Cut	TextView		Klippa ut
+Default	Default decorator about box		Standard
+Can't delete this replicant from its original application. Life goes on.	Dragger		Kan inte ta bort replikanten från dess program. Livet fortsätter som vanligt.
+%s KiB	StringForSize	size unit	%s KiB
+Error	ZombieReplicantView		Fel
+Paste	TextView		Klistra in
+OK	AboutWindow		OK
+%s MiB/s	StringForRate	units per second	%s MiB/s
+Special Thanks:	AboutWindow		Särskilt tack till:
+%s TiB	StringForSize	size unit	%s TiB
+Default Haiku window decorator.	Default decorator about box		Standard Haiku window decorator.
+%s GiB	StringForSize	size unit	%s GiB
+%s B	StringForSize	size unit, narrow space	%s B
+Remove replicant	Dragger		Ta bort replikant
 Version	AboutWindow		Version
-Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Kan inte skapa replikanten för \"%description\".\n%error
+Red:	ColorControl		Röd:
+<empty>	Menu		<tom>
 Copy	TextView		Kopiera
-%3.2f KiB	StringForSize		%3.2f KiB
+Select all	TextView		Markera allt
 alpha	AboutWindow		alfa
 Error	PrintJob		Fel
-All Rights Reserved.	AboutWindow		Alla rättigheter resarverade.
-{0, plural, one{# byte} other{# bytes}}	StringForSize		{0, plural, one{# byte} other{# bytes}}
-About %app%	AboutWindow		Om %app%
-No pages to print!	PrintJob		Inga sidor att skriva ut!
-OK	Dragger		OK
-OK	PrintJob		OK
-Green:	ColorControl		Grön:
-Version history:	AboutWindow		Versionshistorik:
-Remove replicant	Dragger		Ta bort replikant
-Select all	TextView		Markera allt
-OK	AboutWindow		OK
-OK	ZombieReplicantView		OK
-Print Server is not responding.	PrintJob		Utskriftservern svarar inte.
-Paste	TextView		Klistra in
-Special Thanks:	AboutWindow		Särskilt tack till:
-%.2f TiB	StringForSize		%.2f TiB
-Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		Kan inte hitta programmet för replikanten. Ingen programsignatur är angiven.\n%error
-Redo	TextView		Gör om
-<empty>	Menu		<tom>
-Warning	Dragger		Varning
-Undo	TextView		Ångra
-Red:	ColorControl		Röd:
-%3.2f MiB	StringForSize		%3.2f MiB
+%s TiB/s	StringForRate	units per second	%s TiB/s
 About %app…	Dragger		Om %app...
-development	AboutWindow		utveckling
-Error	ZombieReplicantView		Fel
+About %app%	AboutWindow		Om %app%
+{0, plural, one{%s byte} other{%s bytes}}	StringForSize	size unit	{0, plural, one{%s byte} other{%s bytes}}
+%s GiB/s	StringForRate	units per second	%s GiB/s
+Version history:	AboutWindow		Versionshistorik:
+Cannot locate the application for the replicant. No application signature supplied.\n%error	ZombieReplicantView		Kan inte hitta programmet för replikanten. Ingen programsignatur är angiven.\n%error
+%s KiB/s	StringForRate	units per second	%s KiB/s
 Blue:	ColorControl		Blå:
-gold master	AboutWindow		guld mästare
-Can't delete this replicant from its original application. Life goes on.	Dragger		Kan inte ta bort replikanten från dess program. Livet fortsätter som vanligt.
+Cannot create the replicant for \"%description\".\n%error	ZombieReplicantView		Kan inte skapa replikanten för \"%description\".\n%error
+Written by:	AboutWindow		Skrivet av:

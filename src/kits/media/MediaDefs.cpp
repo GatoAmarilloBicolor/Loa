@@ -28,7 +28,7 @@
 
 #include "AddOnManager.h"
 #include "DataExchange.h"
-#include "debug.h"
+#include "MediaDebug.h"
 #include "MediaMisc.h"
 #include "MediaRosterEx.h"
 
@@ -201,19 +201,27 @@ operator<(const media_node& a, const media_node& b)
 // #pragma mark -
 
 
-media_multi_audio_format media_raw_audio_format::wildcard;
+#if __GNUC__ == 2
+const media_multi_audio_format media_raw_audio_format::wildcard
+	= media_multi_audio_format();
 
-media_multi_audio_format media_multi_audio_format::wildcard;
+const media_multi_audio_format media_multi_audio_format::wildcard
+	= media_multi_audio_format();
+#else
+const media_multi_audio_format media_raw_audio_format::wildcard = {};
 
-media_encoded_audio_format media_encoded_audio_format::wildcard = {{0}};
+const media_multi_audio_format media_multi_audio_format::wildcard = {};
+#endif
 
-media_video_display_info media_video_display_info::wildcard = {(color_space)0};
+const media_encoded_audio_format media_encoded_audio_format::wildcard = {};
 
-media_raw_video_format media_raw_video_format::wildcard = {0};
+const media_video_display_info media_video_display_info::wildcard = {};
 
-media_encoded_video_format media_encoded_video_format::wildcard = {{0}};
+const media_raw_video_format media_raw_video_format::wildcard = {};
 
-media_multistream_format media_multistream_format::wildcard = {0};
+const media_encoded_video_format media_encoded_video_format::wildcard = {};
+
+const media_multistream_format media_multistream_format::wildcard = {};
 
 
 // #pragma mark - media_format::Matches() support
@@ -783,7 +791,7 @@ media_format::SpecializeTo(const media_format* otherFormat)
 status_t
 media_format::SetMetaData(const void* data, size_t size)
 {
-	if (!data || size < 0 || size > META_DATA_MAX_SIZE)
+	if (!data || size > META_DATA_MAX_SIZE)
 		return B_BAD_VALUE;
 
 	void* new_addr;
@@ -1315,6 +1323,9 @@ shutdown_media_server(bigtime_t timeout,
 	bool (*progress)(int stage, const char* message, void* cookie),
 	void* cookie)
 {
+	BLaunchRoster launchRoster;
+	launchRoster.StopTarget(B_MEDIA_SERVER_SIGNATURE);
+
 	BMessage msg(B_QUIT_REQUESTED);
 	status_t err = B_MEDIA_SYSTEM_FAILURE;
 	bool shutdown = false;

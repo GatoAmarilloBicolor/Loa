@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * All rights reserved.
  *
@@ -25,8 +27,6 @@
  * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGES.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/if_ath_tx.h 289162 2015-10-12 03:27:08Z adrian $
  */
 #ifndef	__IF_ATH_TX_H__
 #define	__IF_ATH_TX_H__
@@ -68,7 +68,6 @@
  */
 #define	ATH_BA_ISSET(_bm, _n)	(((_n) < (WME_BA_BMP_SIZE)) &&		\
 	    ((_bm)[(_n) >> 5] & (1 << ((_n) & 31))))
-
 
 /* extracting the seqno from buffer seqno */
 #define	SEQNO(_a)	((_a) >> IEEE80211_SEQ_SEQ_SHIFT)

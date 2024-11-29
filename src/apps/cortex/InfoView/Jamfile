@@ -6,8 +6,6 @@ SubDirHdrs [ FDirName $(SUBDIR) $(DOTDOT) support ] ;
 
 SubDirCcFlags -DCORTEX_NAMESPACE=cortex ;
 
-SetSubDirSupportedPlatformsBeOSCompatible ;
-
 StaticLibrary cortex_info_view.a :
 	AppNodeInfoView.cpp
 	ConnectionInfoView.cpp
@@ -17,5 +15,17 @@ StaticLibrary cortex_info_view.a :
 	InfoView.cpp
 	InfoWindow.cpp
 	InfoWindowManager.cpp
+	LiveNodeInfoView.cpp
+;
+
+DoCatalogs cortex_info_view.a :
+	x-vnd.Cortex.InfoView
+	:
+	AppNodeInfoView.cpp
+	ConnectionInfoView.cpp
+	DormantNodeInfoView.cpp
+	EndPointInfoView.cpp
+	FileNodeInfoView.cpp
+	InfoView.cpp
 	LiveNodeInfoView.cpp
 ;

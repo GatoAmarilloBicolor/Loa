@@ -14,25 +14,11 @@
 
 #include <arch/cpu.h>
 #include <boot/kernel_args.h>
-#include <commpage.h>
-#include <elf.h>
 
-
-int arch_cpu_type;
-int arch_fpu_type;
-int arch_mmu_type;
-int arch_platform;
 
 status_t
 arch_cpu_preboot_init_percpu(kernel_args *args, int curr_cpu)
 {
-	// enable FPU
-	//ppc:set_msr(get_msr() | MSR_FP_AVAILABLE);
-
-	// The current thread must be NULL for all CPUs till we have threads.
-	// Some boot code relies on this.
-	arch_thread_set_current_thread(NULL);
-
 	return B_OK;
 }
 
@@ -50,12 +36,6 @@ arch_cpu_init_percpu(kernel_args *args, int curr_cpu)
 status_t
 arch_cpu_init(kernel_args *args)
 {
-	arch_cpu_type = args->arch_args.cpu_type;
-	arch_fpu_type = args->arch_args.fpu_type;
-	arch_mmu_type = args->arch_args.mmu_type;
-	arch_platform = args->arch_args.platform;
-	arch_platform = args->arch_args.machine;
-
 	return B_OK;
 }
 
@@ -70,9 +50,6 @@ arch_cpu_init_post_vm(kernel_args *args)
 status_t
 arch_cpu_init_post_modules(kernel_args *args)
 {
-	// add the functions to the commpage image
-	image_id image = get_commpage_image();
-
 	return B_OK;
 }
 
@@ -98,53 +75,69 @@ arch_cpu_sync_icache(void *address, size_t len)
 
 
 void
-arch_cpu_memory_read_barrier(void)
+arch_cpu_invalidate_TLB_page(addr_t page)
 {
-	// TODO: check if we need more here
-	// (or just call the inline version?)
-	// cf. headers/private/kernel/arch/arm/arch_atomic.h
-	asm volatile ("" : : : "memory");
+	// ensure visibility of the update to translation table walks
+	dsb();
+
+	// TLBIMVAIS(page)
+	asm volatile ("mcr p15, 0, %0, c8, c3, 1"
+		: : "r" (page));
+
+	// ensure completion of TLB invalidation
+	dsb();
+	isb();
 }
-
-
-void
-arch_cpu_memory_write_barrier(void)
-{
-	// TODO: check if we need more here
-	// (or just call the inline version?)
-	// cf. headers/private/kernel/arch/arm/arch_atomic.h
-	asm volatile ("" : : : "memory");
-}
-
 
 void
 arch_cpu_invalidate_TLB_range(addr_t start, addr_t end)
 {
+	// ensure visibility of the update to translation table walks
+	dsb();
+
 	int32 num_pages = end / B_PAGE_SIZE - start / B_PAGE_SIZE;
 	while (num_pages-- >= 0) {
 		asm volatile ("mcr p15, 0, %[c8format], c8, c6, 1"
 			: : [c8format] "r" (start) );
 		start += B_PAGE_SIZE;
 	}
+
+	// ensure completion of TLB invalidation
+	dsb();
+	isb();
 }
 
 
 void
 arch_cpu_invalidate_TLB_list(addr_t pages[], int num_pages)
 {
+	// ensure visibility of the update to translation table walks
+	dsb();
+
 	for (int i = 0; i < num_pages; i++) {
 		asm volatile ("mcr p15, 0, %[c8format], c8, c6, 1":
 			: [c8format] "r" (pages[i]) );
 	}
+
+	// ensure completion of TLB invalidation
+	dsb();
+	isb();
 }
 
 
 void
 arch_cpu_global_TLB_invalidate(void)
 {
+	// ensure visibility of the update to translation table walks
+	dsb();
+
 	uint32 Rd = 0;
 	asm volatile ("mcr p15, 0, %[c8format], c8, c7, 0"
 		: : [c8format] "r" (Rd) );
+
+	// ensure completion of TLB invalidation
+	dsb();
+	isb();
 }
 
 

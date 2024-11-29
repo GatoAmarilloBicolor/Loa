@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2008-2010 Atheros Communications Inc.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -21,8 +23,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD: releng/11.1/sys/dev/ath/ath_hal/ar9002/ar9287_cal.h 222301 2011-05-26 09:15:33Z adrian $
  */
 #ifndef	__AR9287_CAL_H__
 #define	__AR9287_CAL_H__

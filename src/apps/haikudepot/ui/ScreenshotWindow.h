@@ -1,5 +1,6 @@
 /*
  * Copyright 2014, Stephan Aßmus <superstippi@gmx.de>.
+ * Copyright 2021-2024, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #ifndef SCREENSHOT_WINDOW_H
@@ -10,12 +11,14 @@
 #include <ToolBar.h>
 #include <Window.h>
 
+#include "BitmapHolder.h"
 #include "PackageInfo.h"
 
 
 class BarberPole;
 class BitmapView;
 class BStringView;
+class Model;
 
 
 enum {
@@ -28,7 +31,7 @@ enum {
 
 class ScreenshotWindow : public BWindow {
 public:
-								ScreenshotWindow(BWindow* parent, BRect frame);
+								ScreenshotWindow(BWindow* parent, BRect frame, Model* model);
 	virtual						~ScreenshotWindow();
 
 	virtual bool				QuitRequested();
@@ -41,8 +44,6 @@ public:
 
 			void				SetPackage(const PackageInfoRef& package);
 
-	static	void				CleanupIcons();
-
 private:
 			void				_DownloadScreenshot();
 
@@ -51,6 +52,7 @@ private:
 	static	int32				_DownloadThreadEntry(void* data);
 			void				_DownloadThread();
 
+			BSize				_MaxWidthAndHeightOfAllScreenshots();
 			void				_ResizeToFitAndCenter();
 			void				_UpdateToolBar();
 
@@ -68,7 +70,7 @@ private:
 			bool				fBarberPoleShown;
 			BStringView*		fIndexView;
 
-			BitmapRef			fScreenshot;
+			BitmapHolderRef		fScreenshot;
 			BitmapView*			fScreenshotView;
 
 			int32				fCurrentScreenshotIndex; // atomic
@@ -78,6 +80,8 @@ private:
 
 			BLocker				fLock;
 			thread_id			fWorkerThread;
+
+			Model*				fModel;
 };
 
 

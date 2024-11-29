@@ -1,5 +1,5 @@
 /*
- * Copyright 2006-2010, Haiku, Inc. All Rights Reserved.
+ * Copyright 2006-2021, Haiku, Inc. All Rights Reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -18,6 +18,7 @@
 #include <util/DoublyLinkedList.h>
 #include <util/OpenHashTable.h>
 
+#include <AutoDeleter.h>
 #include <KernelExport.h>
 
 #include <NetBufferUtilities.h>
@@ -44,12 +45,15 @@
 #	define TRACE_BLOCK(x) dump_block x
 // do not remove the space before ', ##args' if you want this
 // to compile with gcc 2.95
-#	define TRACE_EP(format, args...)	dprintf("UDP [%llu] %p " format "\n", \
-		system_time(), this , ##args)
-#	define TRACE_EPM(format, args...)	dprintf("UDP [%llu] " format "\n", \
-		system_time() , ##args)
-#	define TRACE_DOMAIN(format, args...)	dprintf("UDP [%llu] (%d) " format \
-		"\n", system_time(), Domain()->family , ##args)
+#	define TRACE_EP(format, args...)	dprintf("UDP [%" B_PRIu64 ",%" \
+		B_PRIu32 "] %p " format "\n", system_time(), \
+		thread_get_current_thread_id(), this , ##args)
+#	define TRACE_EPM(format, args...)	dprintf("UDP [%" B_PRIu64 ",%" \
+		B_PRIu32 "] " format "\n", system_time() , \
+		thread_get_current_thread_id() , ##args)
+#	define TRACE_DOMAIN(format, args...)	dprintf("UDP [%" B_PRIu64 ",%" \
+		B_PRIu32 "] (%d) " format "\n", system_time(), \
+		thread_get_current_thread_id(), Domain()->family , ##args)
 #else
 #	define TRACE_BLOCK(x)
 #	define TRACE_EP(args...)	do { } while (0)
@@ -287,9 +291,9 @@ UdpDomainSupport::DemuxIncomingBuffer(net_buffer *buffer)
 	// NOTE: multicast is delivered directly to the endpoint
 	MutexLocker _(fLock);
 
-	if ((buffer->flags & MSG_BCAST) != 0)
+	if ((buffer->msg_flags & MSG_BCAST) != 0)
 		return _DemuxBroadcast(buffer);
-	if ((buffer->flags & MSG_MCAST) != 0)
+	if ((buffer->msg_flags & MSG_MCAST) != 0)
 		return B_ERROR;
 
 	return _DemuxUnicast(buffer);
@@ -299,7 +303,7 @@ UdpDomainSupport::DemuxIncomingBuffer(net_buffer *buffer)
 status_t
 UdpDomainSupport::DeliverError(status_t error, net_buffer* buffer)
 {
-	if ((buffer->flags & (MSG_BCAST | MSG_MCAST)) != 0)
+	if ((buffer->msg_flags & (MSG_BCAST | MSG_MCAST)) != 0)
 		return B_ERROR;
 
 	MutexLocker _(fLock);
@@ -381,7 +385,10 @@ UdpDomainSupport::ConnectEndpoint(UdpEndpoint *endpoint,
 
 	// we need to activate no matter whether or not we have just disconnected,
 	// as calling connect() always triggers an implicit bind():
-	return _BindEndpoint(endpoint, *endpoint->LocalAddress());
+	status_t status = _BindEndpoint(endpoint, *endpoint->LocalAddress());
+	if (status == B_OK)
+		gSocketModule->set_connected(endpoint->Socket());
+	return status;
 }
 
 
@@ -693,6 +700,24 @@ UdpEndpointManager::DumpEndpoints(int argc, char *argv[])
 // #pragma mark - inbound
 
 
+struct DomainSupportDelete
+{
+	inline void operator()(UdpDomainSupport* object)
+	{
+		sUdpEndpointManager->FreeEndpoint(object);
+	}
+};
+
+
+struct DomainSupportDeleter
+	: BPrivate::AutoDeleter<UdpDomainSupport, DomainSupportDelete>
+{
+	DomainSupportDeleter(UdpDomainSupport* object)
+		: BPrivate::AutoDeleter<UdpDomainSupport, DomainSupportDelete>(object)
+	{}
+};
+
+
 status_t
 UdpEndpointManager::ReceiveData(net_buffer *buffer)
 {
@@ -704,10 +729,10 @@ UdpEndpointManager::ReceiveData(net_buffer *buffer)
 		// we are only interested in delivering data to existing sockets.
 		return B_ERROR;
 	}
+	DomainSupportDeleter deleter(domainSupport);
 
 	status_t status = Deframe(buffer);
 	if (status != B_OK) {
-		sUdpEndpointManager->FreeEndpoint(domainSupport);
 		return status;
 	}
 
@@ -717,12 +742,10 @@ UdpEndpointManager::ReceiveData(net_buffer *buffer)
 		// Send port unreachable error
 		domainSupport->Domain()->module->error_reply(NULL, buffer,
 			B_NET_ERROR_UNREACH_PORT, NULL);
-		sUdpEndpointManager->FreeEndpoint(domainSupport);
 		return B_ERROR;
 	}
 
 	gBufferModule->free(buffer);
-	sUdpEndpointManager->FreeEndpoint(domainSupport);
 	return B_OK;
 }
 
@@ -743,13 +766,13 @@ UdpEndpointManager::ReceiveError(status_t error, net_buffer* buffer)
 		// we are only interested in delivering data to existing sockets.
 		return B_ERROR;
 	}
+	DomainSupportDeleter deleter(domainSupport);
 
 	// Deframe the buffer manually, as we usually only get 8 bytes from the
 	// original packet
 	udp_header header;
 	if (gBufferModule->read(buffer, 0, &header,
 			std::min((size_t)buffer->size, sizeof(udp_header))) != B_OK) {
-		sUdpEndpointManager->FreeEndpoint(domainSupport);
 		return B_BAD_VALUE;
 	}
 
@@ -763,7 +786,6 @@ UdpEndpointManager::ReceiveError(status_t error, net_buffer* buffer)
 	destination.SetPort(header.destination_port);
 
 	error = domainSupport->DeliverError(error, buffer);
-	sUdpEndpointManager->FreeEndpoint(domainSupport);
 	return error;
 }
 
@@ -771,7 +793,7 @@ UdpEndpointManager::ReceiveError(status_t error, net_buffer* buffer)
 status_t
 UdpEndpointManager::Deframe(net_buffer* buffer)
 {
-	TRACE_EPM("Deframe(%p [%ld bytes])", buffer, buffer->size);
+	TRACE_EPM("Deframe(%p [%" B_PRIu32 " bytes])", buffer, buffer->size);
 
 	NetBufferHeaderReader<udp_header> bufferHeader(buffer);
 	if (bufferHeader.Status() != B_OK)
@@ -806,7 +828,7 @@ UdpEndpointManager::Deframe(net_buffer* buffer)
 	if (buffer->size > udpLength)
 		gBufferModule->trim(buffer, udpLength);
 
-	if (header.udp_checksum != 0) {
+	if (header.udp_checksum != 0 && (buffer->buffer_flags & NET_BUFFER_L4_CHECKSUM_VALID) == 0) {
 		// check UDP-checksum (simulating a so-called "pseudo-header"):
 		uint16 sum = Checksum::PseudoHeader(addressModule, gBufferModule,
 			buffer, IPPROTO_UDP);
@@ -829,8 +851,6 @@ UdpEndpointManager::OpenEndpoint(UdpEndpoint *endpoint)
 	MutexLocker _(fLock);
 
 	UdpDomainSupport* domain = _GetDomainSupport(endpoint->Domain(), true);
-	if (domain)
-		domain->Ref();
 	return domain;
 }
 
@@ -878,8 +898,10 @@ UdpEndpointManager::_GetDomainSupport(net_domain* domain, bool create)
 	//      family.
 	UdpDomainList::Iterator iterator = fDomains.GetIterator();
 	while (UdpDomainSupport* domainSupport = iterator.Next()) {
-		if (domainSupport->Domain() == domain)
+		if (domainSupport->Domain() == domain) {
+			domainSupport->Ref();
 			return domainSupport;
+		}
 	}
 
 	if (!create)
@@ -893,6 +915,7 @@ UdpEndpointManager::_GetDomainSupport(net_domain* domain, bool create)
 	}
 
 	fDomains.Add(domainSupport);
+	domainSupport->Ref();
 	return domainSupport;
 }
 
@@ -906,10 +929,7 @@ UdpEndpointManager::_GetDomainSupport(net_buffer* buffer)
 {
 	MutexLocker _(fLock);
 
-	UdpDomainSupport* support = _GetDomainSupport(_GetDomain(buffer), false);
-	if (support)
-		support->Ref();
-	return support;
+	return _GetDomainSupport(_GetDomain(buffer), false);
 }
 
 
@@ -995,7 +1015,8 @@ UdpEndpoint::Free()
 status_t
 UdpEndpoint::SendRoutedData(net_buffer *buffer, net_route *route)
 {
-	TRACE_EP("SendRoutedData(%p [%lu bytes], %p)", buffer, buffer->size, route);
+	TRACE_EP("SendRoutedData(%p [%" B_PRIu32 " bytes], %p)", buffer,
+		buffer->size, route);
 
 	if (buffer->size > (0xffff - sizeof(udp_header)))
 		return EMSGSIZE;
@@ -1021,6 +1042,7 @@ UdpEndpoint::SendRoutedData(net_buffer *buffer, net_route *route)
 		calculatedChecksum = 0xffff;
 
 	*UDPChecksumField(buffer) = calculatedChecksum;
+	buffer->buffer_flags |= NET_BUFFER_L4_CHECKSUM_VALID;
 
 	return next->module->send_routed_data(next, route, buffer);
 }
@@ -1029,7 +1051,7 @@ UdpEndpoint::SendRoutedData(net_buffer *buffer, net_route *route)
 status_t
 UdpEndpoint::SendData(net_buffer *buffer)
 {
-	TRACE_EP("SendData(%p [%lu bytes])", buffer, buffer->size);
+	TRACE_EP("SendData(%p [%" B_PRIu32 " bytes])", buffer, buffer->size);
 
 	return gDatalinkModule->send_data(this, NULL, buffer);
 }
@@ -1050,14 +1072,15 @@ UdpEndpoint::BytesAvailable()
 status_t
 UdpEndpoint::FetchData(size_t numBytes, uint32 flags, net_buffer **_buffer)
 {
-	TRACE_EP("FetchData(%ld, 0x%lx)", numBytes, flags);
+	TRACE_EP("FetchData(%" B_PRIuSIZE ", 0x%" B_PRIx32 ")", numBytes, flags);
 
 	status_t status = Dequeue(flags, _buffer);
 	TRACE_EP("  FetchData(): returned from fifo status: %s", strerror(status));
 	if (status != B_OK)
 		return status;
 
-	TRACE_EP("  FetchData(): returns buffer with %ld bytes", (*_buffer)->size);
+	TRACE_EP("  FetchData(): returns buffer with %" B_PRIu32 " bytes",
+		(*_buffer)->size);
 	return B_OK;
 }
 
@@ -1065,7 +1088,7 @@ UdpEndpoint::FetchData(size_t numBytes, uint32 flags, net_buffer **_buffer)
 status_t
 UdpEndpoint::StoreData(net_buffer *buffer)
 {
-	TRACE_EP("StoreData(%p [%ld bytes])", buffer, buffer->size);
+	TRACE_EP("StoreData(%p [%" B_PRIu32 " bytes])", buffer, buffer->size);
 
 	return EnqueueClone(buffer);
 }
@@ -1074,7 +1097,7 @@ UdpEndpoint::StoreData(net_buffer *buffer)
 status_t
 UdpEndpoint::DeliverData(net_buffer *_buffer)
 {
-	TRACE_EP("DeliverData(%p [%ld bytes])", _buffer, _buffer->size);
+	TRACE_EP("DeliverData(%p [%" B_PRIu32 " bytes])", _buffer, _buffer->size);
 
 	net_buffer *buffer = gBufferModule->clone(_buffer, false);
 	if (buffer == NULL)
@@ -1402,7 +1425,8 @@ err1:
 	// TODO: shouldn't unregister the protocols here?
 	delete sUdpEndpointManager;
 
-	TRACE_EPM("init_udp() fails with %lx (%s)", status, strerror(status));
+	TRACE_EPM("init_udp() fails with %" B_PRIx32 " (%s)", status,
+		strerror(status));
 	return status;
 }
 

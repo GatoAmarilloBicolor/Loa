@@ -29,7 +29,7 @@ static const char* const kLinkPaths[PackageLinkSymlink::TYPE_ENUM_COUNT]
 	},
 	{
 		"../../../system/settings",
-		"../../../home/config/settings/global",
+		"../../../home/config/settings",
 		kUnknownLinkTarget
 	}
 };
@@ -159,10 +159,13 @@ PackageLinkSymlink::Read(io_request* request)
 status_t
 PackageLinkSymlink::ReadSymlink(void* buffer, size_t* bufferSize)
 {
-	size_t toCopy = std::min(strlen(fLinkPath), *bufferSize);
-	memcpy(buffer, fLinkPath, toCopy);
-	*bufferSize = toCopy;
+	size_t linkLength = strnlen(fLinkPath, B_PATH_NAME_LENGTH);
 
+	size_t bytesToCopy = std::min(linkLength, *bufferSize);
+
+	*bufferSize = linkLength;
+
+	memcpy(buffer, fLinkPath, bytesToCopy);
 	return B_OK;
 }
 
@@ -184,7 +187,7 @@ status_t
 PackageLinkSymlink::OpenAttribute(const StringKey& name, int openMode,
 	AttributeCookie*& _cookie)
 {
-	if (fPackage.Get() == NULL)
+	if (!fPackage.IsSet())
 		return B_ENTRY_NOT_FOUND;
 
 	return AutoPackageAttributes::OpenCookie(fPackage, name, openMode, _cookie);

@@ -140,6 +140,8 @@ __BEGIN_DECLS
 #include "acdebug.h"
 __END_DECLS
 
+#include "arch_init.h"
+
 
 ACPI_MODULE_NAME("Haiku ACPI Module")
 
@@ -156,9 +158,9 @@ ACPI_MODULE_NAME("Haiku ACPI Module")
 #	define DEBUG_FUNCTION_VF(x, y...)
 #else
 #	define DEBUG_FUNCTION() \
-		dprintf("acpi[%ld]: %s\n", find_thread(NULL), __PRETTY_FUNCTION__);
+		dprintf("acpi[%" B_PRId32 "]: %s\n", find_thread(NULL), __PRETTY_FUNCTION__);
 #	define DEBUG_FUNCTION_F(x, y...) \
-		dprintf("acpi[%ld]: %s(" x ")\n", find_thread(NULL), __PRETTY_FUNCTION__, y);
+		dprintf("acpi[%" B_PRId32 "]: %s(" x ")\n", find_thread(NULL), __PRETTY_FUNCTION__, y);
 #	if DEBUG_OSHAIKU == 1
 // No verbose debugging, do nothing
 #		define DEBUG_FUNCTION_V()
@@ -166,9 +168,9 @@ ACPI_MODULE_NAME("Haiku ACPI Module")
 #	else
 // Full debugging
 #		define DEBUG_FUNCTION_V() \
-			dprintf("acpi[%ld]: %s\n", find_thread(NULL), __PRETTY_FUNCTION__);
+			dprintf("acpi[%" B_PRId32 "]: %s\n", find_thread(NULL), __PRETTY_FUNCTION__);
 #		define DEBUG_FUNCTION_VF(x, y...) \
-			dprintf("acpi[%ld]: %s(" x ")\n", find_thread(NULL), __PRETTY_FUNCTION__, y);
+			dprintf("acpi[%" B_PRId32 "]: %s(" x ")\n", find_thread(NULL), __PRETTY_FUNCTION__, y);
 #	endif
 #endif
 
@@ -233,16 +235,14 @@ ACPI_PHYSICAL_ADDRESS
 AcpiOsGetRootPointer()
 {
 #ifdef _KERNEL_MODE
-	ACPI_PHYSICAL_ADDRESS address;
-	ACPI_STATUS status = AE_OK;
 	DEBUG_FUNCTION();
 	if (sACPIRoot == 0) {
-		sACPIRoot = (ACPI_PHYSICAL_ADDRESS)get_boot_item("ACPI_ROOT_POINTER", NULL);
-		if (sACPIRoot == 0) {
-			status = AcpiFindRootPointer(&address);
-			if (status == AE_OK)
-				sACPIRoot = address;
-		}
+		phys_addr_t* acpiRootPointer = (phys_addr_t*)get_boot_item("ACPI_ROOT_POINTER", NULL);
+		if (acpiRootPointer != NULL)
+			sACPIRoot = *acpiRootPointer;
+
+		if (sACPIRoot == 0)
+			sACPIRoot = arch_init_find_root_pointer();
 	}
 	return sACPIRoot;
 #else
@@ -410,9 +410,35 @@ AcpiOsVprintf(const char *fmt, va_list args)
 		vfprintf(AcpiGbl_OutputFile, fmt, args);
     }
 #else
+	// Buffer the output until we have a complete line to send to syslog, this avoids added
+	// "KERN:" entries in the middle of the line, and mixing up of the ACPI output with other
+	// messages from other CPUs
 	static char outputBuffer[1024];
-	vsnprintf(outputBuffer, 1024, fmt, args);
-	dprintf("%s", outputBuffer);
+	
+	// Append the new text to the buffer
+	size_t len = strlen(outputBuffer);
+	size_t printed = vsnprintf(outputBuffer + len, 1024 - len, fmt, args);
+	if (printed >= 1024 - len) {
+		// There was no space to fit the printed string in the outputBuffer. Remove what we added
+		// there, fush the buffer, and print the long string directly
+		outputBuffer[len] = '\0';
+		dprintf("%s\n", outputBuffer);
+		outputBuffer[0] = '\0';
+		dvprintf(fmt, args);
+		return;
+	}
+
+	// See if we have a complete line
+	char* eol = strchr(outputBuffer + len, '\n');
+	while (eol != nullptr) {
+		// Print the completed line, then remove it from the buffer
+		*eol = 0;
+		dprintf("%s\n", outputBuffer);
+		memmove(outputBuffer, eol + 1, strlen(eol + 1) + 1);
+		// See if there is another line to print still in the buffer (in case ACPICA would call
+		// this function with a single string containing multiple newlines)
+		eol = strchr(outputBuffer, '\n');
+	}
 #endif
 }
 
@@ -447,7 +473,7 @@ AcpiOsGetLine(char *buffer)
 #endif
 
 	buffer[i] = 0;
-	DEBUG_FUNCTION_F("buffer: \"%s\"; result: %lu", buffer, i);
+	DEBUG_FUNCTION_F("buffer: \"%s\"; result: %" B_PRIu32, buffer, i);
 	return i;
 }
 
@@ -468,12 +494,16 @@ void *
 AcpiOsMapMemory(ACPI_PHYSICAL_ADDRESS where, ACPI_SIZE length)
 {
 #ifdef _KERNEL_MODE
+	// map_physical_memory() defaults to uncached memory if no type is specified.
+	// But ACPICA handles flushing caches itself, so we don't need it uncached,
+	// and on some architectures (e.g. ARM) uncached memory does not support
+	// unaligned accesses. Hence we specify "writeback" to avoid the default.
 	void *there;
-	area_id area = map_physical_memory("acpi_physical_mem_area",
-		(phys_addr_t)where, length, B_ANY_KERNEL_ADDRESS,
-		B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA, &there);
+	area_id area = map_physical_memory("acpi_physical_mem_area", (phys_addr_t)where, length,
+		B_ANY_KERNEL_ADDRESS | B_WRITE_BACK_MEMORY, B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
+		&there);
 
-	DEBUG_FUNCTION_F("addr: 0x%08lx; length: %lu; mapped: %p; area: %ld",
+	DEBUG_FUNCTION_F("addr: 0x%08lx; length: %lu; mapped: %p; area: %" B_PRId32,
 		(addr_t)where, (size_t)length, there, area);
 	if (area < 0) {
 		dprintf("ACPI: cannot map memory at 0x%" B_PRIu64 ", length %"
@@ -569,7 +599,7 @@ AcpiOsCreateSemaphore(UINT32 maxUnits, UINT32 initialUnits,
     	return AE_BAD_PARAMETER;
 
 	*outHandle = create_sem(initialUnits, "acpi_sem");
-	DEBUG_FUNCTION_F("max: %lu; count: %lu; result: %ld",
+	DEBUG_FUNCTION_F("max: %" B_PRIu32 "; count: %" B_PRIu32 "; result: %" PRId32,
 		(uint32)maxUnits, (uint32)initialUnits, *outHandle);
 
 	if (*outHandle >= B_OK)
@@ -593,7 +623,7 @@ AcpiOsCreateSemaphore(UINT32 maxUnits, UINT32 initialUnits,
 ACPI_STATUS
 AcpiOsDeleteSemaphore(ACPI_SEMAPHORE handle)
 {
-	DEBUG_FUNCTION_F("sem: %ld", handle);
+	DEBUG_FUNCTION_F("sem: %" B_PRId32, handle);
 	return delete_sem(handle) == B_OK ? AE_OK : AE_BAD_PARAMETER;
 }
 
@@ -734,7 +764,7 @@ AcpiOsInstallInterruptHandler(UINT32 interruptNumber,
 		ACPI_OSD_HANDLER serviceRoutine, void *context)
 {
 	status_t result;
-	DEBUG_FUNCTION_F("vector: %lu; handler: %p context %p",
+	DEBUG_FUNCTION_F("vector: %" B_PRIu32 "; handler: %p context %p",
 		(uint32)interruptNumber, serviceRoutine, context);
 
 #ifdef _KERNEL_MODE
@@ -744,7 +774,7 @@ AcpiOsInstallInterruptHandler(UINT32 interruptNumber,
 	result = install_io_interrupt_handler(interruptNumber,
 		(interrupt_handler)serviceRoutine, context, 0);
 
-	DEBUG_FUNCTION_F("vector: %lu; handler: %p context %p returned %lu",
+	DEBUG_FUNCTION_F("vector: %" B_PRIu32 "; handler: %p context %p returned %" B_PRId32,
 		(uint32)interruptNumber, serviceRoutine, context, (uint32)result);
 
 	return result == B_OK ? AE_OK : AE_BAD_PARAMETER;
@@ -769,13 +799,12 @@ ACPI_STATUS
 AcpiOsRemoveInterruptHandler(UINT32 interruptNumber,
 		ACPI_OSD_HANDLER serviceRoutine)
 {
-	DEBUG_FUNCTION_F("vector: %lu; handler: %p", (uint32)interruptNumber,
+	DEBUG_FUNCTION_F("vector: %" B_PRIu32 "; handler: %p", (uint32)interruptNumber,
 		serviceRoutine);
 #ifdef _KERNEL_MODE
-	remove_io_interrupt_handler(interruptNumber,
-		(interrupt_handler) serviceRoutine,
-		sInterruptHandlerData[interruptNumber]);
-	return AE_OK;
+	return remove_io_interrupt_handler(interruptNumber,
+		(interrupt_handler)serviceRoutine,
+		sInterruptHandlerData[interruptNumber]) == B_OK ? AE_OK : AE_ERROR;
 #else
 	return AE_ERROR;
 #endif
@@ -835,7 +864,7 @@ AcpiOsExecute(ACPI_EXECUTE_TYPE type, ACPI_OSD_EXEC_CALLBACK  function,
 void
 AcpiOsStall(UINT32 microseconds)
 {
-	DEBUG_FUNCTION_F("microseconds: %lu", (uint32)microseconds);
+	DEBUG_FUNCTION_F("microseconds: %" B_PRIu32, (uint32)microseconds);
 	if (microseconds)
 		spin(microseconds);
 }
@@ -855,7 +884,7 @@ AcpiOsStall(UINT32 microseconds)
 void
 AcpiOsSleep(ACPI_INTEGER milliseconds)
 {
-	DEBUG_FUNCTION_F("milliseconds: %lu", (uint32)milliseconds);
+	DEBUG_FUNCTION_F("milliseconds: %" B_PRIu32, (uint32)milliseconds);
 	if (gKernelStartup)
 		spin(milliseconds * 1000);
 	else
@@ -966,7 +995,7 @@ ACPI_STATUS
 AcpiOsReadPort(ACPI_IO_ADDRESS address, UINT32 *value, UINT32 width)
 {
 #ifdef _KERNEL_MODE
-	DEBUG_FUNCTION_F("addr: 0x%08lx; width: %lu", (addr_t)address, (uint32)width);
+	DEBUG_FUNCTION_F("addr: 0x%08lx; width: %" B_PRIu32, (addr_t)address, (uint32)width);
 	switch (width) {
 		case 8:
 			*value = gPCIManager->read_io_8(address);
@@ -1008,7 +1037,7 @@ ACPI_STATUS
 AcpiOsWritePort(ACPI_IO_ADDRESS address, UINT32 value, UINT32 width)
 {
 #ifdef _KERNEL_MODE
-	DEBUG_FUNCTION_F("addr: 0x%08lx; value: %lu; width: %lu",
+	DEBUG_FUNCTION_F("addr: 0x%08lx; value: %" B_PRIu32 "; width: %" B_PRIu32,
 		(addr_t)address, (uint32)value, (uint32)width);
 	switch (width) {
 		case 8:
@@ -1200,12 +1229,12 @@ AcpiOsSignal(UINT32 function, void *info)
 	switch (function) {
 		case ACPI_SIGNAL_FATAL:
 #ifdef _KERNEL_MODE
-			panic(info == NULL ? "AcpiOsSignal: fatal" : (const char*)info);
+			panic("%s", info == NULL ? "AcpiOsSignal: fatal" : (const char*)info);
 			break;
 #endif
 		case ACPI_SIGNAL_BREAKPOINT:
 			if (info != NULL)
-				AcpiOsPrintf("AcpiOsBreakpoint: %s ****\n", info);
+				AcpiOsPrintf("AcpiOsBreakpoint: %s ****\n", (const char*)info);
 			else
 				AcpiOsPrintf("At AcpiOsBreakpoint ****\n");
 			break;
@@ -1219,12 +1248,6 @@ AcpiOsSignal(UINT32 function, void *info)
  * Adapted from FreeBSD since the documentation of its intended impl
  * is lacking.
  *  Section 5.2.10.1: global lock acquire/release functions */
-#define GL_ACQUIRED     (-1)
-#define GL_BUSY         0
-#define GL_BIT_PENDING  0x01
-#define GL_BIT_OWNED    0x02
-#define GL_BIT_MASK     (GL_BIT_PENDING | GL_BIT_OWNED)
-
 
 /*
  * Adapted from FreeBSD since the documentation of its intended impl
@@ -1234,18 +1257,19 @@ AcpiOsSignal(UINT32 function, void *info)
  * and then attempt to acquire it again.
  */
 int
-AcpiOsAcquireGlobalLock(uint32 *lock)
+AcpiOsAcquireGlobalLock(volatile uint32_t *lock)
 {
-	uint32 newValue;
-	uint32 oldValue;
+	uint32_t newValue;
+	uint32_t oldValue;
 
 	do {
 		oldValue = *lock;
-		newValue = ((oldValue & ~GL_BIT_MASK) | GL_BIT_OWNED) |
-				((oldValue >> 1) & GL_BIT_PENDING);
-		atomic_test_and_set((int32*)lock, newValue, oldValue);
-	} while (*lock == oldValue);
-	return ((newValue < GL_BIT_MASK) ? GL_ACQUIRED : GL_BUSY);
+		newValue = ((oldValue & ~ACPI_GLOCK_PENDING) | ACPI_GLOCK_OWNED);
+		if ((oldValue & ACPI_GLOCK_OWNED) != 0)
+			newValue |= ACPI_GLOCK_PENDING;
+	} while (atomic_test_and_set((int32*)lock, newValue, oldValue) != (int32)oldValue);
+
+	return (newValue & ACPI_GLOCK_PENDING) == 0;
 }
 
 
@@ -1257,17 +1281,17 @@ AcpiOsAcquireGlobalLock(uint32 *lock)
  * releases the lock.
  */
 int
-AcpiOsReleaseGlobalLock(uint32 *lock)
+AcpiOsReleaseGlobalLock(volatile uint32_t *lock)
 {
 	uint32 newValue;
 	uint32 oldValue;
 
 	do {
 		oldValue = *lock;
-		newValue = oldValue & ~GL_BIT_MASK;
-		atomic_test_and_set((int32*)lock, newValue, oldValue);
-	} while (*lock == oldValue);
-	return (oldValue & GL_BIT_PENDING);
+		newValue = oldValue & ~(ACPI_GLOCK_PENDING | ACPI_GLOCK_OWNED);
+	} while (atomic_test_and_set((int32*)lock, newValue, oldValue) != (int32)oldValue);
+
+	return (oldValue & ACPI_GLOCK_PENDING) != 0;
 }
 
 
@@ -1299,9 +1323,11 @@ AcpiOsAcquireMutex(ACPI_MUTEX handle, UINT16 timeout)
 	ACPI_STATUS result = AE_OK;
 	DEBUG_FUNCTION_VF("mutex: %p; timeout: %u", handle, timeout);
 
-	if (timeout == ACPI_WAIT_FOREVER)
-		result = mutex_lock(handle) == B_OK ? AE_OK : AE_BAD_PARAMETER;
-	else {
+	if (timeout == ACPI_WAIT_FOREVER) {
+		result = (mutex_lock(handle) == B_OK) ? AE_OK : AE_BAD_PARAMETER;
+	} else if (timeout == ACPI_DO_NOT_WAIT) {
+		result = (mutex_trylock(handle) == B_OK) ? AE_OK : AE_TIME;
+	} else {
 		switch (mutex_lock_with_timeout(handle, B_RELATIVE_TIMEOUT,
 			(bigtime_t)timeout * 1000)) {
 			case B_OK:

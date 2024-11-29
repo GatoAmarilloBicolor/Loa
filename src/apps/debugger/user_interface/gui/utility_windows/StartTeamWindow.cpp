@@ -19,8 +19,7 @@
 
 
 enum {
-	MSG_BROWSE_TEAM		= 'brte',
-	MSG_SET_TEAM_PATH	= 'setp'
+	MSG_BROWSE_TEAM		= 'brte'
 };
 
 
@@ -90,7 +89,7 @@ StartTeamWindow::_Init()
 			.Add(fStartButton)
 		.End();
 
-	fTeamTextControl->SetExplicitMinSize(BSize(200.0, B_SIZE_UNSET));
+	fTeamTextControl->SetExplicitMinSize(BSize(300.0, B_SIZE_UNSET));
 	fGuideText->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNSET));
 
 	fStartButton->SetTarget(this);
@@ -127,6 +126,9 @@ StartTeamWindow::MessageReceived(BMessage* message)
 				fBrowseTeamPanel->SetMessage(message);
 			}
 
+			fBrowseTeamPanel->SetPanelDirectory(fTeamTextControl->TextView()
+					->Text());
+
 			fBrowseTeamPanel->Show();
 			break;
 		}
@@ -158,7 +160,6 @@ StartTeamWindow::MessageReceived(BMessage* message)
 				if (alert != NULL)
 					alert->Go();
 			} else {
-				be_app->PostMessage(MSG_START_TEAM_WINDOW_CLOSED);
 				PostMessage(B_QUIT_REQUESTED);
 			}
 			break;
@@ -168,4 +169,12 @@ StartTeamWindow::MessageReceived(BMessage* message)
 			break;
 	}
 
+}
+
+
+bool
+StartTeamWindow::QuitRequested()
+{
+	be_app->PostMessage(MSG_START_TEAM_WINDOW_CLOSED);
+	return true;
 }

@@ -34,6 +34,7 @@ PasswordWindow::PasswordWindow()
 {
 	BView* topView = new BView(Bounds(), "topView", B_FOLLOW_ALL, B_WILL_DRAW);
 	topView->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+	topView->SetHighUIColor(B_PANEL_TEXT_COLOR);
 	AddChild(topView);
 
 	BRect bounds(Bounds());
@@ -46,7 +47,7 @@ PasswordWindow::PasswordWindow()
 	bounds.top += 10.0;
 	fPassword = new BTextControl(bounds, "password",
 		B_TRANSLATE("Enter password:"), "VeryLongPasswordPossible",
-		B_FOLLOW_NONE);
+		NULL, B_FOLLOW_NONE);
 	customBox->AddChild(fPassword);
 	fPassword->MakeFocus(true);
 	fPassword->ResizeToPreferred();

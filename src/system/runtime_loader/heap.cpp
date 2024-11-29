@@ -18,6 +18,8 @@
 
 #include <util/SplayTree.h>
 
+#include <locks.h>
+
 
 /*!	This is a very simple malloc()/free() implementation - it only
 	manages a free list.
@@ -34,11 +36,19 @@
 	To ease list handling, the list anchor itself is a free chunk with
 	size 0 that can't be allocated.
 */
+#if __cplusplus >= 201103L
+#include <cstddef>
+const static size_t kAlignment = alignof(max_align_t);
+#else
 const static size_t kAlignment = 8;
+#endif
 	// all memory chunks will be a multiple of this
 
 const static size_t kInitialHeapSize = 64 * 1024;
 const static size_t kHeapGrowthAlignment = 32 * 1024;
+
+static const char* const kLockName = "runtime_loader heap";
+static recursive_lock sLock = RECURSIVE_LOCK_INITIALIZER(kLockName);
 
 
 class Chunk {
@@ -283,9 +293,17 @@ grow_heap(size_t bytes)
 
 
 status_t
-heap_init(void)
+heap_init()
 {
 	return add_area(kInitialHeapSize);
+}
+
+
+status_t
+heap_reinit_after_fork()
+{
+	recursive_lock_init(&sLock, kLockName);
+	return B_OK;
 }
 
 
@@ -309,6 +327,8 @@ malloc(size_t size)
 {
 	if (size == 0)
 		return NULL;
+
+	RecursiveLocker _(sLock);
 
 	// align the size requirement to a kAlignment bytes boundary
 	if (size < sizeof(FreeChunkData))
@@ -362,6 +382,8 @@ realloc(void* oldBuffer, size_t newSize)
 		return NULL;
 	}
 
+	RecursiveLocker _(sLock);
+
 	size_t oldSize = 0;
 	if (oldBuffer != NULL) {
 		FreeChunk* oldChunk = FreeChunk::SetToAllocated(oldBuffer);
@@ -390,11 +412,24 @@ realloc(void* oldBuffer, size_t newSize)
 }
 
 
+void*
+calloc(size_t numElements, size_t size)
+{
+	void* address = malloc(numElements * size);
+	if (address != NULL)
+		memset(address, 0, numElements * size);
+
+	return address;
+}
+
+
 void
 free(void* allocated)
 {
 	if (allocated == NULL)
 		return;
+
+	RecursiveLocker _(sLock);
 
 	TRACE(("free(%p)\n", allocated));
 

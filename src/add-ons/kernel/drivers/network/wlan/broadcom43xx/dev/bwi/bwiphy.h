@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2007 The DragonFly Project.  All rights reserved.
  * 
  * This code is derived from software contributed to The DragonFly Project
@@ -32,7 +34,6 @@
  * SUCH DAMAGE.
  * 
  * $DragonFly: src/sys/dev/netif/bwi/bwiphy.h,v 1.1 2007/09/08 06:15:54 sephe Exp $
- * $FreeBSD: releng/11.1/sys/dev/bwi/bwiphy.h 191762 2009-05-03 04:01:43Z imp $
  */
 
 #ifndef _BWI_PHY_H

@@ -1,11 +1,9 @@
 SubDir HAIKU_TOP src tests servers registrar ;
 
 UsePublicHeaders [ FDirName add-ons registrar ] ;
-UseArchHeaders $(TARGET_KERNEL_ARCH) ;
+UseArchHeaders $(TARGET_KERNEL_ARCH_DIR) ;
 
 # some test programs
-
-SetSubDirSupportedPlatformsBeOSCompatible ;
 
 SimpleTest RegistrarTest1
 	: RegistrarTest1.cpp

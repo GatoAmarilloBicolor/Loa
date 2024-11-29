@@ -29,7 +29,7 @@ InitParametersPanel::InitParametersPanel(BWindow* window,
 {
 	Init(B_INITIALIZE_PARAMETER_EDITOR, diskSystem, partition);
 
-	fOkButton->SetLabel(B_TRANSLATE("Initialize"));
+	fOkButton->SetLabel(B_TRANSLATE("Format"));
 }
 
 
@@ -48,7 +48,7 @@ InitParametersPanel::Go(BString& name, BString& parameters)
 			const char* string = get_driver_parameter(handle, "name",
 				NULL, NULL);
 			name.SetTo(string);
-			delete_driver_settings(handle);
+			unload_driver_settings(handle);
 		}
 	}
 

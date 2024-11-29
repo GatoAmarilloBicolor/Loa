@@ -44,8 +44,8 @@ AbbreviationTable::Init(const void* section, off_t sectionSize)
 	if (error != B_OK)
 		return error;
 
-	DataReader abbrevReader(fData, fSize, 4);
-		// address size doesn't matter here
+	DataReader abbrevReader(fData, fSize, 4, false);
+		// address size and endianness don't matter here
 
 	while (true) {
 		bool nullEntry;
@@ -94,7 +94,7 @@ AbbreviationTable::_ParseAbbreviationEntry(DataReader& abbrevReader,
 /*	uint32 tag =*/ abbrevReader.ReadUnsignedLEB128(0);
 /*	uint8 hasChildren =*/ abbrevReader.Read<uint8>(DW_CHILDREN_no);
 
-//	printf("entry: %lu, tag: %lu, children: %d\n", code, tag,
+//	printf("entry: %" B_PRIu32 ", tag: %" B_PRIu32 ", children: %d\n", code, tag,
 //		hasChildren);
 
 	// parse attribute specifications
@@ -109,7 +109,10 @@ AbbreviationTable::_ParseAbbreviationEntry(DataReader& abbrevReader,
 		if (attributeName == 0 && attributeForm == 0)
 			break;
 
-//		printf("  attr: name: %lu, form: %lu\n", attributeName,
+		if (attributeForm == DW_FORM_implicit_const)
+			abbrevReader.ReadSignedLEB128(0);
+
+//		printf("  attr: name: %" B_PRIu32 ", form: %" B_PRIu32 "\n", attributeName,
 //			attributeForm);
 	}
 

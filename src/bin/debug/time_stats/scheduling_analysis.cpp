@@ -109,8 +109,14 @@ wait_object_to_string(scheduling_analysis_wait_object* waitObject, char* buffer,
 			else
 				sprintf(buffer, "rwlock %p (%s)", object, waitObject->name);
 			break;
+		case THREAD_BLOCK_TYPE_USER:
+			strcpy(buffer, "user");
+			break;
 		case THREAD_BLOCK_TYPE_OTHER:
 			sprintf(buffer, "other %p (%s)", object, waitObject->name);
+			break;
+		case THREAD_BLOCK_TYPE_OTHER_OBJECT:
+			sprintf(buffer, "other object %p", object);
 			break;
 		default:
 			sprintf(buffer, "unknown %p", object);

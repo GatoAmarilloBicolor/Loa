@@ -9,20 +9,22 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <time_private.h>
+
 #include "DebugSupport.h"
 #include "Package.h"
 #include "Utils.h"
 
 
+DEFINE_INLINE_REFERENCEABLE_METHODS(PackageNode, fReferenceable);
+
+
 PackageNode::PackageNode(Package* package, mode_t mode)
 	:
 	fPackage(package),
-	fPackageFlags(package != NULL ? package->Flags() : 0),
 	fParent(NULL),
 	fName(),
-	fMode(mode),
-	fUserID(0),
-	fGroupID(0)
+	fMode(mode)
 {
 }
 
@@ -31,6 +33,13 @@ PackageNode::~PackageNode()
 {
 	while (PackageNodeAttribute* attribute = fAttributes.RemoveHead())
 		delete attribute;
+}
+
+
+BReference<Package>
+PackageNode::GetPackage() const
+{
+	return fPackage.GetReference();
 }
 
 
@@ -46,12 +55,14 @@ PackageNode::Init(PackageDirectory* parent, const String& name)
 status_t
 PackageNode::VFSInit(dev_t deviceID, ino_t nodeID)
 {
+	BReference<Package> package(GetPackage());
+
 	// open the package
-	int fd = fPackage->Open();
+	int fd = package->Open();
 	if (fd < 0)
 		RETURN_ERROR(fd);
 
-	fPackage->AcquireReference();
+	package->AcquireReference();
 	return B_OK;
 }
 
@@ -59,8 +70,26 @@ PackageNode::VFSInit(dev_t deviceID, ino_t nodeID)
 void
 PackageNode::VFSUninit()
 {
-	fPackage->Close();
-	fPackage->ReleaseReference();
+	BReference<Package> package(GetPackage());
+	package->Close();
+	package->ReleaseReference();
+}
+
+
+void
+PackageNode::SetModifiedTime(const timespec& time)
+{
+	if (!timespec_to_bigtime(time, fModifiedTime))
+		fModifiedTime = 0;
+}
+
+
+timespec
+PackageNode::ModifiedTime() const
+{
+	timespec modifiedTime;
+	bigtime_to_timespec(fModifiedTime, modifiedTime);
+	return modifiedTime;
 }
 
 
@@ -75,13 +104,6 @@ void
 PackageNode::AddAttribute(PackageNodeAttribute* attribute)
 {
 	fAttributes.Add(attribute);
-}
-
-
-void
-PackageNode::RemoveAttribute(PackageNodeAttribute* attribute)
-{
-	fAttributes.Remove(attribute);
 }
 
 
@@ -108,13 +130,20 @@ PackageNode::UnsetIndexCookie(void* attributeCookie)
 bool
 PackageNode::HasPrecedenceOver(const PackageNode* other) const
 {
-	const bool isSystemPkg = (fPackageFlags
+	uint32 packageFlags = 0, otherPackageFlags = 0;
+	BReference<Package> package(GetPackage()), otherPackage(other->GetPackage());
+	if (package)
+		packageFlags = package->Flags();
+	if (otherPackage)
+		otherPackageFlags = otherPackage->Flags();
+
+	const bool isSystemPkg = (packageFlags
 			& BPackageKit::B_PACKAGE_FLAG_SYSTEM_PACKAGE) != 0,
-		otherIsSystemPkg = (other->fPackageFlags
+		otherIsSystemPkg = (otherPackageFlags
 			& BPackageKit::B_PACKAGE_FLAG_SYSTEM_PACKAGE) != 0;
 	if (isSystemPkg && !otherIsSystemPkg)
 		return true;
 	if (!isSystemPkg && otherIsSystemPkg)
 		return false;
-	return fModifiedTime > other->fModifiedTime;
+	return ModifiedTime() > other->ModifiedTime();
 }

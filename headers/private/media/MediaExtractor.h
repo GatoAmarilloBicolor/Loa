@@ -42,8 +42,6 @@ public:
 
 			status_t			InitCheck();
 
-			BDataIO*			Source() const;
-
 			void				GetFileFormatInfo(
 									media_file_format* fileFormat) const;
 			status_t			GetMetaData(BMessage* _data) const;
@@ -81,6 +79,7 @@ private:
 			void				_RecycleLastChunk(stream_info& info);
 	static	int32				_ExtractorEntry(void* arg);
 			void				_ExtractorThread();
+			size_t				_CalculateChunkBuffer(int32 stream);
 
 private:
 			status_t			fInitStatus;

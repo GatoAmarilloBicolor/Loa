@@ -24,7 +24,7 @@
 
 #include <Referenceable.h>
 
-#include <boot/PathBlacklist.h>
+#include <boot/PathBlocklist.h>
 #include <boot/platform.h>
 
 #include "PackageSettingsItem.h"
@@ -287,6 +287,9 @@ struct PackageLoaderErrorOutput : BErrorOutput {
 
 	virtual void PrintErrorVarArgs(const char* format, va_list args)
 	{
+		char buffer[256];
+		vsnprintf(buffer, sizeof(buffer), format, args);
+		dprintf("%s", buffer);
 	}
 };
 
@@ -387,7 +390,7 @@ struct PackageLoaderContentHandler : BPackageContentHandler {
 	{
 		if (fErrorOccurred
 			|| (fLastSettingsEntry != NULL
-				&& fLastSettingsEntry->IsBlackListed())) {
+				&& fLastSettingsEntry->IsBlocked())) {
 			return B_OK;
 		}
 
@@ -408,7 +411,7 @@ struct PackageLoaderContentHandler : BPackageContentHandler {
 			if (settingsEntry != NULL) {
 				fLastSettingsEntry = settingsEntry;
 				fLastSettingsEntryEntry = entry;
-				if (fLastSettingsEntry->IsBlackListed())
+				if (fLastSettingsEntry->IsBlocked())
 					return B_OK;
 			}
 		}
@@ -882,14 +885,14 @@ packagefs_mount_file(int fd, ::Directory* systemDirectory,
 
 
 void
-packagefs_apply_path_blacklist(::Directory* systemDirectory,
-	const PathBlacklist& pathBlacklist)
+packagefs_apply_path_blocklist(::Directory* systemDirectory,
+	const PathBlocklist& pathBlocklist)
 {
 	PackageFS::Directory* directory
 		= static_cast<PackageFS::Directory*>(systemDirectory);
 
-	for (PathBlacklist::Iterator it = pathBlacklist.GetIterator();
-		BlacklistedPath* path = it.Next();) {
+	for (PathBlocklist::Iterator it = pathBlocklist.GetIterator();
+		BlockedPath* path = it.Next();) {
 		directory->RemoveEntry(path->Path());
 	}
 }

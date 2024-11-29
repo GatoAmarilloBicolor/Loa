@@ -110,6 +110,7 @@ public:
 			vm_page*			LookupPage(off_t offset);
 			void				InsertPage(vm_page* page, off_t offset);
 			void				RemovePage(vm_page* page);
+			void				MovePage(vm_page* page, off_t offset);
 			void				MovePage(vm_page* page);
 			void				MoveAllPages(VMCache* fromCache);
 
@@ -130,6 +131,11 @@ public:
 			status_t			SetMinimalCommitment(off_t commitment,
 									int priority);
 	virtual	status_t			Resize(off_t newSize, int priority);
+	virtual	status_t			Rebase(off_t newBase, int priority);
+	virtual	status_t			Adopt(VMCache* source, off_t offset, off_t size,
+									off_t newOffset);
+
+	virtual	status_t			Discard(off_t offset, off_t size);
 
 			status_t			FlushAndRemoveAllPages();
 
@@ -192,6 +198,7 @@ public:
 				// TODO: Remove!
 			uint32				page_count;
 			uint32				temporary : 1;
+			uint32				unmergeable : 1;
 			uint32				type : 6;
 
 #if DEBUG_CACHE_LIST
@@ -210,6 +217,9 @@ private:
 
 			void				_MergeWithOnlyConsumer();
 			void				_RemoveConsumer(VMCache* consumer);
+
+			bool				_FreePageRange(VMCachePagesTree::Iterator it,
+									page_num_t* toPage);
 
 private:
 			int32				fRefCount;
@@ -367,7 +377,7 @@ vm_page::IncrementWiredCount()
 inline void
 vm_page::DecrementWiredCount()
 {
-	ASSERT(fWiredCount > 0);
+	ASSERT_PRINT(fWiredCount > 0, "page: %#" B_PRIx64, physical_page_number * B_PAGE_SIZE);
 
 	if (--fWiredCount == 0)
 		cache_ref->cache->DecrementWiredPagesCount();

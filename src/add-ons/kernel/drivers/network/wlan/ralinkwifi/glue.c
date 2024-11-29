@@ -16,6 +16,7 @@
 
 #include <net80211/ieee80211_var.h>
 #include <net80211/ieee80211_amrr.h>
+#include <net80211/ieee80211_ratectl.h>
 
 #include <dev/ral/rt2560reg.h>
 #include <dev/ral/rt2560var.h>
@@ -24,18 +25,41 @@
 #include <dev/ral/rt2860var.h>
 
 
-HAIKU_FBSD_WLAN_DRIVER_GLUE(ralinkwifi, ral, pci)
-HAIKU_DRIVER_REQUIREMENTS(FBSD_TASKQUEUES | FBSD_SWI_TASKQUEUE | FBSD_WLAN);
+HAIKU_FBSD_WLAN_DRIVERS_GLUE(ralinkwifi)
+HAIKU_DRIVER_REQUIREMENTS(FBSD_WLAN);
 HAIKU_FIRMWARE_VERSION(0);
-HAIKU_FIRMWARE_NAME_MAP(4) = {
-	{"rt2561fw", "rt2561.bin"},
-	{"rt2561sfw", "rt2561s.bin"},
-	{"rt2661fw", "rt2661.bin"},
-	{"rt2860fw", "rt2860.bin"}
-};
+HAIKU_FIRMWARE_NAME_MAP({
+	{"rt2561fw", "rt2561.ucode"},
+	{"rt2561sfw", "rt2561s.ucode"},
+	{"rt2661fw", "rt2661.ucode"},
+	{"rt2860fw", "rt2860.ucode"},
+	{"runfw", "rt2870.ucode"},
+});
 
 NO_HAIKU_FBSD_MII_DRIVER();
 NO_HAIKU_REENABLE_INTERRUPTS();
+
+extern driver_t* DRIVER_MODULE_NAME(ral, pci);
+extern driver_t* DRIVER_MODULE_NAME(ural, uhub);
+extern driver_t* DRIVER_MODULE_NAME(run, uhub);
+extern driver_t* DRIVER_MODULE_NAME(rum, uhub);
+
+
+status_t
+__haiku_handle_fbsd_drivers_list(status_t (*handler)(driver_t *[], driver_t *[]))
+{
+	driver_t *pci_drivers[] = {
+		DRIVER_MODULE_NAME(ral, pci),
+		NULL
+	};
+	driver_t *usb_drivers[] = {
+		DRIVER_MODULE_NAME(ural, uhub),
+		DRIVER_MODULE_NAME(run, uhub),
+		DRIVER_MODULE_NAME(rum, uhub),
+		NULL
+	};
+	return (*handler)(pci_drivers, usb_drivers);
+}
 
 
 #define RT2661_INT_MASK_CSR			0x346c

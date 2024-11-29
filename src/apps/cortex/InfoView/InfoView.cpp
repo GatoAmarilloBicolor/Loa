@@ -36,6 +36,10 @@
 
 #include "array_delete.h"
 
+// Locale Kit
+#undef B_CATALOG
+#define B_CATALOG (&sCatalog)
+#include <Catalog.h>
 // Interface Kit
 #include <Bitmap.h>
 #include <Region.h>
@@ -48,6 +52,9 @@
 // Support Kit
 #include <List.h>
 
+#undef B_TRANSLATION_CONTEXT
+#define B_TRANSLATION_CONTEXT "InfoView"
+
 __USE_CORTEX_NAMESPACE
 
 #include <Debug.h>
@@ -55,6 +62,8 @@ __USE_CORTEX_NAMESPACE
 #define D_HOOK(X) //PRINT (x)			// BView impl.
 #define D_ACCESS(X) //PRINT (x)			// Accessors
 #define D_METHOD(x) //PRINT (x)
+
+static BCatalog sCatalog("x-vnd.Cortex.InfoView");
 
 // -------------------------------------------------------- //
 // *** internal class: _InfoTextField
@@ -175,10 +184,10 @@ void InfoView::AttachedToWindow() {
 	D_HOOK(("InfoView::AttachedToWindow()\n"));
 
 	// adjust the windows title
-	BString title = m_title;
-	title << " info";
+	BString title = B_TRANSLATE("%title% info");
+	title.ReplaceFirst("%title%", m_title);
 	Window()->SetTitle(title.String());
-	
+
 	// calculate the area occupied by title, subtitle and icon
 	font_height fh;
 	be_bold_font->GetHeight(&fh);
@@ -292,7 +301,7 @@ void InfoView::FrameResized(
 	for (int32 i = 0; i < m_fields->CountItems(); i++) {
 		bool wrappingChanged = false;
 		_InfoTextField *field = static_cast<_InfoTextField *>(m_fields->ItemAt(i));
-		field->updateLineWrapping(&wrappingChanged, 
+		field->updateLineWrapping(&wrappingChanged,
 								  heightChanged ? 0 : &heightChanged);
 		float fieldHeight = field->getHeight() + M_V_MARGIN;
 		if (heightChanged) {
@@ -360,13 +369,12 @@ void InfoView::addField(
 	BString text) {
 	D_METHOD(("InfoView::addField()\n"));
 
-	m_fields->AddItem(reinterpret_cast<void *>
-					  (new _InfoTextField(label, text, this)));
+	m_fields->AddItem(new _InfoTextField(label, text, this));
 }
 
 // -------------------------------------------------------- //
 // *** internal class: _InfoTextField
-// 
+//
 // *** ctor/dtor
 // -------------------------------------------------------- //
 
@@ -404,7 +412,7 @@ _InfoTextField::~_InfoTextField() {
 
 // -------------------------------------------------------- //
 // *** internal class: _InfoTextField
-// 
+//
 // *** operations (public)
 // -------------------------------------------------------- //
 
@@ -479,7 +487,7 @@ void _InfoTextField::updateLineWrapping(
 					currentLine->Remove(i, 1);
 					currentLine->MoveInto(*newLine, i,
 										  currentLine->CountChars() - i);
-					m_textLines->AddItem(reinterpret_cast<void *>(currentLine));
+					m_textLines->AddItem(currentLine);
 					currentLine = newLine;
 					break;
 				}
@@ -488,7 +496,7 @@ void _InfoTextField::updateLineWrapping(
 			{
 				if (i == currentLine->CountChars() - 1) // the last char in the text
 				{
-					m_textLines->AddItem(reinterpret_cast<void *>(currentLine));
+					m_textLines->AddItem(currentLine);
 					currentLine = 0;
 					break;
 				}
@@ -505,7 +513,7 @@ void _InfoTextField::updateLineWrapping(
 						BString *newLine = new BString();
 						currentLine->MoveInto(*newLine, lastBreak,
 											  currentLine->CountChars() - lastBreak);
-						m_textLines->AddItem(reinterpret_cast<void *>(currentLine));	
+						m_textLines->AddItem(currentLine);
 						currentLine = newLine;
 						break;
 					}
@@ -539,7 +547,7 @@ void _InfoTextField::updateLineWrapping(
 
 // -------------------------------------------------------- //
 // *** internal class: _InfoTextField
-// 
+//
 // *** accessors (public)
 // -------------------------------------------------------- //
 
@@ -580,12 +588,12 @@ bool
 _InfoTextField::isWrapped() const {
 	D_ACCESS(("_InfoTextField::isWrapped()\n"));
 
-	return (m_textLines->CountItems() > 1); 
+	return (m_textLines->CountItems() > 1);
 }
 
 // -------------------------------------------------------- //
 // *** internal class: _InfoTextField
-// 
+//
 // *** static internal methods (private)
 // -------------------------------------------------------- //
 

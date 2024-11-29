@@ -63,7 +63,7 @@ extern "C" {
 
 int runtime_loader(void* arg, void* commpage);
 int open_executable(char* name, image_type type, const char* rpath,
-	const char* programPath, const char* requestingObjectPath,
+	const char* runpath, const char* programPath, const char* requestingObjectPath,
 	const char* abiSpecificSubDir);
 status_t test_executable(const char* path, char* interpreter);
 status_t get_executable_architecture(const char* path,
@@ -72,7 +72,7 @@ status_t get_executable_architecture(const char* path,
 void terminate_program(void);
 image_id load_program(char const* path, void** entry);
 image_id load_library(char const* path, uint32 flags, bool addOn,
-	void** _handle);
+	void* caller, void** _handle);
 status_t unload_library(void* handle, image_id imageID, bool addOn);
 status_t get_nth_symbol(image_id imageID, int32 num, char* nameBuffer,
 	int32* _nameLength, int32* _type, void** _location);
@@ -99,10 +99,11 @@ status_t elf64_verify_header(void *header, size_t length);
 #endif	// _COMPAT_MODE
 void rldelf_init(void);
 void rldexport_init(void);
-void set_abi_version(int abi_version);
-status_t elf_reinit_after_fork(void);
+void set_abi_api_version(int abi_version, int api_version);
+status_t elf_reinit_after_fork();
 
-status_t heap_init(void);
+status_t heap_init();
+status_t heap_reinit_after_fork();
 
 // arch dependent prototypes
 status_t arch_relocate_image(image_t* rootImage, image_t* image,

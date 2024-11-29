@@ -8,8 +8,11 @@
  */
 
 #include <arpa/inet.h>
+#include <signal.h>
+#include <sys/poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/un.h>
 
 #include <map>
 #include <utility>
@@ -49,65 +52,109 @@ format_number(uint32 value)
 
 
 static string
-read_fdset(Context &context, void *data)
+format_iovecs(Context &context, const iovec *iov, int iovlen)
 {
-	// default FD_SETSIZE is 1024
-	unsigned long tmp[1024 / (sizeof(unsigned long) * 8)];
+	if (iov == NULL && iovlen == 0)
+		return "(empty)";
+
+	iovec vecs[iovlen];
 	int32 bytesRead;
 
-	status_t err = context.Reader().Read(data, &tmp, sizeof(tmp), bytesRead);
-	if (err != B_OK)
-		return context.FormatPointer(data);
-
-	/* implicitly align to unsigned long lower boundary */
-	int count = bytesRead / sizeof(unsigned long);
-	int added = 0;
-
-	string r;
-	r.reserve(16);
-
-	r = "[";
-
-	for (int i = 0; i < count && added < 8; i++) {
-		for (int j = 0;
-			 j < (int)(sizeof(unsigned long) * 8) && added < 8; j++) {
-			if (tmp[i] & (1UL << j)) {
-				if (added > 0)
-					r += " ";
-				unsigned int fd = i * sizeof(unsigned long) * 8 + j;
-				r += format_number(fd);
-				added++;
+	string r = "[";
+	status_t err = context.Reader().Read((void*)iov, vecs, sizeof(vecs), bytesRead);
+	if (err != B_OK) {
+		r += context.FormatPointer(iov);
+		r += ", " + context.FormatSigned(iovlen);
+	} else {
+		for (int i = 0; i < iovlen; i++) {
+			if (i > 0)
+				r += ", ";
+			if (i >= 8) {
+				r += "...";
+				break;
 			}
+			r += "{iov_base=" + context.FormatPointer(vecs[i].iov_base);
+			r += ", iov_len=" + context.FormatUnsigned(vecs[i].iov_len);
+			r += "}";
+		}
+	}
+	return r + "]";
+}
+
+
+template<>
+string
+TypeHandlerImpl<iovec *>::GetParameterValue(Context &context, Parameter *param,
+	const void *address)
+{
+	Parameter *size = context.GetNextSibling(param);
+	return format_iovecs(context, (const iovec*)*(void **)address,
+		context.ReadValue<size_t>(size));
+}
+
+
+template<>
+string
+TypeHandlerImpl<iovec *>::GetReturnValue(Context &context, uint64 value)
+{
+	return context.FormatPointer((void *)value);
+}
+
+
+static string
+format_ltype(Context &context, int ltype)
+{
+	if (context.GetContents(Context::ENUMERATIONS)) {
+#define LTYPE(type) \
+		case type: \
+			return #type
+
+		switch (ltype) {
+			LTYPE(F_RDLCK);
+			LTYPE(F_UNLCK);
+			LTYPE(F_WRLCK);
 		}
 	}
 
-	if (added >= 8)
-		r += " ...";
+	return context.FormatSigned(ltype);
+}
 
-	r += "]";
+
+static string
+format_lwhence(Context &context, int lwhence)
+{
+	if (context.GetContents(Context::ENUMERATIONS)) {
+#define LWHENCE(whence) \
+		case whence: \
+			return #whence
+
+		switch (lwhence) {
+			LWHENCE(SEEK_SET);
+			LWHENCE(SEEK_CUR);
+			LWHENCE(SEEK_END);
+			LWHENCE(SEEK_DATA);
+			LWHENCE(SEEK_HOLE);
+		}
+	}
+
+	return context.FormatSigned(lwhence);
+}
+
+
+
+static string
+format_pointer(Context &context, flock *lock)
+{
+	string r;
+
+	r = "l_type=" + format_ltype(context, lock->l_type) + ", ";
+	r += "l_whence=" + format_lwhence(context, lock->l_whence) + ", ";
+	r += "l_start=" + context.FormatSigned(lock->l_start) + ", ";
+	r += "l_len=" + context.FormatSigned(lock->l_len);
 
 	return r;
 }
 
-
-template<>
-string
-TypeHandlerImpl<fd_set *>::GetParameterValue(Context &context, Parameter *,
-	const void *address)
-{
-	void *data = *(void **)address;
-	if (data != NULL && context.GetContents(Context::SIMPLE_STRUCTS))
-		return read_fdset(context, data);
-	return context.FormatPointer(data);
-}
-
-
-template<>
-string
-TypeHandlerImpl<fd_set *>::GetReturnValue(Context &context, uint64 value)
-{
-	return context.FormatPointer((void *)value);
-}
 
 
 template<typename Type>
@@ -206,23 +253,72 @@ format_pointer(Context &context, sockaddr *saddr)
 {
 	string r;
 
-	sockaddr_in *sin = (sockaddr_in *)saddr;
-
 	r = format_socket_family(context, saddr->sa_family) + ", ";
 
 	switch (saddr->sa_family) {
 		case AF_INET:
+		{
+			sockaddr_in *sin = (sockaddr_in *)saddr;
 			r += get_ipv4_address(&sin->sin_addr);
 			r += "/";
 			r += format_number(ntohs(sin->sin_port));
 			break;
-
+		}
+		case AF_UNIX:
+		{
+			sockaddr_un *sun = (sockaddr_un *)saddr;
+			r += "path = \"" + string(sun->sun_path) + "\"";
+			break;
+		}
 		default:
 			r += "...";
 			break;
 	}
 
 	return r;
+}
+
+
+static string
+read_sockaddr(Context &context, Parameter *param, void *address)
+{
+	param = context.GetNextSibling(param);
+	if (param == NULL)
+		return context.FormatPointer(address);
+
+	socklen_t addrlen = context.ReadValue<socklen_t>(param);
+
+	sockaddr_storage data;
+
+	if (addrlen > sizeof(data))
+		return context.FormatPointer(address);
+
+	int32 bytesRead;
+	status_t err = context.Reader().Read(address, &data, addrlen, bytesRead);
+	if (err != B_OK)
+		return context.FormatPointer(address);
+
+	return "{" + format_pointer(context, (sockaddr *)&data) + "}";
+}
+
+
+template<>
+string
+TypeHandlerImpl<sockaddr *>::GetParameterValue(Context &context,
+	Parameter *param, const void *address)
+{
+	void *data = *(void **)address;
+	if (data != NULL && context.GetContents(Context::SIMPLE_STRUCTS))
+		return read_sockaddr(context, param, data);
+	return context.FormatPointer(data);
+}
+
+
+template<>
+string
+TypeHandlerImpl<sockaddr *>::GetReturnValue(Context &context, uint64 value)
+{
+	return context.FormatPointer((void *)value);
 }
 
 
@@ -373,19 +469,6 @@ format_pointer(Context &context, socket_args *args)
 
 
 static string
-get_iovec(Context &context, iovec *iov, int iovlen)
-{
-	if (iov == NULL && iovlen == 0)
-		return "(empty)";
-
-	string r = "{";
-	r += context.FormatPointer(iov);
-	r += ", " + context.FormatSigned(iovlen);
-	return r + "}";
-}
-
-
-static string
 format_pointer(Context &context, message_args *msg)
 {
 	string r;
@@ -397,6 +480,7 @@ format_pointer(Context &context, message_args *msg)
 
 	return r;
 }
+#endif
 
 
 static string
@@ -406,7 +490,7 @@ format_pointer(Context &context, msghdr *h)
 
 	r  =   "name = " + format_pointer_value<sockaddr>(context, h->msg_name);
 	r += ", name_len = " + context.FormatUnsigned(h->msg_namelen);
-	r += ", iov = " + get_iovec(context, h->msg_iov, h->msg_iovlen);
+	r += ", iov = " + format_iovecs(context, h->msg_iov, h->msg_iovlen);
 	if (h->msg_control != NULL || h->msg_controllen != 0) {
 		r += ", control = " + context.FormatPointer(h->msg_control);
 		r += ", control_len = " + context.FormatUnsigned(h->msg_controllen);
@@ -415,7 +499,7 @@ format_pointer(Context &context, msghdr *h)
 
 	return r;
 }
-#endif
+
 
 static string
 format_pointer(Context &context, ifreq *ifr)
@@ -473,6 +557,21 @@ format_pointer(Context &context, ifconf *conf)
 }
 
 
+static string
+format_pointer(Context &context, siginfo_t *info)
+{
+	string r;
+
+	switch (info->si_code) {
+		case CLD_EXITED:
+			r = "WIFEXITED(s) && WEXITSTATUS(s) == " + context.FormatUnsigned(info->si_status & 0xff);
+			break;
+	}
+	return r;
+}
+
+
+
 template<typename Type>
 class SpecializedPointerTypeHandler : public TypeHandler {
 	string GetParameterValue(Context &context, Parameter *,
@@ -487,26 +586,22 @@ class SpecializedPointerTypeHandler : public TypeHandler {
 	}
 };
 
-#define DEFINE_TYPE(name, type) \
-	TypeHandler *create_##name##_type_handler() \
-	{ \
-		return new TypeHandlerImpl<type>(); \
-	}
-
 #define POINTER_TYPE(name, type) \
 	TypeHandler *create_##name##_type_handler() \
 	{ \
 		return new SpecializedPointerTypeHandler<type>(); \
 	}
 
-DEFINE_TYPE(fdset_ptr, fd_set *);
+DEFINE_TYPE(iovec_ptr, iovec *);
+POINTER_TYPE(flock_ptr, flock);
 POINTER_TYPE(ifconf_ptr, ifconf);
 POINTER_TYPE(ifreq_ptr, ifreq);
+POINTER_TYPE(siginfo_t_ptr, siginfo_t);
+POINTER_TYPE(msghdr_ptr, msghdr);
+DEFINE_TYPE(sockaddr_ptr, sockaddr *);
 #if 0
 POINTER_TYPE(message_args_ptr, message_args);
-POINTER_TYPE(msghdr_ptr, msghdr);
 POINTER_TYPE(sockaddr_args_ptr, sockaddr_args);
 POINTER_TYPE(sockopt_args_ptr, sockopt_args);
 POINTER_TYPE(socket_args_ptr, socket_args);
 #endif
-

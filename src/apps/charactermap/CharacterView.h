@@ -7,6 +7,7 @@
 
 
 #include <Messenger.h>
+#include <PopUpMenu.h>
 #include <View.h>
 
 
@@ -68,6 +69,7 @@ private:
 								int32& offset) const;
 			BRect			_FrameFor(uint32 character) const;
 			void			_CopyToClipboard(const char* text);
+			bool			_HasGlyphForCharacter(const char* character) const;
 
 private:
 			BMessenger		fTarget;
@@ -79,6 +81,7 @@ private:
 			bool			fHasTopCharacter;
 			uint32			fTopCharacter;
 			int32			fTopOffset;
+			BPopUpMenu*		fMenu;
 
 			bool			fShowPrivateBlocks;
 			bool			fShowContainedBlocksOnly;
@@ -94,6 +97,7 @@ private:
 			int32			fGap;
 			int32			fTitleGap;
 			int32*			fTitleTops;
+			unicode_block	fUnicodeBlocks;
 };
 
 #endif	// CHARACTER_VIEW_H

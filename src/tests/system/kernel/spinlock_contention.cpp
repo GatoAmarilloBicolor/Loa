@@ -33,8 +33,8 @@ struct dummy_smp_msg {
 
 static int				sNumCPUs = 2;
 static bool				sICIEnabled = true;
-static dummy_spinlock	cpu_msg_spinlock[B_MAX_CPU_COUNT];
-static dummy_smp_msg*	smp_msgs[B_MAX_CPU_COUNT];
+static dummy_spinlock	cpu_msg_spinlock[SMP_MAX_CPUS];
+static dummy_smp_msg*	smp_msgs[SMP_MAX_CPUS];
 static dummy_spinlock	broadcast_msg_spinlock;
 static dummy_smp_msg*	smp_broadcast_msgs;
 
@@ -249,10 +249,9 @@ main(int argc, char** argv)
 		time_string(tickTime, buffer));
 
 	// print results
-	static const char* const kLockNames[] = { "thread", "team", NULL };
-	uint64 lockCounts[] = {
-		endInfo.thread_spinlock_counter - startInfo.thread_spinlock_counter,
-		endInfo.team_spinlock_counter - startInfo.team_spinlock_counter
+	static const char* const kLockNames[] = { "thread creation", NULL };
+	bigtime_t lockCounts[] = {
+		endInfo.thread_creation_spinlock - startInfo.thread_creation_spinlock,
 	};
 
 	printf("\nlock             counter            time   wasted %% CPU\n");

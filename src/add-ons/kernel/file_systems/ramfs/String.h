@@ -1,5 +1,7 @@
-// String.h
-
+/*
+ * Copyright 2007, Ingo Weinhold, ingo_weinhold@gmx.de.
+ * All rights reserved. Distributed under the terms of the MIT license.
+ */
 #ifndef STRING_H
 #define STRING_H
 
@@ -7,27 +9,6 @@
 #include <string.h>
 #include <new>
 
-
-// string_hash
-//
-// from the Dragon Book: a slightly modified hashpjw()
-static inline
-uint32
-string_hash(const char *name)
-{
-	uint32 h = 0;
-	if (name) {
-		for (; *name; name++) {
-			uint32 g = h & 0xf0000000;
-			if (g)
-				h ^= g >> 24;
-			h = (h << 4) + *name;
-		}
-	}
-	return h;
-}
-
-#ifdef __cplusplus
 
 // String
 class String {
@@ -45,8 +26,6 @@ public:
 	inline const char *GetString() const;
 	inline int32 GetLength() const	{ return fLength; }
 
-	inline uint32 GetHashCode() const	{ return string_hash(GetString()); }
-
 	inline String &operator=(const String &string);
 	inline bool operator==(const String &string) const;
 	inline bool operator!=(const String &string) const { return !(*this == string); }
@@ -58,22 +37,6 @@ private:
 	int32	fLength;
 	char	*fString;
 };
-
-// strnlen
-size_t
-strnlen(const char *str, size_t maxLen)
-{
-	if (str) {
-		size_t origMaxLen = maxLen;
-		while (maxLen > 0 && *str != '\0') {
-			maxLen--;
-			str++;
-		}
-		return origMaxLen - maxLen;
-	}
-	return 0;
-}
-
 
 /*!
 	\class String
@@ -141,9 +104,7 @@ String::Truncate(int32 newLength)
 		newLength = 0;
 	if (newLength < fLength) {
 		char *string = fString;
-		int32 len = fLength;
 		fString = NULL;
-		len = 0;
 		if (!_SetTo(string, newLength)) {
 			fString = string;
 			fLength = newLength;
@@ -197,7 +158,5 @@ String::_SetTo(const char *string, int32 length)
 	return result;
 }
 
-
-#endif	// __cplusplus
 
 #endif	// STRING_H
